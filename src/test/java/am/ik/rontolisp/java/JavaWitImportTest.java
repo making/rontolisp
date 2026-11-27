@@ -793,9 +793,10 @@ class JavaWitImportTest {
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap, an {@code async func} refused. A world of compound types crosses too: a
-	 * record a member record, a variant a sealed interface, a list a {@code List}, a
-	 * result a {@code WitResult} or its ok arm with a {@code WitException} thrown.
+	 * trap, an {@code async func} lifted async as on the GC one. A world of compound
+	 * types crosses too: a record a member record, a variant a sealed interface, a list a
+	 * {@code List}, a result a {@code WitResult} or its ok arm with a
+	 * {@code WitException} thrown, in an {@code async func} as in any other.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
@@ -845,21 +846,19 @@ class JavaWitImportTest {
 		write("Kinds.java", KINDS);
 		Path module = this.dir.resolve("kinds.wasm");
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", module.toString(), "--component");
-		// --no-gc: no async lift, then the scalar component of the world, the static
-		// String the start function initializes
+		// --no-gc: the scalar component of the world, the static String the start
+		// function initializes, the async func lifted async (the backend has no thread
+		// to sleep in)
 		Path scalar = this.dir.resolve("scalar.wasm");
-		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o",
-				scalar.toString(), "--component", "--no-gc"))
-			.hasMessageContaining(
-					"kinds.wit:17: export 'pause' is an async func, which --no-gc --component cannot lift");
-		write("kinds.wit", KINDS_WIT.replace("  export pause: async func(ms: u32) -> u32;\n", ""));
 		write("Kinds.java", KINDS
 			.replace("StringBuilder seen = new StringBuilder(\"seen:\")", "String seen = \"seen: \" + (touched - 1)")
 			.replace("seen.append(' ').append(name);", "")
-			.replace(KINDS.substring(KINDS.indexOf("    public static int pause"),
-					KINDS.indexOf("    public static class Math")), ""));
+			.replace(KINDS.substring(KINDS.indexOf("        long start = System.nanoTime();"),
+					KINDS.indexOf("    public static class Math")), "        return ms;\n    }\n\n"));
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", scalar.toString(), "--component",
-				"--no-gc");
+				"--no-gc", "--emit-wit");
+		assertThat(Files.readString(this.dir.resolve("scalar.wit")))
+			.contains("export pause: async func(ms: u32) -> u32;", "export count: func() -> s32;");
 		// java.lisp's System.exit and thread ends, which no export of this world
 		// reaches, import no wasi:cli/exit (a sleep does: the refusal of a monitor
 		// held, Thread's id counter's)
@@ -899,7 +898,7 @@ class JavaWitImportTest {
 					+ ":REACTOR T :OCTETS T :ENVELOPE T)");
 		// a named type is the member type of its name, checked against its definition
 		exportRefused("shapes/Shapes.java", SHAPES, "record Point(int x, int y)", "record Point(int x, long y)",
-				"Shapes.java:74:29: Geometry.Point (point of test:shapes/geometry@0.1.0): its field y is s32, which is "
+				"Shapes.java:75:29: Geometry.Point (point of test:shapes/geometry@0.1.0): its field y is s32, which is "
 						+ "int in Java, not long");
 		write("shapes/Shapes.java", SHAPES);
 		write("shapes/shapes.wit", SHAPES_WIT.replace("summary", "totals"));
@@ -931,10 +930,10 @@ class JavaWitImportTest {
 		answers.put("test:kinds/math.count@0.1.0()", "10");
 		answers.put("add(4294967295, 2)", "1");
 		answers.put("half(5.0)", "2.5");
+		answers.put("pause(5)", "5");
 		invoked(scalar, answers);
 		answers.put("greet(\"Java\")", "\"Hello, Java! seen: Java\"");
 		// an async func lifts async: its call's task waits where the method sleeps
-		answers.put("pause(5)", "5");
 		invoked(module, answers);
 		// what an export leaves uncaught is reported by the line a JDK writes, then
 		// traps;
@@ -1227,7 +1226,7 @@ class JavaWitImportTest {
 			  }
 
 			  export geometry;
-			  export summarize: func(areas: list<f64>) -> summary;
+			  export summarize: async func(areas: list<f64>) -> summary;
 			  export octets: func(bytes: list<u8>) -> list<u8>;
 			  export remember: func(noted: tuple<s64, string>);
 			  export remembered: func() -> string;
@@ -1258,7 +1257,8 @@ class JavaWitImportTest {
 			    public record Noted(long number, String name) {
 			    }
 
-			    public static Summary summarize(List<Double> areas) {
+			    public static Summary summarize(List<Double> areas) throws InterruptedException {
+			        Thread.sleep(1);
 			        double total = 0;
 			        for (double area : areas) {
 			            total += area;
@@ -1386,7 +1386,7 @@ class JavaWitImportTest {
 
 			public class ShapesMain {
 
-			    public static void main(String[] args) {
+			    public static void main(String[] args) throws InterruptedException {
 			        System.out.println(Shapes.Geometry.flip(new Shapes.Geometry.Point(1, 2)));
 			        System.out.println(Shapes.Geometry.squares(3));
 			        System.out.println(Shapes.Geometry.bounds(List.of(new Shapes.Geometry.Point(3, 1), new Shapes.Geometry.Point(1, 9))));

@@ -9,6 +9,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.HostBoundaryRuns;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
@@ -441,24 +442,29 @@ class NoGcWasmImportE2eTest {
 	void aWitImportedInterfaceIsTheHandWrittenImportBlock() throws Exception {
 		// The same lowering both WASM core-module backends take: a wit-import is exactly
 		// the wasm-import block it stands for, so binding an interface from its WIT
-		// costs nothing and the two programs compile to the SAME bytes.
+		// costs nothing and the two programs compile to the SAME bytes. An async func,
+		// bound :blocking t, is one more plain import: a core module has no async ABI
+		// and needs none, since a host that suspends the call (JSPI) does it around the
+		// module.
 		Files.writeString(this.tempDir.resolve("api.wit"), """
 				package example:app@0.1.0;
 
 				interface api {
 				  add: func(a: s32, b: s32) -> s32;
 				  greet: func(name: string) -> string;
+				  settle: async func(ms: s32) -> s32;
 				}
 				""", StandardCharsets.UTF_8);
 		String witProgram = """
-				(rontolisp:wit-import "api.wit" :interface "example:app/api@0.1.0" :package api :from "env")
-				(defun run (n) (length (api:greet (if (> (api:add n n) 10) "big" "small"))))
+				(rontolisp:wit-import "api.wit" :interface "example:app/api@0.1.0" :package api :from "env" :blocking t)
+				(defun run (n) (length (api:greet (if (> (api:settle (api:add n n)) 10) "big" "small"))))
 				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
 				""";
 		String handWritten = """
 				(rontolisp:wasm-import 'add :from "env" :as "add" :params '(:int :int) :returns :int)
 				(rontolisp:wasm-import 'greet :from "env" :as "greet" :params '(:string) :returns :string)
-				(defun run (n) (length (greet (if (> (add n n) 10) "big" "small"))))
+				(rontolisp:wasm-import 'settle :from "env" :as "settle" :params '(:int) :returns :int)
+				(defun run (n) (length (greet (if (> (settle (add n n)) 10) "big" "small"))))
 				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
 				""";
 		byte[] fromWit = compileNoGc(CompileFrontendAccess.wasmReactor(witProgram, this.tempDir.toString(), true),
@@ -470,6 +476,7 @@ class NoGcWasmImportE2eTest {
 				const fs = require('fs');
 				const dec = new TextDecoder(), enc = new TextEncoder();
 				let inst;
+				const jspi = typeof WebAssembly.Suspending === 'function';
 				const env = {
 				  add: (a, b) => a + b,
 				  greet: (p, n) => {
@@ -478,15 +485,28 @@ class NoGcWasmImportE2eTest {
 				    new Uint8Array(inst.exports.memory.buffer).set(b, q);
 				    return [q, b.length];
 				  },
+				  settle: jspi
+				    ? new WebAssembly.Suspending((ms) => new Promise((res) => setTimeout(() => res(ms + 1), ms)))
+				    : (ms) => ms + 1,
 				};
 				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
-				console.log(inst.exports.run(3), inst.exports.run(9));
+				const run = jspi ? WebAssembly.promising(inst.exports.run) : inst.exports.run;
+				(async () => console.log(await run(3), await run(9), jspi))();
 				""";
 		Path wasmFile = this.tempDir.resolve("wit.wasm");
 		Files.write(wasmFile, fromWit);
 		Path driverFile = this.tempDir.resolve("wit.js");
 		Files.writeString(driverFile, driver, StandardCharsets.UTF_8);
-		assertThat(runNode(driverFile, wasmFile)).isEqualTo("11 9");
+		// node 22 has no JSPI: its host answers at once, the other way a call returns
+		boolean jspi = HostBoundaryRuns.jspiAvailable();
+		Process process = new ProcessBuilder(
+				jspi ? List.of("node", HostBoundaryRuns.JSPI_FLAG, driverFile.toString(), wasmFile.toString())
+						: List.of("node", driverFile.toString(), wasmFile.toString()))
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as(output).isZero();
+		assertThat(output.trim()).isEqualTo("11 9 " + jspi);
 	}
 
 	@Test

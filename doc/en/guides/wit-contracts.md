@@ -693,9 +693,10 @@ Current limitations:
   [`--no-gc`](wasm-nogc.md#host-imports-rontolispwasm-import) carries the
   whole family, up to `s64`/`u64`, and keeps each one's width; the default
   (wasm-GC) core module carries up to 32 bits and refuses `s64`/`u64` by
-  name, because its house integer is `i31ref`. `--no-gc` refuses an
-  `async func` instead: `:async t` answers a future, and that value model
-  has none.
+  name, because its house integer is `i31ref`. `--no-gc` binds an
+  `async func` under `:blocking t` only, as a
+  [call that waits](wasm-nogc.md#calls-that-wait-async-func): the future its
+  binding answers elsewhere has no value there.
 - `flags` crosses a component, not a `--no-wasi` module.
 - The directive binds an **interface**. A world's `import` items are still
   not read.

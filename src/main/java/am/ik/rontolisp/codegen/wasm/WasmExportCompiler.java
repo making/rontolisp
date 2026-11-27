@@ -102,9 +102,10 @@ final class WasmExportCompiler {
 	 * @param async whether the {@code --component} lift uses an <strong>async</strong>
 	 * function type ({@code :async t}): the export runs as a stackful async task, so I/O
 	 * inside it (print, fetch, ...) blocks cooperatively instead of trapping. Only
-	 * meaningful on the GC {@code --component} (non-serve) path; ignored on Preview 1 /
-	 * {@code --no-wasi} (core exports whose I/O the host provides directly) and rejected
-	 * under {@code --no-gc --component} (the adapter-free reactor has no async machinery)
+	 * meaningful on a {@code --component} (non-serve) path, the scalar backend's
+	 * included, where it is what lets the export reach an import whose call waits;
+	 * ignored on Preview 1 / {@code --no-wasi} (core exports whose I/O the host provides
+	 * directly)
 	 * @param iface the fully-qualified id of the WIT interface this export belongs to
 	 * ({@code :interface "docs:adder/add@0.1.0"}, or {@code null} for a freestanding
 	 * world-level function export). {@code rontolisp:wit-export} fills this in when a
@@ -478,6 +479,23 @@ final class WasmExportCompiler {
 		return narrowIntResult(decl.returnType()) ? List.of(Type.I64) : List.of();
 	}
 
+	// The cells of a call's mark: whether it is taken, the heap top and the intern count
+	// it was taken at.
+	private static final int[] CABI_MARK_CELLS = { WasmLispCompiler.CABI_MARK_ACTIVE_ADDR,
+			WasmLispCompiler.CABI_MARK_HEAP_ADDR, WasmLispCompiler.CABI_MARK_INTERN_ADDR };
+
+	/**
+	 * Returns whether a call of the export may wait while its mark is taken: an
+	 * {@code async func} whose lift has a post-return. Another async func's call waits
+	 * for this one to return, but a plain func of the instance runs meanwhile.
+	 * @param decl the export
+	 * @return whether its wrapper holds the mark while the function runs
+	 */
+	static boolean waitsOverMemory(Decl decl) {
+		WitExportSignature typing = decl.typing();
+		return (decl.async() || typing != null && typing.func().async()) && usesMemory(decl);
+	}
+
 	/**
 	 * Returns whether any declared type is memory-backed
 	 * ({@code :string}/{@code :s-expr}).
@@ -580,10 +598,12 @@ final class WasmExportCompiler {
 	 * {@code -1} when no {@code :bytes} type is present)
 	 * @param marshal the canonical ABI's lift of the parameters and lowering of the
 	 * result, for a canonical export ({@link Decl#wit}); {@code null} for a flat one
+	 * @param heldMark the first of the three {@code i32} locals the wrapper holds its
+	 * call's mark in while the function runs ({@link #waitsOverMemory}), or {@code -1}
 	 */
 	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex,
 			int bytesFromMemFuncIndex, int bytesCopyFuncIndex,
-			WasmComponentImportCompiler.@Nullable ExportMarshal marshal) {
+			WasmComponentImportCompiler.@Nullable ExportMarshal marshal, int heldMark) {
 		// A module with a suspending host import (wasm-import :async t / --host-fetch)
 		// can be RE-ENTERED while a call is parked: JSPI returns control to the host's
 		// event loop mid-call. Nothing per call owns the allocator bracket (its marks
@@ -696,6 +716,29 @@ final class WasmExportCompiler {
 				ctx.writer.writeUnsignedLeb128(ctx.currentTaskGlobalIndex);
 			}
 		}
+		// The mark of this call (cabi_realloc took it when the host lowered an argument)
+		// is one set of cells, and an async func's task waits while the host runs a
+		// plain func of the instance: that call's post-return would pop to this call's
+		// mark -- below what this call still holds, the area its own pending import
+		// answers into -- and clear it. So the mark moves into locals for as long as
+		// the function runs: a call made meanwhile takes its own, at the heap top, and
+		// pops to it. A callback-lifted export answers through task.return and has no
+		// post-return.
+		final int mark = isCallbackExport(ctx, decl) ? -1 : heldMark;
+		if (mark >= 0) {
+			for (int i = 0; i < CABI_MARK_CELLS.length; i++) {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(CABI_MARK_CELLS[i]);
+				ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(mark + i);
+			}
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.CABI_MARK_ACTIVE_ADDR);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
 		// env (defuns ignore it)
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
@@ -798,6 +841,17 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.END);
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(polled);
+		}
+		// The function has answered: the mark is this call's again, before the result is
+		// staged against it.
+		if (mark >= 0) {
+			for (int i = 0; i < CABI_MARK_CELLS.length; i++) {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(CABI_MARK_CELLS[i]);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(mark + i);
+				ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
+			}
 		}
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
 		// (A callback-lifted export cannot reach here: it exists only under asyncMode,

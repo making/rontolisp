@@ -52,7 +52,9 @@
   the payload, which every await throws again (the same payload, so `--report-locations`' frames
   survive, [error-handling.md](error-handling.md)). Outside EH mode nothing can catch a condition, so
   the body still traps at the call (the one observable difference left: output between call and
-  await). **`--no-gc`** rejects the whole async surface by name, `%stream-new` included.
+  await). **`--no-gc`** rejects the whole async surface by name, `%stream-new` included; an
+  `async func` of a WIT crosses it as a call that waits (`.kb/no-gc-scalar-wasm.md`, "An
+  `async func`").
 
 ## Where the eager part ends
 **Invariant: where an async body's eager part ends depends on no thread's timing.** It ends at the

@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t])`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t | :blocking t])`
 
 Declares a function the WASM host provides (JavaScript in a browser, or another
 module preloaded into wasmtime) and makes it callable from Lisp under `name`
@@ -123,6 +123,17 @@ spells both directions `async func`, and the directive carries the direction.)
   suspension there traps naming nobody. Move the call behind an export, or
   drop `:async t` if the host answers synchronously.
 
+## `:blocking t` — a host function the call waits for
+
+`:blocking t` declares a function that may wait — a WIT `async func` — whose
+call waits with it and answers its value, as the
+[`rontolisp:wit-import`](rontolisp-wit-import.md) option of the name binds one.
+It is read only by
+[`--no-gc --component`](../../guides/wasm-nogc.md#calls-that-wait-async-func),
+where it is the type of the imported function (`async func`); a core module's
+import is a plain function with or without it. `:async t` beside it is a
+compile error: a call answers a future or the value.
+
 ## `"rontolisp:memory"` — the module's own linear memory
 
 The reserved `:from` value binds no host function. Each directive names a field
@@ -145,7 +156,7 @@ section gains nothing. On the interpreter and JVM the name is the usual stub.
 | `"size"` | `(:string)` | `:u32` | How many bytes those are, where `length` counts characters; only under `--no-gc` |
 
 The Lisp name is yours; the field and its exact signature are not, and a
-declaration that differs is a compile error. `:async t` and
+declaration that differs is a compile error. `:async t`, `:blocking t` and
 `--no-gc --component` are refused. An address outside the `:u32` range traps,
 and so does an access past the end of memory; nothing else protects the
 memory, so a store through a wrong address overwrites whatever is there.
@@ -188,7 +199,8 @@ builds a complete SDK on this.
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) takes
   the directive, with its own type vocabulary: the whole fixed-width integer
   family (its house integer is `i64`), `:float`, `:bool`, `:string` and `:void`,
-  but not `:s-expr`, not `:bytes`, not `:octets` and not `:async t`. Under
+  but not `:s-expr`, not `:bytes`, not `:octets` and not `:async t` (a
+  function the call waits for is `:blocking t`). Under
   [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
   the reached imports become the component's imports, so `:from` must be a
   lower-kebab-case label or a WIT interface id, and `:as` and every

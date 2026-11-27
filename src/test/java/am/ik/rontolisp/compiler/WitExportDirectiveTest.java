@@ -165,10 +165,15 @@ class WitExportDirectiveTest {
 	void lowersAnAsyncFuncIntoAnAsyncExport() {
 		// The :async t lift is stated by the WIT rather than guessed: a sync-lifted
 		// export
-		// doing I/O traps at run time ("cannot block a synchronous task").
-		List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_GC);
-		assertThat(printed(forms)).isEqualTo(
-				"(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32 :ASYNC T)");
+		// doing I/O traps at run time ("cannot block a synchronous task"). It is the type
+		// of the component's function, on the scalar backend as on the GC one; a core
+		// module's export has no type for it to change.
+		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+			List<LispVal> forms = lower(world("  export count-vowels: async func(s: string) -> s32;"), backend);
+			assertThat(printed(forms)).as(backend.name())
+				.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS"
+						+ " :S32 :ASYNC T)");
+		}
 	}
 
 	@Test
@@ -225,7 +230,7 @@ class WitExportDirectiveTest {
 		// carries the text, and the backend marshals it through the canonical ABI. A
 		// type alias of a flat type stays flat, the hand-written form with the WIT
 		// beside it: a component of a world that names types declares them, and types
-		// each export from the WIT.
+		// each export from the WIT. An async func is the same form, lifted async.
 		String wit = """
 				package root:component;
 
@@ -234,7 +239,7 @@ class WitExportDirectiveTest {
 				  record word { text: string, weight: f32 }
 				  flags perms { r, w }
 				  export count-vowels: func(s: list<u8>) -> count;
-				  export longest: func(ws: list<word>) -> result<word, string>;
+				  export longest: async func(ws: list<word>) -> result<word, string>;
 				  export size: func(s: string) -> count;
 				}
 				""";
@@ -251,7 +256,7 @@ class WitExportDirectiveTest {
 					// arm
 					"(DEFUN |longest%wit-export| (P0) (CONS :OK (|longest| P0)))",
 					"(RONTOLISP:WASM-EXPORT '|longest%wit-export| :AS \"longest\" :WIT \"...\" :WIT-WORLD \"analyzer\""
-							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|))",
+							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|) :ASYNC T)",
 					"(RONTOLISP:WASM-EXPORT '|size| :PARAMS '(:STRING) :WIT \"...\" :WIT-WORLD \"analyzer\""
 							+ " :WIT-AT \"world.wit:9\" :PARAM-NAMES '(|s|) :RETURNS :S32)");
 		// The scalar backend's component declares the types too. A core module has
@@ -497,11 +502,6 @@ class WitExportDirectiveTest {
 		assertThat(printed(lower(world("  resource thing;\n  export count-vowels: func(s: string) -> s32;"),
 				Backend.WASM_COMPONENT)))
 			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32)");
-		// An async export stays on the flat types.
-		assertThatThrownBy(
-				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))
-			.hasMessageStartingWith("world.wit:4: export 'count-vowels' is an async func, and an async export carries "
-					+ "the flat types only");
 	}
 
 	@Test
@@ -550,15 +550,6 @@ class WitExportDirectiveTest {
 		assertThat(printed(lower(wit, Backend.WASM_NO_GC)))
 			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:U64) :PARAM-NAMES '(|s|) :RETURNS :U64)");
 		assertThat(printed(lower(wit, Backend.WASM_GC))).contains(":U64");
-	}
-
-	@Test
-	void rejectsAnAsyncFuncOnTheNoGcBackend() {
-		assertThatThrownBy(
-				() -> lower(world("  export count-vowels: async func(s: string) -> s32;"), Backend.WASM_NO_GC))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessage("world.wit:4: export 'count-vowels' is an async func, which --no-gc --component cannot lift "
-					+ "(the adapter-free reactor has no async machinery)");
 	}
 
 	@Test

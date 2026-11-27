@@ -75,8 +75,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * {@code --no-gc} takes the Preview&nbsp;1 lowering unchanged: a WIT function reaches
  * only the flat integer/float/bool/string set, which the scalar backend's unboxed value
- * model carries, so one world serves both WASM core-module backends. Its one refusal is
- * an {@code async func}, which would bind a future that backend has no value for.
+ * model carries, so one world serves both WASM core-module backends. An
+ * {@code async func} binds there under {@code :blocking t} alone, as a call that waits
+ * and answers its value: the binding of a future is refused, that backend having no value
+ * for one.
  *
  * <p>
  * Like {@link WitExportDirective} this class does no I/O and no codegen: the caller reads
@@ -589,14 +591,14 @@ public final class WitImportDirective {
 				}
 				continue;
 			}
-			if (noGc && func.def().func().async()) {
-				// :async t answers a (settled) future, and the --no-gc value model has
-				// nothing to represent one -- the whole async surface is refused there.
-				// Say so against the WIT member, not against the wasm-import the
+			if (noGc && func.def().func().async() && !directive.blocking()) {
+				// The binding of an async func answers a future, and the --no-gc value
+				// model has nothing to represent one: only the call that waits binds
+				// there. Say so against the WIT member, not against the wasm-import the
 				// lowering would have produced.
 				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
-						+ "' is an async func, which --no-gc cannot bind (the scalar backend has no future value);"
-						+ " compile it on the default GC backend, or against a synchronous WIT world");
+						+ "' is an async func, which --no-gc binds under :blocking t only, as a call that waits and"
+						+ " answers its value (the scalar backend has no future value)");
 			}
 			if (noGcComponent) {
 				validateNoGcComponentFunc(func, witPath, locations, resolver, iface, member);
@@ -624,12 +626,15 @@ public final class WitImportDirective {
 				continue;
 			}
 			if (noGcComponent) {
-				bindings.add(wasmImportForm(name, ifaceId, func.def().name(), params, returns, false, true));
+				// an async func is the type of the imported function, which the wrap
+				// lowers synchronously (:blocking t)
+				bindings.add(wasmImportForm(name, ifaceId, func.def().name(), params, returns,
+						func.def().func().async() ? ":BLOCKING" : null, true));
 				continue;
 			}
 			bindings.add(wasm
 					? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
-							func.def().func().async() && !directive.blocking(), false)
+							func.def().func().async() && !directive.blocking() ? ":ASYNC" : null, false)
 					: providerDefun(name, ifaceId, member, params));
 		}
 		// A resource is released by its own interface's `drop`, which WIT declares no
@@ -1954,12 +1959,13 @@ public final class WitImportDirective {
 
 	// (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...) :returns
 	// ... [:async t]) -- :async t when the WIT member is an `async func`, so the P1
-	// binding answers a (settled) future like every other backend's.
+	// binding answers a (settled) future like every other backend's; :blocking t in its
+	// place for the --no-gc component, whose wrap types the import `async func`.
 	// With `namedParams`, the WIT parameter names ride along as :param-names (the
 	// --no-gc --component wrap types its import instance with them; a core module never
 	// reads them, so the Preview 1 block stays the hand-written one).
 	private static LispVal wasmImportForm(String name, String module, String field, List<Param> params, String returns,
-			boolean async, boolean namedParams) {
+			@Nullable String waits, boolean namedParams) {
 		List<LispVal> designators = new ArrayList<>();
 		List<LispVal> paramNames = new ArrayList<>();
 		for (Param param : params) {
@@ -1981,8 +1987,8 @@ public final class WitImportDirective {
 		}
 		out.add(new LispSymbol(":RETURNS"));
 		out.add(new LispSymbol(returns));
-		if (async) {
-			out.add(new LispSymbol(":ASYNC"));
+		if (waits != null) {
+			out.add(new LispSymbol(waits));
 			out.add(new LispSymbol("T"));
 		}
 		return list(out);

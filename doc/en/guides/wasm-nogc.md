@@ -476,8 +476,9 @@ Three rules worth knowing:
   uncalled host function costs the module nothing, at every optimize level.
 - **`rontolisp:wit-import` works here too**, and lowers to exactly this —
   one `wasm-import` per WIT function, byte-for-byte the hand-written block
-  ([WIT contracts](wit-contracts.md)). Its one exception is an `async func`:
-  `:async t` answers a future, and this backend has no value for one.
+  ([WIT contracts](wit-contracts.md)). An `async func` binds under
+  `:blocking t` only, as a [call that waits](#calls-that-wait-async-func):
+  the future its binding answers elsewhere has no value on this backend.
   Under `--no-gc --component` the same declarations become the component's
   own imports — see [host imports in a component](#host-imports-in-a-component).
 
@@ -621,6 +622,68 @@ parameter names, so a component built from a `.wit` composes with any
 provider of that interface. Only the imports the exports reach are
 declared, and a printing program keeps its print micro-adapter beside them.
 
+### Calls that wait (`async func`)
+
+A WIT `async func` is a function whose call may wait. This backend has no
+future value, so it takes one as what the call is to its caller: a call
+that **waits and answers the value**.
+
+- An imported one is declared `:blocking t`, on `rontolisp:wasm-import` or
+  on the [`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md)
+  of an interface that has one. The component imports it as an `async func`
+  and lowers it synchronously: the call returns when the function has.
+- An exported one is `:async t` on `rontolisp:wasm-export`, an `async func`
+  of a [`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)
+  world. Only the task of such an export may wait, so an export that is not
+  `:async t`, or a top-level form, that reaches a `:blocking t` import is a
+  compile error naming the calls in between.
+
+```console
+;; clocks.wit -- the two functions of the host's clock the program names
+package wasi:clocks@0.3.0;
+
+interface monotonic-clock {
+  now: func() -> u64;
+  wait-for: async func(how-long: u64);
+}
+```
+
+```console
+;; nap.lisp
+(rontolisp:wit-import "clocks.wit" :interface "wasi:clocks/monotonic-clock@0.3.0"
+                      :package clock :blocking t)
+
+(defun nap (ms)
+  (let ((start (clock:now)))
+    (clock:wait-for (* ms 1000000))
+    (- (clock:now) start)))
+
+(rontolisp:wasm-export 'nap :params '(:u32) :returns :u64 :async t)
+```
+
+```bash
+rontolisp nap.lisp --no-gc --component -o nap.wasm   # 425 bytes
+wasmtime run --invoke 'nap(20)' nap.wasm
+# 21265054
+```
+
+Under jco (measured on 1.42) the function a `--map` answers a `:blocking t`
+import with may be an `async` one, and the `:async t` export is called with
+`await`.
+
+One call waits at a time: the task stays in the host for the whole call, so
+two waits take the sum of their times. A program whose waits must overlap
+belongs on the default backend, where the binding of an `async func`
+answers a future.
+
+A core module (no `--component`) has no async ABI and needs none. There
+`:blocking t` and `:async t` change nothing — the import is a plain import,
+the export a plain export — and a host whose function is asynchronous
+suspends the call around the module: a JavaScript host wraps the import in
+`WebAssembly.Suspending` and the export in `WebAssembly.promising` (JSPI),
+and makes one call at a time: the module has no guard against a call
+entering while another is suspended.
+
 Trade-offs against the plain `--no-gc` output, and current limits:
 
 - A component needs a component-model-capable host; the raw core module
@@ -631,9 +694,8 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - The component is a pure reactor: there is no `wasi:cli/run` entry
   (nothing runs at the top level). Printing inside an export works through
   the micro-adapter above; every other I/O stays outside the `--no-gc`
-  subset as usual. `:async t` is rejected — a printing program's exports
-  are lifted async automatically, and there is nothing else an export
-  could suspend on.
+  subset as usual. A printing program's exports are lifted async
+  automatically, with or without `:async t`.
 - The export name must be a lower-kebab-case component-model name; for a
   Lisp name outside that grammar the compiler asks you to rename it with
   `:as`.
@@ -641,4 +703,5 @@ Trade-offs against the plain `--no-gc` output, and current limits:
 - [`--emit-wit`](wit-contracts.md#emitting-the-wit-world---emit-wit)
   composes too, and writes a tiny world of just the typed exports and the
   host imports the program reaches (plus the `wasi:cli/stdout@0.3.0` import
-  — and `async func` export signatures — when the program prints).
+  — and `async func` export signatures — when the program prints), an
+  `async func` wherever the program declares one.

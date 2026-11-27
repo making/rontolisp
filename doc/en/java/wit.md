@@ -334,7 +334,11 @@ With `--no-gc` too, a class of scalar values
 scalar backend, which runs its static initialization when it is instantiated. The counter
 above, its `indexOf` written as comparisons, is 2,040 bytes there and 12,988 without
 `--no-gc`. A world carrying a type other than `bool`, the integers, `f64` and `string` is
-refused there at its WIT line: the scalar backend has no value for a record or a list.
+refused there at its WIT line: the scalar backend has no value for a record or a list. An
+`async func` of those types is exported there as by any component. Such a class calls no
+`@WitImport` interface: the binding `ServiceLoader` answers is an object, which the scalar
+backend has none of, and the lookup is refused at its position, with or without
+`--component`.
 
 Under a JDK, on the interpreter and on the JVM the annotation does nothing: `vowelCount` is
 an ordinary static method, which a program or a test calls. A program with no `main` is
@@ -445,21 +449,32 @@ either component, composed with it, and prints the same lines.
 An unsigned integer is the Java type of its width holding its bits both ways: a `u32` of
 4294967295 is the `int` -1, and the `int` -1 an export answers for a `u32` is 4294967295.
 
-An `async func` export is a static method answering its value, as any other. The component
-lifts it async, so the call may wait where the method blocks, as in a `Thread.sleep` or a call
-of an imported `async func`; a sync export that blocks traps (`cannot block a synchronous
-task`). It takes `bool`, the integers, `f64` and `string` alone (any other type in an
-`async func` is refused at its WIT line), and `--no-gc` refuses it
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)).
+An `async func` export is a static method answering its value, as any other, and it takes
+the types any other export takes: a record, a list, a variant or a `result` crosses an
+`async func` as it crosses a `func`. What each output makes of it:
+
+| Output | An `async func` export |
+| --- | --- |
+| `--component` | lifted async: the call may wait where the method blocks, as in a `Thread.sleep` or a call of an imported `async func`. A plain `func` that blocks traps (`cannot block a synchronous task`) |
+| `--component --no-wasi` | lifted async too, but the component imports no clock: a method that sleeps traps |
+| `--no-gc --component` | lifted async too, of `bool`, the integers, `f64` and `string` alone, as every export there. Nothing in the scalar subset waits: it has no thread to sleep in (`Thread.sleep` is refused there) and no object for a `@WitImport` binding |
+| a module (`-o out.wasm` alone, `--no-wasi`), `--native` | exported nowhere, as every export: a world is exported by a component |
+| a JDK, the interpreter, the JVM | the method, called as any other |
 
 ```console
 export pause: async func(ms: u32) -> u32;
+export summarize: async func(areas: list<f64>) -> summary;
 ```
 
 ```console
 public static int pause(int ms) throws InterruptedException {
     Thread.sleep(ms);
     return ms;
+}
+
+public static Summary summarize(List<Double> areas) throws InterruptedException {
+    Thread.sleep(1);
+    ...
 }
 ```
 
@@ -469,7 +484,8 @@ public static int pause(int ms) throws InterruptedException {
   the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
   handles), a component everything, a `--no-wasi` module everything but `flags`. A member of any
   other type is refused at its WIT line where the program calls it, as `wit-import` refuses
-  it.
+  it. With `--no-gc`, a module or a component, no `@WitImport` interface is bound at all:
+  the lookup of its binding is refused, the scalar backend having no object.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
   inside a compound value an export answers (a record's field, a list's element) a
   negative `long` is the `u64` of its bits.
@@ -491,8 +507,9 @@ public static int pause(int ms) throws InterruptedException {
   holding a handle, is refused at the world's `export` line, whether or not a function
   takes the type. A `use` of a resource in the world itself is left out, and a function of
   the world naming it is refused. An `async func` export
-  takes `bool`, the integers, `f64` and `string`
-  alone, and is refused under `--no-gc`. Two exports of one label (a function of the world
+  takes the types any other export takes. Under `--no-gc --component` every export takes
+  `bool`, the integers, `f64` and `string` alone, an `async func` among them. Two
+  exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call

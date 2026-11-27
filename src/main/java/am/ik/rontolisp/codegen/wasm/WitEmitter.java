@@ -174,8 +174,8 @@ final class WitEmitter {
 		WitDocument document = prune(WasiWitDefinitions.document(run ? variant : VARIANT_BASE), wasiMembers, run);
 		// On the nogc-print variant EVERY export is an async lift (the print bridge's
 		// blocking waitable-set park is legal only inside an async-typed task), so the
-		// emitted WIT must say `async func` the way wasm-tools does -- the directives
-		// themselves never carry :async there (it is rejected under --no-gc).
+		// emitted WIT must say `async func` the way wasm-tools does, whether or not the
+		// directive carries :async.
 		boolean forceAsync = VARIANT_NOGC_PRINT.equals(variant);
 		// An export naming a WIT interface (`export docs:adder/add;`) is bundled by its
 		// interface id: it prints as an `export <id>;` reference plus a package block
@@ -536,7 +536,8 @@ final class WitEmitter {
 	// The WIT function type of an export declaration: its parameter labels and boundary
 	// types, and its result, with `async func` forced on the nogc-print variant.
 	// A host import's WIT function type: the declared boundary types under the
-	// directive's parameter names, never async (--no-gc refuses :async t).
+	// directive's parameter names, an `async func` where the call waits for it
+	// (:blocking t; --no-gc refuses :async t, a future).
 	private static WitFunc witFunc(WasmImportCompiler.Decl decl) {
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();
@@ -544,7 +545,7 @@ final class WitEmitter {
 			params.add(new WitFunc.Param(decl.paramNames().get(i), witType(paramTypes.get(i))));
 		}
 		Integer result = WasmExportCompiler.componentValType(decl.returnType());
-		return new WitFunc(false, List.copyOf(params), result == null ? null : witTypeOf(result));
+		return new WitFunc(decl.blocking(), List.copyOf(params), result == null ? null : witTypeOf(result));
 	}
 
 	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {

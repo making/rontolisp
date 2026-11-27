@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t])`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t | :blocking t])`
 
 WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロードされた別の
 モジュール) が提供する関数を宣言し、`name` という名前でトップレベルの `defun`
@@ -125,6 +125,10 @@ pull ループはリニアメモリをフラットに保ちます。
   します。呼び出しをエクスポートの背後へ移すか、ホストが同期的に応答するなら
   `:async t` を外してください。
 
+## `:blocking t` — 呼び出しが返りを待つホスト関数
+
+`:blocking t` は、待つことのある関数(WIT の `async func`)を宣言します。呼び出しは関数が返るまで待ち、その値を返します。[`rontolisp:wit-import`](rontolisp-wit-import.md) の同名のオプションが `async func` を束縛するときと同じ扱いです。このオプションを読むのは [`--no-gc --component`](../../guides/wasm-nogc.md#calls-that-wait-async-func) だけで、そこではインポートする関数の型が `async func` になります。コアモジュールのインポートは、オプションの有無にかかわらず素の関数です。`:async t` と併記するとコンパイルエラーになります。呼び出しが返すのは future か値のどちらか一方だからです。
+
 ## `"rontolisp:memory"` — モジュール自身のリニアメモリ
 
 この予約された `:from` の値はホスト関数を束縛しません。各ディレクティブはモジュール自身のメモリの操作を指すため、プログラムは出力先のセルを確保し、そのアドレスをホストへ渡し、ホストが書き込んだ値を読み返せます。インポートセクションは増えません。インタプリタと JVM では、通常のインポートと同じくスタブになります。
@@ -143,7 +147,7 @@ pull ループはリニアメモリをフラットに保ちます。
 | `"address"` | `(:string)` | `:u32` | 文字列の UTF-8 バイト列の場所を返します。読み取り専用で、`--no-gc` でのみ使えます |
 | `"size"` | `(:string)` | `:u32` | そのバイト数を返します。`length` が数えるのは文字数です。`--no-gc` でのみ使えます |
 
-Lisp 側の名前は自由に選べますが、フィールド名とシグネチャは固定で、異なる宣言はコンパイルエラーになります。`:async t` と `--no-gc --component` は拒否されます。`:u32` の範囲外のアドレスとメモリ末尾を越えるアクセスはトラップします。それ以外の保護はないため、誤ったアドレスへのストアはそこにある内容を上書きします。
+Lisp 側の名前は自由に選べますが、フィールド名とシグネチャは固定で、異なる宣言はコンパイルエラーになります。`:async t`、`:blocking t`、`--no-gc --component` は拒否されます。`:u32` の範囲外のアドレスとメモリ末尾を越えるアクセスはトラップします。それ以外の保護はないため、誤ったアドレスへのストアはそこにある内容を上書きします。
 
 `"alloc"`、`"mark"`、`"reset"` のいずれかを宣言したプログラムは、ヒープを自分で管理します。確保した領域は、ホストからの呼び出しをまたいでも `"reset"` を呼ぶまで解放されません。そのためエクスポートはホストに書き込ませるアドレスを返せますが、長く動くインスタンスでは一時領域をプログラム自身で解放する必要があります。`--no-gc` では、スカラーを返すエクスポートが戻るときに行うリセットもなくなります。プログラムが自前のアロケータ(1 つの引数を `"alloc"` へそのまま渡す関数)をエクスポートし、エクスポートにもホストインポートにも `:string` がない場合、`--no-gc` は `__ronto_alloc` 系のエクスポートを省きます。ホストはそのアロケータを使えるためです。
 
@@ -175,7 +179,8 @@ Lisp 側の名前は自由に選べますが、フィールド名とシグネチ
 - [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) は
   このディレクティブを受け付けます。型の語彙は独自で、固定幅整数のファミリ全体
   (ハウス整数が `i64` のため)、`:float`、`:bool`、`:string`、`:void` を運びます。
-  `:s-expr`、`:bytes`、`:octets`、`:async t` は運べません。
+  `:s-expr`、`:bytes`、`:octets`、`:async t` は運べません(呼び出しが返りを待つ
+  関数は `:blocking t` で宣言します)。
   [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
   では到達するインポートがコンポーネントのインポートになるため、`:from` は
   lower-kebab-case のラベルか WIT インターフェース id、`:as` と `:param-names`

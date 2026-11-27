@@ -33,7 +33,7 @@ import org.testcontainers.utility.DockerImageName;
 public final class WasmtimeSupport {
 
 	/** The prebuilt image, tracking {@code :latest} (see the class Javadoc). */
-	public static final DockerImageName IMAGE = DockerImageName.parse("ghcr.io/making/rontolisp-wasmtime:latest");
+	public static final DockerImageName IMAGE = DockerImageName.parse("ghcr.io/making/rontolisp-wasmtime-test:latest");
 
 	/** Whether a Docker daemon is reachable; the WASM backends are skipped without it. */
 	public static final boolean DOCKER_AVAILABLE = DockerClientFactory.instance().isDockerAvailable();

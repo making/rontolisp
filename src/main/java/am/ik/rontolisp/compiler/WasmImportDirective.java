@@ -39,9 +39,14 @@ import org.jspecify.annotations.Nullable;
  * obligations the suspension creates. The word deliberately matches the export side's
  * {@code :async} (WIT spells both directions {@code async func}); the directive itself
  * carries the direction
+ * @param blocking whether the host function is one that may WAIT ({@code :blocking t}, a
+ * WIT {@code async func}) and the call waits with it, answering its value: the type of
+ * the imported function when the module is wrapped as a component
+ * ({@code --no-gc --component}), which lowers it synchronously. A core module's import is
+ * a plain function either way, so the option changes nothing there
  */
 public record WasmImportDirective(String name, String module, String field, List<String> paramTypes,
-		List<String> paramNames, @Nullable String returnType, boolean async) {
+		List<String> paramNames, @Nullable String returnType, boolean async, boolean blocking) {
 
 	/** The default import module name when {@code :from} is omitted. */
 	public static final String DEFAULT_MODULE = "env";
@@ -92,6 +97,7 @@ public record WasmImportDirective(String name, String module, String field, List
 		@Nullable List<String> paramNames = null;
 		@Nullable String returns = null;
 		boolean async = false;
+		boolean blocking = false;
 		int i = 2;
 		while (i < items.size()) {
 			String keyword = keywordName(items.get(i), form);
@@ -106,6 +112,7 @@ public record WasmImportDirective(String name, String module, String field, List
 				case ":PARAM-NAMES" -> paramNames = quotedNameList(value, form);
 				case ":RETURNS" -> returns = returnKeyword(value, form);
 				case ":ASYNC" -> async = booleanValue(value, keyword, form);
+				case ":BLOCKING" -> blocking = booleanValue(value, keyword, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-import option " + keyword + " in " + form.print());
 			}
@@ -116,8 +123,12 @@ public record WasmImportDirective(String name, String module, String field, List
 			throw new UnsupportedOperationException("rontolisp:wasm-import :param-names has " + paramNames.size()
 					+ " name(s) but :params declares " + types.size() + " parameter(s) in " + form.print());
 		}
+		if (async && blocking) {
+			throw new UnsupportedOperationException("rontolisp:wasm-import :async t answers a future and :blocking t"
+					+ " the value itself, so a function is declared one or the other in " + form.print());
+		}
 		return new WasmImportDirective(name, module, field == null ? unqualifiedMember(name) : field, types,
-				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns, async);
+				paramNames == null ? defaultParamNames(types.size()) : paramNames, returns, async, blocking);
 	}
 
 	// p0, p1, ... -- the same default labels the export side gives a component function

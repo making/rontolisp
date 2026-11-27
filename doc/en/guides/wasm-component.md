@@ -213,9 +213,9 @@ Current limitations of component exports:
   prints, fetches, or otherwise does I/O to remove that residual risk;
   keep pure-compute exports sync.
 - `:async` is meaningful only here: Preview 1 / `--no-wasi` core exports
-  ignore it (the host provides I/O directly there), and `--no-gc
-  --component` rejects it (the compact reactor component has no async
-  adapter).
+  ignore it (the host provides I/O directly there). Under `--no-gc
+  --component` it is what lets an export reach an import whose
+  [call waits](wasm-nogc.md#calls-that-wait-async-func).
 - jco (1.25.2) transpiles an `:async t` export and types it as async, but
   cannot call it yet — its support for the 0.3 async ABI is not implemented
   upstream (the same gap as calling the transpiled `run`). `wasmtime run

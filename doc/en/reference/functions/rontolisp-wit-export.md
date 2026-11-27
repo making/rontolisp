@@ -215,8 +215,9 @@ gives another type is refused at the clause; rename it there
 (`point as corner`).
 
 Not carried, each a compile error at the export's WIT line: a `stream`, a
-`future`, a handle of a resource the world does not export
-([Resources](#resources)), and a compound type in an `async func`. A WASI
+`future` and a handle of a resource the world does not export
+([Resources](#resources)). An
+`async func` carries the same types as any other. A WASI
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
 refuse a world with any other.
 
@@ -349,8 +350,6 @@ offending export:
   the world does not export, or a type that holds a handle; and one whose type
   the scope has no name for (a world's) or whose name the scope gives another
   type
-- an `async func` under `--no-gc --component`, whose adapter-free reactor has no
-  async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a
   duplicate export (refused by the WIT reader first, in `wasm-tools component
   wit`'s words: `` export `a` conflicts with prior func of same name ``), or

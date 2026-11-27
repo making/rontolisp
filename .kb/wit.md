@@ -103,7 +103,8 @@ boundary").
   :blocking)`), and a byte or handle read then parks on its own waitable-set as outside
   asyncMode, where it would answer a pending future (measured 2026-11-26, wasmtime 51: a
   stdin read before its bytes arrive answered `#<FUTURE>`, then trapped on the next read).
-  What a front end with no futures binds (the Java subset).
+  What a front end with no futures binds (the Java subset), and the one way `--no-gc` binds an
+  `async func` (`.kb/no-gc-scalar-wasm.md`, "An `async func`").
 - Trap: a value type's type index is an s33 (`ComponentWriter.definedFuture` wrote it unsigned
   until 2026-11-26, so a future whose payload type sat past index 63 failed validation).
 
@@ -158,11 +159,10 @@ Each names the WIT file and line: world selection; an export not defined; **arit
 exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is not a lower-kebab
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
-types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); an `async func`
-under `--no-gc --component`; a resource's function or destructor that the program gets wrong,
-and a resource where the output is no component of the default backend ("A resource the world
-exports"); a `use` clause whose type cannot be named in the scope ("A type of another
-interface").
+types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); a resource's
+function or destructor that the program gets wrong, and a resource where the output is no
+component of the default backend ("A resource the world exports"); a `use` clause whose type
+cannot be named in the scope ("A type of another interface").
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
 ### Compound types across an export — the canonical form
@@ -215,9 +215,22 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
   enum) and cross a component with nothing added. Not a `--no-wasi` core module, either way:
   its JavaScript glue has no value (`WitGlueLayouts.layout` refuses, `.todo/m92`).
+- **An `async func`** is the same form with `:async t`, and nothing else: its lift is the
+  synchronous one over an async function type, so parameters, result area and post-return are
+  a sync export's ([wasi-component.md](wasi-component.md), "`:async t` I/O exports", with what
+  the spec says and which calls of an instance overlap). The refusal it had ("an async export
+  carries the flat types only") rested on a lift with no post-return and four flat parameters,
+  which is an async-OPTION lift's and an async lower's. Measured 2026-11-26: the integration
+  test's world with every function async answers what the sync world answers on both
+  component shapes, a call that sleeps answers on `--component` (the same function as a plain
+  func traps, `cannot block a synchronous task before returning`; the reactor, which imports no
+  clock, traps either way); `wasm-tools component targets` accepts it; 600,000 calls from a
+  `bindgen!` host under a 48 MiB store limit, 35 MB peak RSS; a `--no-wasi` module's glue calls
+  it as any export (`:async` is a component's). `flip: async func(point) -> point` 1,938 B /
+  1,126 gzip against the sync 1,881 / 1,098 (the held mark, wasi-component.md).
 - **Refused at the WIT line** (`requireCanonical`): a stream, a future, a handle of a
-  resource the world does not export, a compound type in an `async func` (`.todo/m90`);
-  `--no-gc`, which has no value a record could be (no cons). In the compiler,
+  resource the world does not export; `--no-gc`, which has no value a record could be (no
+  cons). In the compiler,
   which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
   export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
   A `--no-wasi` module exports them through `--emit-js-glue` ([wasm-import.md](wasm-import.md),
@@ -265,8 +278,14 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   proposal not enabled"), which a program naming `rontolisp:wit-error` or `handler-case` is --
   a world for jco answers its `result`s under `:envelope t`; `wasm-tools compose` 1.263.0
   refuses a dependency whose WORLD types name each other ("type not valid to be used as
-  import"), the tool's own component included (`wac` instead).
-- Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
+  import"), the tool's own component included (`wac` instead), and wires the composed
+  component's own imports alone (a dependency's dependency is composed into it first). The
+  same world with its functions async, by hand: the `bindgen!` host (wasmtime's
+  `component-model-async`, WASI p3 in the linker; an async func is `call_concurrent` under
+  `run_concurrent`) and jco (each async export a `Promise`; 1,200,000 calls, RSS level at 279
+  MB) answer what `--invoke` answers.
+- Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`
+  (async funcs among them: in an interface, with a `result`, past sixteen flats, one that waits),
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` /
   `.aComponentCallsWhatAnotherExportsOverCompoundTypes`,
   `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`,
@@ -481,13 +500,16 @@ through the canonical ABI though every bound member is flat.
 - **`--no-gc`**: the SAME Preview 1 lowering, so one world serves both, differing in two places
   because the vocabulary follows the HOUSE INTEGER: the designator is read straight off the prim
   name (`BoundaryType.forWitName`, as the export side does), so `s64`/`u64` cross and a `u32` keeps
-  its width; and an `async func` is a compile error (no futures in that value model). An import and
+  its width; and an `async func` binds under `:blocking t` only (no futures in that value model;
+  the refusal names the option). An import and
   an export of ONE world must not disagree about which backend can bind it. Pins:
-  `WitImportDirectiveTest.theNoGcBackendGetsThePreview1LoweringWithItsOwnWidths`,
+  `WitImportDirectiveTest.theNoGcBackendGetsThePreview1LoweringWithItsOwnWidths` /
+  `.theNoGcBackendBindsAnAsyncFuncOnlyAsACallThatWaits`,
   `NoGcWasmImportE2eTest.aWitImportedInterfaceIsTheHandWrittenImportBlock`.
 - **`--no-gc --component`**: the same block, named as the wrap's canon-lowered instance import is
   typed -- the CANONICAL id as `:from`, the WIT label verbatim as `:as`, the WIT parameter names --
-  so a composed provider type-checks down to the names. Resources, non-primitive types and drops
+  so a composed provider type-checks down to the names, an `async func` as `:blocking t`.
+  Resources, non-primitive types and drops
   are refused at the WIT line (`validateNoGcComponentFunc`). Pins:
   `WitImportDirectiveTest.theNoGcComponentLowersToTheCanonicalImportNames` /
   `.theNoGcComponentRefusesWhatItsInstanceTypeCannotName`,

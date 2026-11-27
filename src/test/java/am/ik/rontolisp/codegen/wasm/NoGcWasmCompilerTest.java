@@ -3052,16 +3052,62 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
-	void componentRejectsAsyncExport() {
-		// :async is not a user-level knob here: a printing program's exports become
-		// async lifts automatically and every other I/O op is a compile error, so an
-		// explicit :async request is a clear error rather than a silently-ignored
-		// option.
-		assertThatThrownBy(() -> compileComponent("""
-				(defun add2 (a b) (+ a b))
-				(rontolisp:wasm-export 'add2 :params '(:long :long) :returns :long :async t)
-				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining(":async is not supported with --no-gc --component");
+	void aComponentTypesWhatWaitsAsAsyncAndRefusesAWaitNoTaskCanMake() {
+		// An export :async t and an import :blocking t are a WIT `async func` each: the
+		// export's task may wait, and the import's call waits where the host function
+		// does, answering its value (a synchronous lowering; this value model has no
+		// future). Each is the one byte of its function type (0x43 for 0x40), over the
+		// core a sync program has.
+		String waiting = """
+				(rontolisp:wasm-import 'nap :from "docs:host/timer@0.1.0" :as "nap" :params '(:u32) :param-names '(ms) :returns :u32 :blocking t)
+				(defun twice (ms) (+ (nap ms) (nap ms)))
+				(defun doze (ms) (twice ms))
+				(rontolisp:wasm-export 'doze :params '(:u32) :returns :u32 :async t)
+				""";
+		String plain = waiting.replace(" :blocking t", "").replace(" :async t", "");
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
+		byte[] component = compiler.compile(LispReader.readAllFromString(waiting));
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  import docs:host/timer@0.1.0;
+
+				  export doze: async func(p0: u32) -> u32;
+				}
+				package docs:host@0.1.0 {
+				  interface timer {
+				    nap: async func(ms: u32) -> u32;
+				  }
+				}
+				""");
+		byte[] sync = compileComponent(plain);
+		assertThat(component).hasSameSizeAs(sync);
+		List<Integer> differing = new ArrayList<>();
+		for (int i = 0; i < sync.length; i++) {
+			if (sync[i] != component[i]) {
+				assertThat(sync[i]).isEqualTo((byte) 0x40);
+				assertThat(component[i]).isEqualTo((byte) 0x43);
+				differing.add(i);
+			}
+		}
+		assertThat(differing).as("the import's function type and the export's").hasSize(2);
+		// a core module's import and export are plain functions either way
+		assertThat(compilePlainUnoptimized(waiting)).isEqualTo(compilePlainUnoptimized(plain));
+		// Only an async func's task may wait, and the call graph is static here: an
+		// export that is none, or the top level (the start function runs in no task),
+		// reaching such an import is refused by the path, where a host would trap.
+		assertThatThrownBy(() -> compileComponent(waiting.replace(" :async t", "")))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("export 'doze' reaches the async func 'NAP' (DOZE -> TWICE -> NAP), whose call waits, and only"
+					+ " the task of an async func may wait: export it :async t (an `async func` in a WIT world)");
+		assertThatThrownBy(() -> compileComponent(waiting + "(defvar *first* (twice 1))\n"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("the top level reaches the async func 'NAP' (TWICE -> NAP), whose call waits, and"
+					+ " a component's top level runs in no task");
+		// a printing program's exports are async already
+		assertThat(compileComponent(waiting.replace("(twice ms))", "(print (twice ms)))").replace(" :async t", "")))
+			.isNotEmpty();
 	}
 
 	@Test
@@ -3494,7 +3540,14 @@ class NoGcWasmCompilerTest {
 				(defun go (n) (slow n))
 				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("rontolisp:wasm-import :async is not supported with --no-gc");
+			.hasMessageContaining("rontolisp:wasm-import :async is not supported with --no-gc")
+			.hasMessageContaining(":blocking t");
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'slow :from "host" :as "slow" :params '(:int) :returns :int :async t :blocking t)
+				(defun go (n) (slow n))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":async t answers a future and :blocking t the value itself");
 	}
 
 	@Test
