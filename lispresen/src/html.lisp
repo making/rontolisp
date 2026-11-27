@@ -74,7 +74,10 @@ th{font-weight:700}
 .statement,.section-title,.deck-title{font-size:var(--stmt);line-height:var(--stmt-lh);font-weight:700;text-wrap:balance}
 .section-title{color:var(--accent)}
 .deck-meta{font-size:META;line-height:META-LH;color:var(--muted)}
+.deck-subtitle{font-size:var(--sub);line-height:var(--sub-lh);text-wrap:balance}
+.deck-title+.deck-subtitle{margin-top:var(--sub-gap)}
 .deck-title+.deck-meta{margin-top:48px}
+.deck-subtitle+.deck-meta{margin-top:48px}
 .logo{height:LOGOpx;max-width:100%;object-fit:contain;margin-bottom:48px}
 .qr{position:absolute;display:flex;flex-direction:column;gap:QR-GAP;font-size:QR-SIZE;line-height:QR-LH;white-space:nowrap}
 .qr.right{align-items:flex-end}
@@ -780,7 +783,11 @@ page advance on every part."
                 (code-lh c) (code-pad c))))
     (when (fit-stmt-size fit)
       (format s "--stmt:~dpx;--stmt-lh:~dpx;" (fit-stmt-size fit)
-              (statement-lh (fit-stmt-size fit))))))
+              (statement-lh (fit-stmt-size fit)))
+      (when (and (equal (fit-layout fit) "title") (deck-subtitle deck))
+        (let ((ss (subtitle-size (fit-stmt-size fit))))
+          (format s "--sub:~dpx;--sub-lh:~dpx;--sub-gap:~dpx;"
+                  ss (statement-lh ss) (subtitle-gap ss)))))))
 
 (defun write-callout (c out)
   "The bubble of the callout C, placed where the fit solver found room for it. Its tail
@@ -817,6 +824,10 @@ corner the fit solver chose."
     (write-string "<h1 class=\"deck-title\">" out)
     (write-text (slide-title slide) (slide-title-run slide) out)
     (write-string "</h1>" out)
+    (when (deck-subtitle deck)
+      (write-string "<p class=\"deck-subtitle\">" out)
+      (write-text (deck-subtitle deck) (deck-subtitle-run deck) out)
+      (write-string "</p>" out))
     (loop for (text run) in (slide-meta slide)
           do (write-string "<p class=\"deck-meta\">" out)
             (write-text text run out) (write-string "</p>" out))

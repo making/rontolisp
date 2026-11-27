@@ -14,6 +14,8 @@
 (defstruct deck
   line
   title
+  subtitle
+  subtitle-run
   author
   date
   theme
@@ -1495,7 +1497,7 @@ element there are refused."
 
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
-                                                  '("TITLE" "AUTHOR" "DATE"
+                                                  '("TITLE" "SUBTITLE" "AUTHOR" "DATE"
                                                     "THEME" "ASPECT" "RUNTIME" "FONT"
                                                     "PAGE-NUMBERS" "FOOTER" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
@@ -1504,6 +1506,8 @@ element there are refused."
                                                     "DESCRIPTION" "LANG") "deck")
     (when rest (report :error "(deck ...) takes options only"))
     (make-deck :title (string-option opts "TITLE" "deck")
+               :subtitle (let ((v (string-option opts "SUBTITLE" "deck")))
+                           (and v (plusp (length v)) v))
                :author (string-option opts "AUTHOR" "deck")
                :date (string-option opts "DATE" "deck")
                :lang (parse-lang-option opts)
@@ -1668,6 +1672,10 @@ expanded first, so the sections an agenda lists are known before any slide is pa
         (report
          :warning
          ":logo and :url are shown on the title slide, which needs a :title"))
+      (when (and (deck-subtitle deck) (null (deck-title deck)))
+        (report
+         :warning
+         ":subtitle is shown under the :title of the title slide, which this deck lacks"))
       (let ((image (deck-page-image deck)))
         (cond ((null image)
                (when (deck-page-image-font deck)

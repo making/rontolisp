@@ -207,6 +207,22 @@ widens its first and last character"
       (ok (contains html "<div class=\"codebox runnable band\""))
       (ok (= (lispresen::code-height b 44 344) (+ 12 48 22 62 22)))
       (ok (= (lispresen::code-height b 44 1696) (+ 22 62 22)))))
+  (testing "a deck's subtitle is the next statement step below its title, and the title
+steps down to leave it room"
+    (let ((html
+           (lispresen:render
+            "(deck :title \"題\" :subtitle \"副題\" :author \"a\" :date \"d\")")))
+      (ok (contains html "<p class=\"deck-subtitle\">副題</p>"))
+      (ok
+       (contains html
+                 "style=\"--stmt:120px;--stmt-lh:162px;--sub:104px;--sub-lh:141px;--sub-gap:26px;\"")))
+    ;; The title steps down together with the subtitle; at the smallest title it is 40.
+    (ok
+     (contains (lispresen:render
+                (format nil "(deck :title \"題\" :subtitle \"~a\")"
+                        (make-string 120 :initial-element #\副)))
+               "style=\"--stmt:88px;--stmt-lh:119px;--sub:72px;--sub-lh:98px;--sub-gap:18px;\""))
+    (ok (= (lispresen::subtitle-size 56) 40)))
   (testing "a short untitled paragraph is a statement at the statement scale"
     (ok
      (contains (lispresen:render "(slide \"一文だけ\")")
@@ -816,7 +832,11 @@ diagnostics"
     (ok
      (equal (render-diagnostics "(deck :logo (image \"l.png\" :alt \"l\"))")
             '((:warning 1
-                        ":logo and :url are shown on the title slide, which needs a :title"))))))
+                        ":logo and :url are shown on the title slide, which needs a :title"))))
+    (ok
+     (equal (render-diagnostics "(deck :subtitle \"s\")")
+            '((:warning 1
+                        ":subtitle is shown under the :title of the title slide, which this deck lacks"))))))
 
 (deftest embedding
   (testing "base64 pads the last group"
@@ -1202,6 +1222,12 @@ carries the panel, and the next good one drops it"
   (testing "a canvas px is 6350 EMU and half a point"
     (ok (= (lispresen::emu 1) 6350))
     (ok (= (lispresen::sz100 56) 2800)))
+  (testing "a deck's subtitle is a line under its title"
+    (let* ((deck (lispresen::build-deck "(deck :title \"T\" :subtitle \"S\")"
+                                       :record-geometry t))
+           (xml (lispresen::pptx-slide-xml
+                 deck (first (lispresen::deck-slides deck)) nil)))
+      (ok (search ">S<" xml))))
   (testing "text is escaped for XML"
     (ok (equal (with-output-to-string (o)
                  (lispresen::write-xml-text "a<b&\"'>" o))

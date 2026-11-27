@@ -8,6 +8,7 @@
       :date "YYYY-MM-DD"
       :description "What this deck is about, in one sentence"
       :lang "en"
+      ;; :subtitle "Subtitle"          ; a line under the title, a step smaller
       ;; :theme :dark                  ; :light, :dark, :high-contrast or :midnight
       ;; :url "https://example.com/"   ; a QR code of the URL on the title slide
       ;; A link preview of the published page, when it is shared:
