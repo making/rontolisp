@@ -179,6 +179,8 @@ final class JvmSetqCompiler {
 				slot = ctx.allocLocal(name);
 			}
 			ctx.body.astore(slot);
+			// A declared array whose storage its scope resolved: the new value's.
+			JvmIntFusionCompiler.rebindArrayStorage(name, ctx);
 		}
 	}
 

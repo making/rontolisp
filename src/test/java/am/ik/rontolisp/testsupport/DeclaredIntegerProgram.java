@@ -21,8 +21,11 @@ public final class DeclaredIntegerProgram {
 	 * reassigned, every tree over them alone. Sched is a message schedule over the arrays
 	 * Java declares, its long[] read and stored as an int[] and a byte[] are; put64's
 	 * last store finds the array widened by the one before (Long.MIN_VALUE is its packed
-	 * shape's nil). The values are the interpreter's, and a JDK's for the hash, the
-	 * shifts, the masked quotients, rho and sched.
+	 * shape's nil). Walk's loop reads and stores an array a callee widens under it, then
+	 * one holding the packed shape's nil; swap's exchanges its two arrays each round, and
+	 * twice's first subscript assigns the variable its second read names. The values are
+	 * the interpreter's, and a JDK's for the hash, the shifts, the masked quotients, rho
+	 * and sched.
 	 */
 	public static final String PROGRAM = """
 			(deftype int32 () '(signed-byte 32))
@@ -100,6 +103,32 @@ public final class DeclaredIntegerProgram {
 			  (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 32) i) (type (signed-byte 64) x))
 			  (setf (aref w i) x)
 			  (+ (the (signed-byte 64) (aref w i)) 1))
+			(defun poke (v i x) (setf (aref v i) x))
+			(defun walk (w n)
+			  (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 32) n))
+			  (let ((s 0) (i 0))
+			    (declare (type (signed-byte 64) s) (type (signed-byte 32) i))
+			    (loop while (< i n)
+			          do (setq s (%mask-signed-field 64 (+ s (the (signed-byte 64) (aref w i)))))
+			             (when (= i 0) (poke w 3 'x) (poke w 1 40) (poke w 3 5))
+			             (setf (aref w i) (%mask-signed-field 64 (+ (the (signed-byte 64) (aref w i)) 1)))
+			             (setq i (%mask-signed-field 32 (+ i 1))))
+			    (list s w)))
+			(defun swap (n)
+			  (let ((u (make-array 3 :initial-element 1)) (v (make-array 3 :initial-element 10)) (s 0))
+			    (declare (type (simple-array (signed-byte 64) (*)) u v) (type (signed-byte 64) s))
+			    (dotimes (i n)
+			      (setq s (%mask-signed-field 64 (+ s (the (signed-byte 64) (aref u (mod i 3))))))
+			      (setf (aref v (mod i 3)) (%mask-signed-field 64 (+ (the (signed-byte 64) (aref v (mod i 3))) s)))
+			      (rotatef u v))
+			    (list s u v)))
+			(defun twice (u v)
+			  (let ((w u) (s 0))
+			    (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 64) s))
+			    (dotimes (i 2)
+			      (setq s (%mask-signed-field 64 (+ s (the (signed-byte 64) (aref w (progn (setq w v) 1)))
+			                                        (the (signed-byte 64) (aref w 0))))))
+			    s))
 			(print (hash32 "the quick brown fox jumps over the lazy dog"))
 			(print (lanes 9223372036854775807 3))
 			(print (lanes -9223372036854775808 63))
@@ -118,6 +147,10 @@ public final class DeclaredIntegerProgram {
 			              (make-array 4 :element-type '(unsigned-byte 32)) 8))
 			(print (let ((w (make-array 2 :initial-element 0)))
 			         (list (put64 w 0 9223372036854775806) (put64 w 1 -9223372036854775808) (put64 w 0 3) w)))
+			(print (walk (make-array 4 :initial-element 1) 4))
+			(print (walk (make-array 4 :initial-element -9223372036854775808) 3))
+			(print (swap 5))
+			(print (twice (make-array 2 :initial-element 1) (make-array 2 :initial-element 10)))
 			""";
 
 	/** What {@link #PROGRAM} prints. */
@@ -136,6 +169,10 @@ public final class DeclaredIntegerProgram {
 			(1 2 T)
 			(-4678252771848532188 -4437309255459745240 T)
 			(#(72057594037928191 -9223372036854775801 0 -144115188075855863 -4476132075883103852 9222974912752700171 4872450367180449263 -380189227759289332) #(2973858196 1459014411 696460783 1677343756))
-			(9223372036854775807 -9223372036854775807 4 #(3 -9223372036854775808))""";
+			(9223372036854775807 -9223372036854775807 4 #(3 -9223372036854775808))
+			(47 #(2 41 2 6))
+			(40 #(-9223372036854775807 41 -9223372036854775807 5))
+			(35 #(11 45 22) #(24 12 1))
+			31""";
 
 }

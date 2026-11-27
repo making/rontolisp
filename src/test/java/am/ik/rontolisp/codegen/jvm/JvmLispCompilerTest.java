@@ -18116,7 +18116,25 @@ class JvmLispCompilerTest {
 				}
 			}
 		}
-		assertThat(schedCalls).hasSize(4).allMatch(call -> call.startsWith("_fx$") && !call.endsWith("Object;"));
+		assertThat(schedCalls).filteredOn(call -> call.startsWith("_fx$"))
+			.hasSize(4)
+			.noneMatch(call -> call.endsWith("Object;"));
+		// .kb/jvm-int-fusion.md, "Storage resolved once": the storage of sched's long[]
+		// is resolved where the parameter is bound, and each method reading or storing
+		// it takes the pair after its leaves and asks once whether it is still the
+		// array's -- three reads of the array, one question. Swap's exchange resolves
+		// both arrays' again.
+		assertThat(schedCalls).filteredOn(call -> !call.startsWith("_fx$"))
+			.containsExactly("_fxHeader(Ljava/lang/Object;)Ljava/lang/Object;", "_fxStorage(Ljava/lang/Object;)[J");
+		List<String> schedStored = schedCalls.stream()
+			.filter(call -> call.contains("[JLjava/lang/Object;)"))
+			.map(call -> call.substring(0, call.indexOf('(')))
+			.toList();
+		assertThat(schedStored).hasSize(3).allSatisfy(name -> {
+			assertThat(invokedMethodNames(fast, name)).filteredOn("_fxFresh"::equals).hasSize(1);
+			assertThat(invokedMethodNames(fast, name)).doesNotContain("_fxLongs");
+		});
+		assertThat(invokedMethodNames(fast, "SWAP")).filteredOn("_fxHeader"::equals).hasSize(4);
 		assertThat(runClass(fast)).isEqualTo(expected);
 		assertThat(runClass(small)).isEqualTo(expected);
 	}
@@ -18199,6 +18217,13 @@ class JvmLispCompilerTest {
 			  v)
 			(print (list (s-put *s* 2 -9223372036854775807) *s* (s-read *s* 2)
 			             (s-fill (make-array 2) -9223372036854775807) (s-fill (vector 'x 2) -9223372036854775807)))
+			(defun h-sum (v n)
+			  (declare (type (simple-array (signed-byte 64) (*)) v))
+			  (let ((s 0)) (dotimes (i n) (setq s (+ s (aref v i)))) s))
+			(print (list (h-sum *s* 3) (h-sum *w* 2) (h-sum (make-array 3 :fill-pointer 3 :initial-element 2) 3)
+			             (h-sum (make-array 2 :adjustable t :initial-element 4) 2)))
+			(print (list (s-report #'h-sum nil 1) (s-report #'h-sum "abc" 1) (s-report #'h-sum *s* 4)
+			             (s-report #'h-sum (make-array 2) 1)))
 			""";
 
 	private static final String GENERAL_ARRAY_LEAF_EXPECTED = """
@@ -18209,7 +18234,9 @@ class JvmLispCompilerTest {
 			7
 			(-9223372036854775807 -9223372036854775807 -9223372036854775807 -9223372036854775807)
 			("LOGXOR: The value NIL is not of type INTEGER" "LOGXOR: The value NIL is not of type INTEGER" 0 0)
-			(-9223372036854775808 #(1 -9223372036854775808 -9223372036854775808) -9223372036854775807 #(-9223372036854775808 -9223372036854775808) #(-9223372036854775808 -9223372036854775808))""";
+			(-9223372036854775808 #(1 -9223372036854775808 -9223372036854775808) -9223372036854775807 #(-9223372036854775808 -9223372036854775808) #(-9223372036854775808 -9223372036854775808))
+			(-18446744073709551615 -9223372036854775807 6 8)
+			("AREF: The value NIL is not of type ARRAY" "+: The value #\\\\a is not of type NUMBER" "AREF: The value 3 is not of type (INTEGER 0 (3))" "+: The value NIL is not of type NUMBER")""";
 
 	@Test
 	void fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther() throws Exception {
@@ -18221,7 +18248,9 @@ class JvmLispCompilerTest {
 		// what the size level (which emits no fused site) answers. The integer
 		// Long.MIN_VALUE, which the packed shape holds as its nil sentinel, is read and
 		// stored by a fused method's twin where the array is declared to hold it, from
-		// either shape (nil there bails); elsewhere its read bails.
+		// either shape (nil there bails); elsewhere its read bails. H-sum's declared
+		// variable has its storage resolved once: the read asks whether it is still the
+		// array's, and every other shape and value answers as before.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(GENERAL_ARRAY_LEAF_PROGRAM));
 		byte[] fast = JvmLispCompiler.builder()
@@ -18251,6 +18280,10 @@ class JvmLispCompilerTest {
 		assertThat(twinCalls.apply("S-NARROW")).isEmpty();
 		assertThat(twinCalls.apply("S-PUT")).contains("_rmSet");
 		assertThat(twinCalls.apply("S-FILL")).contains("_rmSet");
+		assertThat(invokedMethodNames(fast, "H-SUM")).containsSubsequence("_fxHeader", "_fxStorage");
+		assertThat(invokedMethodNames(fast, "H-SUM").stream()
+			.filter(name -> name.startsWith("_fx$"))
+			.flatMap(name -> invokedMethodNames(fast, name).stream())).contains("_fxFresh").doesNotContain("_fxLongs");
 		assertThat(runClass(fast)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 	}
