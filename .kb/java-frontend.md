@@ -2121,9 +2121,8 @@ JDK in the front end's semantics, the library and the host.
     extension, a static or final field, `BDDSoftAssertions` and
     `SoftAssertionsProvider.assertSoftly(Class, ..)` (`.todo/n09`).
   - **Why a case of its own**: a program that makes a soft assertion lowers every check
-    another way, so the main case keeps the plain lowering; and that case with these two
-    files (1,456 class objects) overflowed the stack of the E2E's in-process wasm compile
-    (`.todo/n11`).
+    another way, so the main case keeps the plain lowering. (That case with these two
+    files, 1,456 class objects, overflowed a 1 MiB stack in the wasm compile: `.todo/n11`.)
   - **Traps**: `Soft.running` is one flag for every thread; a session that holds an
     assertion made before its first soft one has no slot for it.
   - Seen, not this item's: `asInstanceOf` beside a property read by name prints `warning:
