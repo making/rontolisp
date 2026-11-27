@@ -131,11 +131,13 @@ final class JvmLetCompiler {
 		// Restored (reverse order) after the body, before the scope is popped.
 		List<int[]> dynamicRestores = null;
 		Set<String> boundInThisLet = new HashSet<>();
+		List<String> boundInOrder = new ArrayList<>();
 		if (bindings instanceof LispCons bindingsCons) {
 			for (LispVal binding : bindingsCons.toList()) {
 				LispCons pair = (LispCons) binding;
 				List<LispVal> pairList = pair.toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
+				boundInOrder.add(name);
 				if (ctx.specialVars.contains(name)) {
 					// The dynamic binding: the one every read of the name resolves to
 					// while it is active -- the body's, a called function's and a
@@ -295,6 +297,9 @@ final class JvmLetCompiler {
 				parts.subList(2, parts.size()), ctx);
 		ctx.declaredArrays = JvmIntFusionCompiler.bodyDeclaredArrays(savedDeclaredArrays, letVarNames,
 				parts.subList(2, parts.size()), ctx);
+		// The storage of each general array this let binds and declares, resolved once
+		// for the body's fused accesses (.kb/jvm-int-fusion.md, "Storage resolved once").
+		JvmIntFusionCompiler.bindArrayStorage(boundInOrder, parts.subList(2, parts.size()), ctx);
 		// A body under dynamic bindings is a PROTECTED REGION whose cleanups restore
 		// each special to its saved state (the previous value, or the previous cell --
 		// possibly null = no binding on this thread), innermost first: the unwind-protect

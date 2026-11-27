@@ -260,7 +260,64 @@ other array form ([java-frontend.md](java-frontend.md), "Numbers").
     within noise on both. 64-byte messages now cost what 63-byte ones do.
   - Cost: classes. SHA-512's program 77,231 -> 83,909 B (23 twins, 4,770 bytecodes), the five
     digests' 192,089 -> 206,313.
+- **A declared variable's storage is resolved where it is bound**: "Storage resolved once".
 - **What C2 leaves**: "The fallback is a method of its own", "What C2 still leaves".
+
+## Storage resolved once (2026-11-27)
+**A fused access of a declared general-array variable takes the pair its scope resolved --
+the header the array's list held (`_fxHeader`) and that header's `long[]` (`_fxStorage`,
+null for any other shape) -- and its method asks once whether the list still holds the
+header (`_fxFresh`). Invariant: that question alone decides. A packed header's dims and
+`long[]` are written only where it is made and a header a list dropped is never put back
+([adjustable-arrays.md](adjustable-arrays.md), "Representation"), so the same header means
+the same storage; any other answer -- the array widened, written back from Java, the pair
+another array's -- resolves there (`_fxLongs`), which is what every access did before.**
+
+- **Where** (`bindArrayStorage`): a defun's or lambda's declared parameters, behind the entry
+  label (a self tail call and a tail group's jump resolve the new arguments), and a `let`'s
+  declared bindings; a plain local (no capture, no special), read or stored by subscript in
+  a loop of its scope or three times outside one. An assignment resolves again
+  (`rebindArrayStorage`, from `JvmSetqCompiler`: `rotatef`'s too). A `(the spec var)`
+  access, a packed vector (its arm is one `instanceof`), a store where threads run
+  (`_fxPut`) and a `JvmBodyOutliner` continuation take none.
+- **The method**: after its leaves' parameters, `[J` and `Object` per variable; leaves naming
+  one variable share them and one question, the key carrying each leaf's ordinal. The twin
+  takes them, the fallback does not.
+- **Trap: leaves sharing a pair are not one array by construction.** A subscript may assign
+  the variable between two reads of it: the method bails unless their arrays are identical
+  (`if_acmpne`); without the guard `twice` of the fixture answered 22 for 31.
+- **Trap: the pair is stored by two adjacent `astore`s, after both calls.** A
+  `StackOverflowError` between them would leave one array's header beside another's `long[]`,
+  which the question cannot tell.
+- **Rejected: a count the widening bumps**, one static load a call (the rewritten class
+  below, 4 MiB, four alternated launches: C2 58.5-62 against the question's 71-76, Graal
+  47.5-52 against 54-56).
+  `_jwb` and `JavaBridgeTemplate.writeBackArray` replace a packed array's header without
+  `_arrayWiden`, and another compiled program in the JVM has a runtime of its own: a missed
+  bump is a wrong element, a question asked once too often is five loads. **Rejected:
+  filling a dropped `long[]` with the sentinel** (reads free): a store needs a second
+  mechanism, and where threads run an `_fxPut` in flight writes into it after the fill.
+- **Measured** (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1, C2 by `-XX:-UseJVMCICompiler`;
+  median of rounds 6-11 of a launch, five alternated pairs at load 7-9, both arms built from
+  one tree; ms). SHA-512 of 4 MiB in 64 KiB pieces, a fresh digest each round: C2 92-112 ->
+  72-74, Graal 83-97 -> 52-55; of 4 MiB plus one byte, which never bails: C2 107-111 ->
+  52-54, Graal 55-59 -> 45-46. A digest reused for 20,000 messages (three pairs): 63-byte C2
+  95-98 -> 72-75, Graal 65-78 -> 47-49; 64-byte C2 90-95 -> 70-75, Graal 67-69 -> 48-50. After MD5,
+  SHA-1, SHA-256 and SHA3-256 in one JVM (three pairs, load 11-13): SHA-512 C2 93-110 ->
+  71-73, Graal 86-88 -> 54-55, the others within noise (a Java `int[]` is a packed vector,
+  SHA-3's lanes are exact locals). `bench-report` sieve and sort (a `simple-vector`; one
+  run each, four pairs, load 18-21): within noise.
+- **Machine code** (C2, `-XX:+LogCompilation`): a read 928-944 -> 648-672 B, SHA-512's round
+  2,840-2,992 -> 2,152-2,216 (306 bytecodes; under `InlineSmallCode`, so "already compiled
+  into a big method" no longer appears), the schedule's store 4,272-4,384 -> 1,416-1,440,
+  the block's load 5,176-5,224 -> 4,096-4,288.
+- **The ceiling** (the baseline's class rewritten to hand the `long[]` over with no question,
+  which is unsound): C2 56-61, Graal 46-49 on 4 MiB. The question is free where no bail has
+  compiled as a call -- the JIT lifts it out of the loop -- and five loads a call where one
+  has (SHA-512's padding word): C2's 72-74 against 52-54.
+- **Cost**: classes. SHA-512's program 83,909 -> 85,505 B, the five digests' 207,241 ->
+  208,966, sieve 29,011 -> 29,493; a program declaring no general array is byte-identical
+  (eight of the ten `bench-report` programs).
 
 ## The fallback is a method of its own (2026-11-26)
 **A fallback past 35 bytecodes (`FALLBACK_INLINE_LIMIT`) is `_fxb$N`, which the bail calls with
@@ -300,15 +357,14 @@ the fused method's own arguments; a fast path none of whose operations throws
   (computed in place) within noise on both. Classes: SHA-512's program 147,811 -> 147,754 B,
   the five digests' 160,158 -> 161,578 (compiled in 5.6-6.7 s either way), the ten
   `bench-report` programs -62 .. +31 B. A program with no fused site is byte-identical.
-- **What C2 still leaves** (SHA-512 alone, 83 ms with everything inlined: `-XX:InlineSmallCode=6000`
-  on this layout, `-XX:FreqInlineSize=1000 -XX:InlineSmallCode=30000` on the old one). C2 does
-  not inline a callee it has already compiled to more than `InlineSmallCode` (2,500 B of
-  machine code with C2 the top tier) -- "already compiled into a big method" -- and a fused
-  method is called far more often than its caller, so it is compiled first: the round, now 298
-  bytecodes and under `FreqInlineSize` (325), is 2,840-2,992 B and is inlined only when the
-  block's compile wins the race (93-95 ms; 107-110 when it loses). A general array's read is
-  928-944 B of it by itself (`_fxLongs`, 88 bytecodes inlined, 608 B), the schedule's store
-  with three of them 4,272-4,384; the block's load is 718 bytecodes of fast path.
+- **What C2 still leaves.** C2 does not inline a callee it has already compiled to more than
+  `InlineSmallCode` (2,500 B of machine code with C2 the top tier) -- "already compiled into
+  a big method" -- and a fused method is called far more often than its caller, so it is
+  compiled first. With every access asking the list, SHA-512's round (298 bytecodes) was
+  2,840-2,992 B and inlined only when the block's compile won the race (93-95 ms; 107-110
+  when it lost; 83 with `-XX:InlineSmallCode=6000`); with its storage resolved it is under
+  the limit ("Storage resolved once"). The block's load is 726 bytecodes of fast path, past
+  `FreqInlineSize` (325) whatever its reads cost.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 - `--optimize=size` (`Ctx.intFusion`, the `!prefersSizeOverSpeed()` gate) and `--dynamic`;
@@ -344,10 +400,13 @@ the handler too: `wide` and its siblings bail into `_fxb$N` from every kind of f
 `.aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback` (exact locals too:
 `DeclaredIntegerProgram`'s `rho` calls no `_fx$` method and no `_ubRead`, `lanes`' first fused
 method answers `J`; declared arrays: `sched` calls its stores' `V` methods and one comparison,
-nothing else; the program on both wasm backends in
+nothing else but its storage's resolution, each method asking `_fxFresh` once; the fixture's
+`walk` reads and stores an array a callee widens under it, `swap` exchanges two, `twice`
+assigns between two reads; the program on both wasm backends in
 `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`),
 `.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther` (the twin too: its
-reads and stores of the integer, and none for an unpinned or `simple-vector` read),
+reads and stores of the integer, and none for an unpinned or `simple-vector` read; a resolved
+storage over every other shape and value: `h-sum`),
 `.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
 `.compileAndRunArefChecksItsArraysRankAndItsSubscriptsType` (`ArefRankAndSubscriptChecksFixture`,
 both levels),
@@ -362,6 +421,11 @@ of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`
 declared array's reports: `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE`'s last rows.
 
 ## Unfinished
+- A Java `long[]` reads `Long.MIN_VALUE` through a bail, which compiles as a call in its loop
+  for good: `.todo/n05-jvm-a-java-long-array-reads-long-min-value-through-a-bail.md`.
+- SHA-512's eight-byte load stays a call under C2:
+  `.todo/n06-jvm-the-eight-byte-load-is-a-fused-method-past-freqinlinesize.md`.
+- An array a field or a `(the spec form)` names resolves no storage: only a variable does.
 - An UNDECLARED dual local's store re-boxes its fast-path value at every assignment (a declared
   one's method answers `J`, "Exact locals"); its `(...)J` variant needs a bail protocol for a
   value that is no `Long`.
