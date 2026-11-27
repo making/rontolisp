@@ -17986,7 +17986,8 @@ class JvmLispCompilerTest {
 		// .kb/jvm-int-fusion.md, "The fallback is a method of its own": wide's fused
 		// method calls the method holding its fifteen generic operations and none of
 		// them itself, under the handler its checked operations need; wide-store's
-		// stores of wrapped operations have the call too, and a handler only where the
+		// stores of wrapped operations into (signed-byte 64) words call their twin
+		// instead (which calls the fallback), and have a handler only where the
 		// subscript is a checked sum; mod32+'s two operations stay in its fused method.
 		assertThat(fusedMethodsOf(fast, "WIDE")).singleElement().satisfies(wide -> {
 			assertThat(wide.calls()).filteredOn(name -> name.startsWith("_fxb$")).hasSize(1);
@@ -17994,7 +17995,7 @@ class JvmLispCompilerTest {
 			assertThat(wide.handlers()).isOne();
 		});
 		assertThat(fusedMethodsOf(fast, "WIDE-STORE")).hasSize(2)
-			.allSatisfy(store -> assertThat(store.calls()).filteredOn(name -> name.startsWith("_fxb$")).hasSize(1))
+			.allSatisfy(store -> assertThat(store.calls()).filteredOn(name -> name.startsWith("_fxs$")).hasSize(1))
 			.extracting(FusedMethod::handlers)
 			.containsExactly(0, 1);
 		assertThat(fusedMethodsOf(fast, "MOD32+")).singleElement().satisfies(mod -> {
@@ -18176,6 +18177,28 @@ class JvmLispCompilerTest {
 			(let ((adj (make-array 2 :adjustable t :initial-element 4)))
 			  (print (+ (aref adj 1) 1)))
 			(print (+ 7 (random 1)))
+			(defparameter *s* (make-array 3 :initial-element 1))
+			(setf (aref *s* 1) -9223372036854775808)
+			(setf (aref *s* 2) nil)
+			(defun s-read (v i) (logxor (aref v i) 1))
+			(defun s-pinned (v i) (logxor (aref (the (simple-array (signed-byte 64) (*)) v) i) 1))
+			(defun s-narrow (v i) (logxor (aref (the simple-vector v) i) 1))
+			(defun s-report (f v i) (handler-case (funcall f v i) (error (e) (princ-to-string e))))
+			(defparameter *w* (make-array 2 :initial-element 0))
+			(setf (aref *w* 0) 'x)
+			(setf (aref *w* 0) 1)
+			(setf (aref *w* 1) -9223372036854775808)
+			(print (list (s-read *s* 1) (s-pinned *s* 1) (s-pinned *w* 1) (s-narrow *s* 1)))
+			(print (list (s-report #'s-read *s* 2) (s-report #'s-pinned *s* 2) (s-read *s* 0) (s-narrow *s* 0)))
+			(defun s-put (v i x)
+			  (declare (type (signed-byte 64) x))
+			  (setf (aref (the (simple-array (signed-byte 64) (*)) v) i) (logxor x 1)))
+			(defun s-fill (v x)
+			  (declare (type (signed-byte 64) x))
+			  (dotimes (i (length v)) (setf (aref (the (simple-array (signed-byte 64) (*)) v) i) (logxor x 1)))
+			  v)
+			(print (list (s-put *s* 2 -9223372036854775807) *s* (s-read *s* 2)
+			             (s-fill (make-array 2) -9223372036854775807) (s-fill (vector 'x 2) -9223372036854775807)))
 			""";
 
 	private static final String GENERAL_ARRAY_LEAF_EXPECTED = """
@@ -18183,7 +18206,10 @@ class JvmLispCompilerTest {
 			55
 			4
 			5
-			7""";
+			7
+			(-9223372036854775807 -9223372036854775807 -9223372036854775807 -9223372036854775807)
+			("LOGXOR: The value NIL is not of type INTEGER" "LOGXOR: The value NIL is not of type INTEGER" 0 0)
+			(-9223372036854775808 #(1 -9223372036854775808 -9223372036854775808) -9223372036854775807 #(-9223372036854775808 -9223372036854775808) #(-9223372036854775808 -9223372036854775808))""";
 
 	@Test
 	void fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther() throws Exception {
@@ -18192,7 +18218,10 @@ class JvmLispCompilerTest {
 		// no packed integer vector at all -- so the leaf emits only the ArrayList
 		// dispatch. A fill-pointered, an adjustable and a non-packed array all take the
 		// bail into the same _aref1 the unfused emission would have called, and answer
-		// what the size level (which emits no fused site) answers.
+		// what the size level (which emits no fused site) answers. The integer
+		// Long.MIN_VALUE, which the packed shape holds as its nil sentinel, is read and
+		// stored by a fused method's twin where the array is declared to hold it, from
+		// either shape (nil there bails); elsewhere its read bails.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(GENERAL_ARRAY_LEAF_PROGRAM));
 		byte[] fast = JvmLispCompiler.builder()
@@ -18207,6 +18236,21 @@ class JvmLispCompilerTest {
 			.compile(program);
 		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		// Of an array declared to hold (signed-byte 64) words, the bail calls the twin,
+		// which tells the integer from nil -- the list's get -- and stores it through
+		// _rmSet; any other read bails to the fallback.
+		java.util.function.Function<String, List<String>> twinCalls = function -> invokedMethodNames(fast, function)
+			.stream()
+			.filter(name -> name.startsWith("_fx$"))
+			.flatMap(name -> invokedMethodNames(fast, name).stream())
+			.filter(name -> name.startsWith("_fxs$"))
+			.flatMap(name -> invokedMethodNames(fast, name).stream())
+			.toList();
+		assertThat(twinCalls.apply("S-PINNED")).filteredOn("get"::equals).hasSize(1);
+		assertThat(twinCalls.apply("S-READ")).isEmpty();
+		assertThat(twinCalls.apply("S-NARROW")).isEmpty();
+		assertThat(twinCalls.apply("S-PUT")).contains("_rmSet");
+		assertThat(twinCalls.apply("S-FILL")).contains("_rmSet");
 		assertThat(runClass(fast)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
 	}

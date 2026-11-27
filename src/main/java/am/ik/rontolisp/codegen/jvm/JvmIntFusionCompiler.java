@@ -2435,8 +2435,13 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf leaf -> {
 				sb.append(leaf.store ? leaf.checkWaits ? 'w' : 's' : 'a').append(leafIndex(leaf, leaves));
 				if (leaf.pin != null) {
-					// One representation's arm is another method than every arm.
+					// One representation's arm is another method than every arm, and
+					// one whose elements may be the integer Long.MIN_VALUE (its twin's)
+					// than one whose may not.
 					sb.append(':').append(leaf.pin.kind().name());
+					if (holdsSentinelInteger(leaf.pin)) {
+						sb.append('+');
+					}
 				}
 				if (leaf.site != 0) {
 					sb.append('@').append(leaf.site);
@@ -3109,11 +3114,15 @@ final class JvmIntFusionCompiler {
 	 * {@link #FALLBACK_INLINE_LIMIT} is the method {@code _fxb$N} the bail calls with the
 	 * fused method's own arguments: the fused method is then the fast path alone, and a
 	 * bail the JIT has seen once compiles as that one call
-	 * ({@code .kb/jvm-int-fusion.md}, "The fallback is a method of its own").
+	 * ({@code .kb/jvm-int-fusion.md}, "The fallback is a method of its own"). A method
+	 * with a twin ({@link #answersSentinel}) bails into {@code _fxs$N}, the fast path
+	 * again telling the integer {@code Long.MIN_VALUE} from the packed shape's nil, whose
+	 * own bail runs the fallback.
 	 * @param pending the method to emit
 	 * @param fresh makes the context of one method
 	 * @param className the class being generated
-	 * @return the fused method, then its fallback when it has one of its own
+	 * @return the fused method, then its fallback when it has one of its own, then its
+	 * twin when it has one
 	 */
 	static List<Emitted> emitMethods(Pending pending, java.util.function.Supplier<JvmLispCompiler.Ctx> fresh,
 			String className) {
@@ -3124,7 +3133,7 @@ final class JvmIntFusionCompiler {
 			return List.of(fused);
 		}
 		if (!canBail(pending)) {
-			emitMethodBody(pending, ctx, className, null);
+			emitMethodBody(pending, ctx, className, null, false);
 			return List.of(fused);
 		}
 		// The fallback first, as the method it would be: its size decides where it goes.
@@ -3146,15 +3155,60 @@ final class JvmIntFusionCompiler {
 		fallback.nextLocal = slot;
 		fallback.maxLocals = Math.max(fallback.maxLocals, slot);
 		emitFallbackBody(pending, fallback, className);
-		if (fallback.body.size() <= FALLBACK_INLINE_LIMIT) {
-			forgetFallback(pending.root());
-			emitMethodBody(pending, ctx, className, null);
-			return List.of(fused);
+		boolean inPlace = fallback.body.size() <= FALLBACK_INLINE_LIMIT;
+		String number = pending.nameUtf8().stringValue().substring("_fx$".length());
+		List<Emitted> emitted = new ArrayList<>(List.of(fused));
+		MethodRefEntry fallbackRef = null;
+		if (!inPlace) {
+			Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxb$" + number);
+			Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
+			fallbackRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+			emitted.add(new Emitted(fallback, nameUtf8, descUtf8));
 		}
-		Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxb$" + pending.nameUtf8().stringValue().substring("_fx$".length()));
-		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
-		emitMethodBody(pending, ctx, className, ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8));
-		return List.of(fused, new Emitted(fallback, nameUtf8, descUtf8));
+		if (answersSentinel(pending, ctx)) {
+			// The twin, the fast path again answering the integer Long.MIN_VALUE where a
+			// general array holds it, is what the fused method's bail calls; its own
+			// bail runs the fallback.
+			JvmLispCompiler.Ctx twin = fresh.get();
+			if (inPlace) {
+				forgetFallback(pending.root());
+			}
+			emitMethodBody(pending, twin, className, fallbackRef, true);
+			Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxs$" + number);
+			emitted.add(new Emitted(twin, nameUtf8, pending.descUtf8()));
+			forgetFallback(pending.root());
+			emitMethodBody(pending, ctx, className,
+					ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, pending.descUtf8()), false);
+			return emitted;
+		}
+		if (inPlace) {
+			forgetFallback(pending.root());
+		}
+		emitMethodBody(pending, ctx, className, fallbackRef, false);
+		return emitted;
+	}
+
+	/**
+	 * Whether {@code pending} has a twin ({@link #emitMethods}): a read or store of a
+	 * general array declared to hold the integer {@code Long.MIN_VALUE}
+	 * ({@link #holdsSentinelInteger}), the packed shape's nil sentinel
+	 * ({@code .kb/adjustable-arrays.md}, "Representation"), and no draw (the twin's
+	 * prologue would draw again). Telling that integer from nil is in the twin alone: in
+	 * the fused method the question, though never asked, made the method one C2 would not
+	 * inline -- SHA-512's round went from 298 bytecodes to 358, past
+	 * {@code FreqInlineSize} (325).
+	 */
+	private static boolean answersSentinel(Pending pending, JvmLispCompiler.Ctx ctx) {
+		boolean integer = false;
+		for (Node leaf : pending.leaves()) {
+			if (leaf instanceof RandomLeaf) {
+				return false;
+			}
+			if (leaf instanceof ArefLeaf l && holdsSentinelInteger(l.pin) && !(l.store && ctx.threadScopedSpecials)) {
+				integer = true;
+			}
+		}
+		return integer;
 	}
 
 	/**
@@ -3183,10 +3237,11 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * The fused method's body; its bail runs the fallback in place, or calls
-	 * {@code outlined} when the fallback is that method.
+	 * {@code outlined} when the fallback (or the twin) is that method. The twin's
+	 * ({@code answersSentinel}) has no double path: the fused method tried it before.
 	 */
 	private static void emitMethodBody(Pending pending, JvmLispCompiler.Ctx ctx, String className,
-			@Nullable MethodRefEntry outlined) {
+			@Nullable MethodRefEntry outlined, boolean answersSentinel) {
 		State state = java.util.Objects.requireNonNull(ctx.fusedState);
 		int slot = assignParameters(pending.leaves());
 		ctx.nextLocal = slot;
@@ -3297,7 +3352,7 @@ final class JvmIntFusionCompiler {
 					if (pending.leaves().stream().anyMatch(JvmIntFusionCompiler::computesIndex)) {
 						tryStart = ctx.body.newBoundLabel();
 					}
-					arefScratch = new ArefScratch(ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp());
+					arefScratch = new ArefScratch(ctx.allocTemp(), ctx.allocTemp(), ctx.allocTemp(), answersSentinel);
 				}
 				emitArefReads(l, read, ctx, state, bails, longArrayClass, arefScratch);
 			}
@@ -3331,6 +3386,9 @@ final class JvmIntFusionCompiler {
 			}
 		}
 		MethodCode.Label tryEnd = ctx.body.newBoundLabel();
+		if (arefScratch != null) {
+			arefScratch.stubs().forEach(Runnable::run);
+		}
 		if (!canBail(pending)) {
 			// Nothing above can leave the fast path but a trusted leaf's failed cast,
 			// which is an error, not a bail: no fallback, no handler.
@@ -3342,7 +3400,8 @@ final class JvmIntFusionCompiler {
 		// not the doubles. A method answering a declared local's raw long has none: a
 		// Double is the false declaration the fallback's cast reports.
 		MethodCode.Label fallbackBails = bails;
-		if (!pending.rawReturn() && !pending.isStore() && doubleEligible(pending.root(), pending.leaves())
+		if (!answersSentinel && !pending.rawReturn() && !pending.isStore()
+				&& doubleEligible(pending.root(), pending.leaves())
 				&& ctx.nextLocal + 2 * pending.leaves().size() <= 250) {
 			ctx.body.labelBinding(bails);
 			MethodCode.Label doubleBails = ctx.body.newLabel();
@@ -3662,7 +3721,7 @@ final class JvmIntFusionCompiler {
 				// The packed shape inline, its element read raw; any other shape through
 				// _fxElt, out of line so that its profile is the other shapes' alone.
 				// Long.MIN_VALUE is the packed shape's sentinel and the helper's "no
-				// integer here": the fallback answers what it stands for.
+				// integer here": in the twin the list tells the integer from nil.
 				MethodCode.Label boxed = ctx.body.newLabel();
 				MethodCode.Label read = ctx.body.newLabel();
 				int data = scratch.dataSlot();
@@ -3673,11 +3732,69 @@ final class JvmIntFusionCompiler {
 				ctx.body.labelBinding(boxed);
 				ctx.body.aload(leaf.arrParam).iload(idxSlot).invokestatic(elementRef(ctx, state));
 				ctx.body.labelBinding(read);
-				ctx.body.lstore(leaf.longSlot).lload(leaf.longSlot);
-				JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
-				ctx.body.lcmp().ifeq(bails);
+				ctx.body.lstore(leaf.longSlot);
+				emitSentinelCheck(leaf, idxSlot, data, ctx, bails, scratch);
 			}
 		}
+	}
+
+	/**
+	 * Bails where a general array's read raw in {@code leaf.longSlot} is
+	 * {@code Long.MIN_VALUE}: the packed shape's nil sentinel, or {@code _fxElt}'s "no
+	 * integer here". In the twin ({@link #answersSentinel}) the read asks first whether
+	 * the element is that integer -- the {@code Long} the packed shape's list holds at
+	 * the element's own slot, else nil ({@code .kb/adjustable-arrays.md},
+	 * "Representation") -- and bails only where it is not: nil, no slot, a {@code Long}
+	 * of another value (the box another thread's racing store left, which the fallback
+	 * answers as {@code _rmGet} does), or a read {@code _fxElt} answered
+	 * ({@code dataSlot} then null). Asked only of an array declared to hold the integer
+	 * ({@link #holdsSentinelInteger}), past the fast path's return
+	 * ({@link ArefScratch#stubs}).
+	 */
+	private static void emitSentinelCheck(ArefLeaf leaf, int idxSlot, int dataSlot, JvmLispCompiler.Ctx ctx,
+			MethodCode.Label bails, ArefScratch scratch) {
+		ctx.body.lload(leaf.longSlot);
+		JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+		ctx.body.lcmp();
+		if (!scratch.answersSentinel() || !holdsSentinelInteger(leaf.pin)) {
+			ctx.body.ifeq(bails);
+			return;
+		}
+		MethodCode.Label sentinel = ctx.body.newLabel();
+		MethodCode.Label integer = ctx.body.newLabel();
+		ctx.body.ifeq(sentinel);
+		ctx.body.labelBinding(integer);
+		int arr = leaf.arrParam;
+		scratch.stubs().add(() -> {
+			ClassEntry arrayListClass = ctx.cp.classEntry("java/util/ArrayList");
+			MethodRefEntry alSize = ctx.cp.methodRef(arrayListClass, "size", "()I");
+			MethodRefEntry alGet = ctx.cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;");
+			int element = scratch.headerSlot();
+			ctx.body.labelBinding(sentinel);
+			ctx.body.aload(dataSlot).ifnull(bails);
+			ctx.body.aload(arr).checkcast(arrayListClass).invokevirtual(alSize);
+			ctx.body.iload(idxSlot).iconst_1().iadd().if_icmple(bails);
+			ctx.body.aload(arr).checkcast(arrayListClass).iload(idxSlot).iconst_1().iadd();
+			ctx.body.invokevirtual(alGet).astore(element).aload(element).instanceOf(ctx.longClass).ifeq(bails);
+			ctx.body.aload(element);
+			JvmEmitHelper.unboxLong(ctx);
+			JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+			ctx.body.lcmp().ifne(bails).goto_(integer);
+		});
+	}
+
+	/**
+	 * Whether {@code pin} declares a general array of integers the least of which is
+	 * {@code Long.MIN_VALUE}: a {@code (signed-byte 64)} array, the Java front end's
+	 * {@code long[]}, whose words hold that integer (SHA-512's padding word of a message
+	 * a multiple of 8 bytes long, a {@code BitSet} word of bit 63). Any other array --
+	 * unpinned, a {@code simple-vector}, narrower elements -- keeps bailing on the
+	 * sentinel and has no twin.
+	 */
+	private static boolean holdsSentinelInteger(DeclaredArrayTypes.@Nullable Pin pin) {
+		DeclaredIntegerTypes.Interval elements = pin == null ? null : pin.elements();
+		return pin != null && pin.kind() == DeclaredArrayTypes.Kind.GENERAL && elements != null
+				&& elements.lo() == JvmArrayRuntimeBuilder.NIL_SENTINEL;
 	}
 
 	/**
@@ -3880,9 +3997,17 @@ final class JvmIntFusionCompiler {
 	 * dead the instant the read that filled it is done, and every read stores the same
 	 * type into it, so one triple serves the whole method -- keeping a leaf-heavy method
 	 * away from the slot number past which every load and store costs a {@code wide}
-	 * prefix ({@code .kb/jvm-method-size-limits.md}).
+	 * prefix ({@code .kb/jvm-method-size-limits.md}). {@code answersSentinel}: the method
+	 * is a twin ({@link #answersSentinel}); {@code stubs}: the code its sentinel
+	 * questions jump to, emitted past the fast path's return.
 	 */
-	private record ArefScratch(int idxSlot, int headerSlot, int dataSlot) {
+	private record ArefScratch(int idxSlot, int headerSlot, int dataSlot, boolean answersSentinel,
+			List<Runnable> stubs) {
+
+		ArefScratch(int idxSlot, int headerSlot, int dataSlot, boolean answersSentinel) {
+			this(idxSlot, headerSlot, dataSlot, answersSentinel, new java.util.ArrayList<>());
+		}
+
 	}
 
 	/** The raw {@code long} slot a resolved aref index reads back from. */
@@ -4243,18 +4368,44 @@ final class JvmIntFusionCompiler {
 			default -> {
 				// The packed shape inline where no other thread stores into it, any
 				// other shape and every one where one can through _fxPut. Long.MIN_VALUE
-				// is the packed shape's sentinel, its store the generic one, which puts
-				// the integer in the list as well.
-				ctx.body.lload(value);
-				JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
-				ctx.body.lcmp().ifeq(bails);
+				// is the packed shape's sentinel, which _fxPut declines: it bails, and
+				// in the twin the integer's store into the packed shape is _rmSet's,
+				// which puts it in the list as well, past the fast path's return (it
+				// ends the method). Where threads run it bails there too.
 				MethodCode.Label stored = ctx.body.newLabel();
-				if (!ctx.threadScopedSpecials) {
+				boolean inline = !ctx.threadScopedSpecials;
+				boolean integer = inline && scratch.answersSentinel() && holdsSentinelInteger(target.pin);
+				if (!integer) {
+					ctx.body.lload(value);
+					JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+					ctx.body.lcmp().ifeq(bails);
+				}
+				if (inline) {
 					MethodCode.Label boxed = ctx.body.newLabel();
 					int data = scratch.dataSlot();
 					ctx.body.aload(target.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
 					ctx.body.aload(data).ifnull(boxed);
 					emitBound(idxSlot, data, 0, ctx, bails);
+					if (integer) {
+						MethodCode.Label sentinel = ctx.body.newLabel();
+						ctx.body.lload(value);
+						JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+						ctx.body.lcmp().ifeq(sentinel);
+						boolean effect = pending.cmpMask() == STORE_EFFECT;
+						scratch.stubs().add(() -> {
+							ctx.body.labelBinding(sentinel);
+							ctx.body.aload(target.arrParam).iload(idxSlot).iconst_1().iadd().lload(value);
+							JvmEmitHelper.boxLong(ctx);
+							ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, state.className,
+									JvmArrayRuntimeBuilder.RM_SET, JvmArrayRuntimeBuilder.RM_SET_DESC));
+							if (effect) {
+								ctx.body.pop().return_();
+							}
+							else {
+								ctx.body.areturn();
+							}
+						});
+					}
 					ctx.body.aload(data).iload(idxSlot).lload(value).lastore().goto_(stored);
 					ctx.body.labelBinding(boxed);
 				}

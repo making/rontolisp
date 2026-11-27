@@ -235,10 +235,31 @@ other array form ([java-frontend.md](java-frontend.md), "Numbers").
   C2 424-653 -> 223-241; SHA3-256 Graal 102-208 -> 40-73, C2 172-202 -> 83-124; the others within
   noise. Classes shrink: the `java-spec.yaml` corpus 8,258,946 -> 8,230,665 B, the SHA-512
   program 310,720 -> 297,337.
-- **A read of the sentinel bails its whole tree** (`Long.MIN_VALUE` held packed,
-  [adjustable-arrays.md](adjustable-arrays.md)), whose fallback wraps each `long` through the
-  2^64 - 1 bignum: SHA-512's padding word of a message a multiple of 8 bytes long. A digest reused
-  for 64-byte messages: ~45% of JFR samples in `BigInteger` under `Sha512.block`.
+- **The sentinel integer: the twin `_fxs$N` (2026-11-27).** `Long.MIN_VALUE` held packed
+  ([adjustable-arrays.md](adjustable-arrays.md)) is SHA-512's padding word of a message a
+  multiple of 8 bytes long; a read of it bailed the whole tree into the fallback, which wraps
+  each `long` through the 2^64 - 1 bignum (64-byte messages: ~45% of JFR samples in `BigInteger`,
+  and the store of the padding word bailed too). **Invariant: the fused method is unchanged --
+  its sentinel read and store bail -- and where a pin declares a general array whose least
+  element is `Long.MIN_VALUE` (`holdsSentinelInteger`: `(signed-byte 64)`, the Java front end's
+  `long[]`), its bail calls the twin `_fxs$N` (`answersSentinel`): the same fast path, no double
+  path, whose read asks the list's own slot inline (a `Long` equal to the integer, else bail:
+  nil, no slot, a racing box, `_fxElt`'s answer) and whose store of the integer is `_rmSet`'s,
+  ending the method; its bail runs the fallback.** No twin for a tree with a draw (the twin
+  would draw again), an unpinned read, a `simple-vector` or a narrower element type, which bail
+  as before: a program declaring no such array is byte-identical (the ten `bench-report`
+  programs). The method key carries `+` for such a pin.
+  - Why a twin, measured (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1, a digest reused for 20,000
+    messages / a fresh one over 4 MiB in 64 KiB pieces, median of rounds 6-11 of a launch, ms).
+    The question in the fused method itself, inline (56 bytes a read): Graal 64-byte 136-205 ->
+    50-60, 63-byte 69-70 -> 52-56, 4 MiB 82-84 -> 56-70, but C2 4 MiB 74-94 -> 99-117: the
+    round went 298 -> 358 bytecodes, past `FreqInlineSize` (325, "hot method too big"). As a
+    helper's call (11 bytes): Graal 63-byte 68-69 -> 74-77 though never taken, 4 MiB no gain.
+    The twin: Graal 64-byte 106-170 -> 59-61, 63-byte 60-62 -> 57-68, 4 MiB 72-85 -> 72-79; C2
+    64-byte 203-282 -> 83-95, 63-byte 82-92 -> 82-95, 4 MiB 73-111 -> 81-115; SHA3-256 4 MiB
+    within noise on both. 64-byte messages now cost what 63-byte ones do.
+  - Cost: classes. SHA-512's program 77,231 -> 83,909 B (23 twins, 4,770 bytecodes), the five
+    digests' 192,089 -> 206,313.
 - **What C2 leaves**: "The fallback is a method of its own", "What C2 still leaves".
 
 ## The fallback is a method of its own (2026-11-26)
@@ -325,7 +346,8 @@ the handler too: `wide` and its siblings bail into `_fxb$N` from every kind of f
 method answers `J`; declared arrays: `sched` calls its stores' `V` methods and one comparison,
 nothing else; the program on both wasm backends in
 `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`),
-`.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
+`.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther` (the twin too: its
+reads and stores of the integer, and none for an unpinned or `simple-vector` read),
 `.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
 `.compileAndRunArefChecksItsArraysRankAndItsSubscriptsType` (`ArefRankAndSubscriptChecksFixture`,
 both levels),
