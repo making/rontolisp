@@ -1304,8 +1304,8 @@ examples:
     note: >-
       implements the world shapes of wit/shapes.wit (see wit/shapes/README.md): an
       interface whose functions take and answer records, an enum, flags, a variant,
-      lists, an option, a tuple and a result, and one function of the world's own over a
-      record of the world's. wasm-component pins that the world lowers through the
+      lists, an option, a tuple and a result (one across an async func), and one function
+      of the world's own over a record of the world's. wasm-component pins that the world lowers through the
       canonical ABI (the interface's types named by a shim component, the world's
       by type imports); jvm-compile that the same contract check runs on a backend
       exporting nothing. Host-invoked (wasmtime run --invoke 'flip({x: 1, y: 2})'),
@@ -1316,15 +1316,17 @@ examples:
     note: >-
       the same world in Java: a class annotated @WitExport (rontolisp-java-api)
       whose member class Geometry is the interface, its records, enum and sealed
-      interface the WIT's record, enum and variant. wasm-component pins that the
-      world lowers through the canonical ABI with the conversions the front end
-      writes around each method; no main, so the interpreter and the JVM refuse it.
+      interface the WIT's record, enum and variant; area throws its error arm as a
+      WitException, the async func totalArea answers a WitResult after a sleep.
+      wasm-component pins that the world lowers through the canonical ABI with the
+      conversions the front end writes around each method; no main, so the
+      interpreter and the JVM refuse it.
       Composed with app.wasm it prints app.lisp's lines (WitOracleE2eTest)
   - path: wit/shapes/app.lisp
     backends: [interpreter, jvm, wasm-component]
     note: >-
       the command that calls the interface shapes.lisp exports, with the same Lisp
-      values. On the interpreter and the JVM it loads shapes.lisp and binds its
+      values, its async func total-area bound with :blocking t. On the interpreter and the JVM it loads shapes.lisp and binds its
       functions as the provider, so those legs RUN and their output is checked;
       wasm-component pins that the import lowers. RUNNING that leg needs
       shapes.wasm plug-composed in (build.sh), off the test path -- it prints the
@@ -1341,6 +1343,29 @@ examples:
         caption  "a filled bold green dot called origin"
         caption  "a red circle"
         embolden (:DASHED :BOLD)
+        total    15.0
+        total    "a dot has no area"
+  # --- wit/sockets: a Java program on the host's own wasi:sockets ---------------
+  - path: wit/sockets/Echo.java
+    backends: [interpreter, jvm, wasm-component-run]
+    javaSourcePath: rontolisp-java-api/src/main/java
+    wasmtime: [-S, inherit-network=y]
+    note: >-
+      an echo over loopback TCP through Sockets.java, wasi:sockets/types@0.3.0
+      annotated @WitImport (see wit/sockets/README.md): a stream of the connections
+      read as a WitStream, a stream<u8> the host answers as an InputStream and one the
+      program hands as a Consumer<OutputStream>, the futures beside them WitFutures,
+      the async func connect a plain method, a result both as a WitResult and as its
+      ok arm with a WitException. The interpreter and jvm legs run against
+      LocalSockets.java (java.net), which META-INF/services/Sockets names;
+      wasm-component-run against wasmtime's own network, with the same output
+    expect:
+      equals: |
+        before bind:  none, InvalidState[]
+        bound:        127.0.0.1, a port of its own: true
+        bound again:  InvalidState[]
+        the server:   hello, sockets
+        the client:   HELLO, SOCKETS
   # --- wit/resource: a resource a world exports, Lisp calling Lisp --------------
   - path: wit/resource/counters.lisp
     backends: [jvm-compile, wasm-component]

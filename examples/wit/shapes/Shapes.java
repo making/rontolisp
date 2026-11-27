@@ -12,8 +12,8 @@
 //   list<T>          a List
 //   tuple            a record of the class's own       new Corners(low, high)
 //   option<T>        an Optional
-//   result<T, E>     the value; the error arm is a WitException thrown
-//                    (or the method answers a WitResult<T, E>)
+//   result<T, E>     the value, the error arm a WitException thrown (area);
+//                    or a WitResult<T, E> answered (totalArea)
 //
 // Built as a component whose exports are its entry points:
 //
@@ -33,6 +33,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.wit.WitException;
 import am.ik.rontolisp.wit.WitExport;
+import am.ik.rontolisp.wit.WitResult;
 
 @WitExport(value = "shapes", wit = "wit/shapes.wit")
 public class Shapes {
@@ -149,6 +150,22 @@ public class Shapes {
             Set<Style> bold = EnumSet.of(Style.BOLD);
             bold.addAll(s);
             return bold;
+        }
+
+        // WIT: total-area: async func(shapes: list<shape>) -> result<f64, string>
+        // An async func is a static method as any other, lifted async: the call may
+        // wait where the method blocks, as in this sleep standing for slow work. The
+        // answer is declared a WitResult, so the error arm is a value returned.
+        public static WitResult<Double, String> totalArea(List<Shape> shapes) throws InterruptedException {
+            double total = 0;
+            for (Shape shape : shapes) {
+                if (shape instanceof Shape.Dot) {
+                    return new WitResult.Err<>("a dot has no area");
+                }
+                Thread.sleep(1);
+                total += area(shape);
+            }
+            return new WitResult.Ok<>(total);
         }
     }
 }

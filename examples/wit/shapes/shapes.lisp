@@ -56,6 +56,12 @@
 ;;; Flags are the list of the labels that are set.
 (defun embolden (s) (if (member :bold s) s (append s '(:bold))))
 
+;;; WIT: total-area: async func(shapes: list<shape>) -> result<f64, string>
+;;; An async func is a defun as any other: the export is lifted async, so the call
+;;; may wait inside it. A dot's error arm, signalled by area, is this one's.
+(defun total-area (shapes)
+  (reduce #'+ (mapcar #'area shapes) :initial-value 0.0d0))
+
 ;;; WIT: summarize: func(areas: list<f64>) -> summary
 (defun summarize (areas)
   (list :count (length areas) :total (reduce #'+ areas :initial-value 0.0d0)))

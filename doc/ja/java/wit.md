@@ -186,6 +186,11 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 [出力ごとに使えるもの](#what-each-output-takes)、符号なし整数、`Long.MAX_VALUE` を超える
 `u64`、`null`、閉じたリソースの扱いは[境界での扱い](#at-the-boundary)にまとめています。
 
+実例は、冒頭のキーバリューの `Store`（リソース、`option`、レコード、投げる `result`）、
+`QueryAsync` の行とソケットの `send`（[ホストが少しずつ返すもの](#what-the-host-answers-in-pieces)）、
+HTTP のリクエスト（[プログラムがホストに渡す future](#a-future-the-program-hands-the-host)）、
+`Shapes` の world とその `pause`（[エクスポートの型](#the-types-of-an-export)）です。
+
 `result<T, E>` は、WIT のどこにあっても `am.ik.rontolisp.wit.WitResult<T, E>` です。引数、
 リストの要素、option の値、record のフィールド、variant のペイロード、戻り値のいずれでも同じです。
 これは 2 つの record、`WitResult.Ok(T value)` と `WitResult.Err(E error)` を permits に持つ
@@ -303,6 +308,11 @@ sent.get();
 
 `option<stream<u8>>` の引数は `Optional<Consumer<OutputStream>>` です。`Optional.empty()` なら
 ホストに stream を渡さず、consumer なら上と同じく書き込み側の端を受け取ります。
+
+[`examples/wit/sockets/Echo.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/sockets) は、
+`wasi:sockets@0.3.0` 上の echo で、ここに挙げたものをすべて使い、`async func` と、両方の書き方の
+`result` も使います。コンポーネントでは wasmtime 自身のネットワークを、JDK、インタプリタ、
+JVM では `java.net` の上に書いたプログラム自身のプロバイダを相手に動き、同じ出力になります。
 
 ### プログラムがホストに渡す future
 
@@ -525,6 +535,10 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
     ...
 }
 ```
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) の `totalArea` は、
+sleep してから `WitResult` を返す `async func` です。隣の Lisp のコマンドはインタフェースを
+`:blocking t` でバインドし、答えを待ちます。
 
 ## 型を置ける位置
 

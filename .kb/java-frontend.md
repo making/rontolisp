@@ -1422,7 +1422,10 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   `tcp-socket.connect`,
   an async func, refused by wasmtime 51 as a blocking call; `listen`'s connections, `send`
   written after the call, `receive` read; `wasi:cli/stdin` read in a thread before its bytes
-  arrive), the Spin leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
+  arrive), the Spin leg of `ClPostgresE2eTest` (the example reading its notes in pieces),
+  `examples.yaml`'s `wit/sockets/Echo.java` (an echo on the interpreter and the JVM over
+  `java.net` and as a component under `-S inherit-network=y`, one output; `send` written
+  inside its consumer, which the binding calls after the call).
 - **A future the program hands the host** (2026-11-27, m89): a `future<T>` parameter is a
   `WitFuture<T>` the program made (`WitFuture.of`, `.failed`, a class of its own), the mapping
   of the one a host answers. Decided from what a program knows between `request.new`,
@@ -1585,7 +1588,9 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   interpreter, JVM, component, the `--no-gc` component and its bare trap; a world of every
   compound kind, an `async func` of them that sleeps, both spellings of a `result`, its
   refusals) and `examples.yaml`'s
-  `java/rust-calls-java` and `wit/shapes/Shapes.java`,
+  `java/rust-calls-java` and `wit/shapes/Shapes.java` (`totalArea`: an `async func` that
+  sleeps and answers a `WitResult`, `app.lisp` binding it with `:blocking t`; the component
+  174,323 -> 194,659 B with it, measured 2026-11-27, the Lisp one 71,410 -> 72,532),
   `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (the Lisp command
   composed with the Java component); by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.

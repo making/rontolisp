@@ -368,7 +368,9 @@ class WitOracleE2eTest {
 		// interface, prints what it prints on the interpreter, where the exporting
 		// file's functions answer in process -- whichever language implements the
 		// world: the Lisp file, or the Java class beside it, whose records, sealed
-		// interface and lists the same values are.
+		// interface and lists the same values are. An async func the command binds
+		// with :blocking t waits for its answer, the Java one's after a sleep, and
+		// its result is a WitResult the Java method answers.
 		// A resource crosses the same way: the exporting component's handles stand for
 		// the values its functions made, lent or handed over as the WIT says, alone and
 		// inside a list or a result, and a second interface's function takes the first
@@ -380,7 +382,8 @@ class WitOracleE2eTest {
 				Map.entry("counters.lisp", List.of("--component", "--no-wasi"))));
 		Map<Path, List<String>> lines = Map.of(Path.of("examples/wit/shapes"),
 				List.of("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))", "area     \"a dot has no area\"",
-						"caption  \"a filled bold green dot called origin\"", "embolden (:DASHED :BOLD)"),
+						"caption  \"a filled bold green dot called origin\"", "embolden (:DASHED :BOLD)",
+						"total    15.0\ntotal    \"a dot has no area\""),
 				Path.of("examples/wit/resource"),
 				List.of("read     (:NAME \"apples\" :VALUE 7)", "summary  \"pears is at 10\"",
 						"merged   (:NAME \"apples+pears\" :VALUE 17)", "leader   \"apples+pears is at 17\"",

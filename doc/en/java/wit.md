@@ -187,6 +187,12 @@ output carries it [What each output takes](#what-each-output-takes), and what an
 integer, a `u64` past `Long.MAX_VALUE`, `null` or a closed resource does
 [At the boundary](#at-the-boundary).
 
+The worked examples: the key-value `Store` at the top (a resource, an `option`, a record, a
+`result` thrown), the `QueryAsync` rows and the socket's `send`
+([What the host answers in pieces](#what-the-host-answers-in-pieces)), the HTTP request
+([A future the program hands the host](#a-future-the-program-hands-the-host)), and the
+`Shapes` world and its `pause` ([The types of an export](#the-types-of-an-export)).
+
 `result<T, E>` is an `am.ik.rontolisp.wit.WitResult<T, E>` wherever the WIT has one: a
 parameter, a list's element, an option's value, a record's field, a variant's payload, an
 answer. It is a sealed interface of two records, `WitResult.Ok(T value)` and
@@ -307,6 +313,11 @@ of its own.
 An `option<stream<u8>>` parameter is an `Optional<Consumer<OutputStream>>`:
 `Optional.empty()` hands the host no stream, and a consumer is handed the writable end as
 above.
+
+[`examples/wit/sockets/Echo.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/sockets) is an echo over
+`wasi:sockets@0.3.0` that uses each of them, an `async func` and a `result` in both
+spellings: against wasmtime's own network in a component, against a provider of its own
+over `java.net` under a JDK, on the interpreter and on the JVM, with the same output.
 
 ### A future the program hands the host
 
@@ -529,6 +540,10 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
     ...
 }
 ```
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)'s `totalArea` is an
+`async func` that sleeps and answers a `WitResult`; the Lisp command beside it binds the
+interface with `:blocking t` and waits for the answer.
 
 ## Where each type crosses
 
