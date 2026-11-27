@@ -115,6 +115,10 @@ runs it (`ExamplesE2eTest#javaInteropGatesTheInterpreterLegOfTheNativeBinaryOnly
 the legs read it from `~/.m2`; offline without it the legs are skipped with the resolver's reason
 (`ExamplesE2eTest#aSourceDependencyNowhereToBeHadSkipsTheLegs`). Not opt-in on its own: the
 suite already is, and a skip that needs the network would leave CI without the leg.
+`wasmtime` (2026-11-27, `wit/sockets/Echo.java`): flags `wasmtime run` takes ahead of the
+module, before `env`'s `--env`, on the `wasm` and `wasm-component-run` legs -- what the host
+grants (`[-S, inherit-network=y]`), so a component calling a host interface itself RUNS in the
+suite (`ExamplesE2eTest#theLegsOptionsGoAheadOfACommandLineAndAfterAFile`).
 `javaSourcePath` (2026-11-21, `java/guestbook/Guestbook.java`) passes directories of the
 repository as one `--java-source-path`, resolved and joined as `systemPath`'s
 (`ExamplesE2eTest#thePathsAndJavaSourceDepTakeOneOrAList`).

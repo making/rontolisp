@@ -301,6 +301,11 @@ An `option<stream<u8>>` parameter is an `Optional<Consumer<OutputStream>>`:
 `Optional.empty()` hands the host no stream, and a consumer is handed the writable end as
 above.
 
+[`examples/wit/sockets/Echo.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/sockets) is an echo over
+`wasi:sockets@0.3.0` that uses each of them, an `async func` and a `result` in both
+spellings: against wasmtime's own network in a component, against a provider of its own
+over `java.net` under a JDK, on the interpreter and on the JVM, with the same output.
+
 ### A future the program hands the host
 
 A `future<T>` parameter is a `WitFuture<T>` the program made: `WitFuture.of(value)`,
@@ -543,6 +548,10 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
     ...
 }
 ```
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)'s `totalArea` is an
+`async func` that sleeps and answers a `WitResult`; the Lisp command beside it binds the
+interface with `:blocking t` and waits for the answer.
 
 ## Limitations
 

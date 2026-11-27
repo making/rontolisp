@@ -765,7 +765,11 @@ payload-less arm may be the bare keyword (`consp` ? `car`/`cdr` : the value).
 `wasi:cli/exit`, E2Es in `WasmLispCompilerIntegrationTest`). **Trap: trimmed WIT in a test must
 match the host's real interface EXACTLY** (the subtype check is structural). **A user import must
 not collide with the WASI surface** -- `WasmComponentBuilder.rejectAdapterImportCollisions`, in
-`build` where the blob variant is known.
+`build` where the blob variant is known. It reads the variant's whole world, not the pruned one:
+measured 2026-11-27, a run-mode component's import of `wasi:filesystem/types@0.3.0` is refused
+with `--optimize` too, so a program cannot call the host's filesystem itself (a serve
+component's surface has none, and there it can). `wasi:sockets` is no interface of the base
+world: a Java program's `@WitImport` of it runs (`examples/wit/sockets/Echo.java`).
 
 **The alignment trap**: `HEAP_PTR` is not always 8-aligned (`_intern` advances by a symbol's exact
 byte length), so using it as a canonical-ABI return area traps with `pointer not aligned` only after

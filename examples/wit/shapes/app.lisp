@@ -13,9 +13,12 @@
 ;;;;
 ;;;; The output is the same either way.
 
+;;; total-area is an async func: :blocking t binds it as a call that waits for
+;;; its answer, as every other function here is.
 (rontolisp:wit-import "wit/shapes.wit"
                       :interface "example:shapes/geometry"
-                      :package geo)
+                      :package geo
+                      :blocking t)
 
 ;;; On the interpreter and the JVM there is no component to call: the functions
 ;;; of shapes.lisp are the provider. A component is given its provider by the
@@ -26,13 +29,14 @@
 (rontolisp:wit-provide "example:shapes/geometry@0.1.0"
                        #'(lambda (member &rest args)
                            (apply (cond ((string= member "flip") #'flip)
-                                        ((string= member "squares") #'squares)
-                                        ((string= member "bounds") #'bounds)
-                                        ((string= member "area") #'area)
-                                        ((string= member "caption") #'caption)
-                                        ((string= member "embolden") #'embolden)
-                                        (t (error "geometry: unknown member ~a"
-                                                  member))) args)))
+                                   ((string= member "squares") #'squares)
+                                   ((string= member "bounds") #'bounds)
+                                   ((string= member "area") #'area)
+                                   ((string= member "caption") #'caption)
+                                   ((string= member "embolden") #'embolden)
+                                   ((string= member "total-area") #'total-area)
+                                   (t (error "geometry: unknown member ~a"
+                                             member))) args)))
 
 (format t "flip     ~s~%" (geo:flip (list :x 1 :y 2)))
 (format t "squares  ~s~%" (geo:squares 3))
@@ -52,3 +56,8 @@
 (format t "caption  ~s~%"
         (geo:caption (list :shape (cons :circle 1.0d0) :color :red)))
 (format t "embolden ~s~%" (geo:embolden '(:dashed)))
+(format t "total    ~s~%"
+ (geo:total-area (list (cons :circle 1.0d0) (cons :rect (list :x 3 :y 4)))))
+(format t "total    ~s~%"
+        (handler-case (geo:total-area (list (cons :circle 1.0d0) :dot))
+          (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))

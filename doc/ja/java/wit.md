@@ -298,6 +298,11 @@ sent.get();
 `option<stream<u8>>` の引数は `Optional<Consumer<OutputStream>>` です。`Optional.empty()` なら
 ホストに stream を渡さず、consumer なら上と同じく書き込み側の端を受け取ります。
 
+[`examples/wit/sockets/Echo.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/sockets) は、
+`wasi:sockets@0.3.0` 上の echo で、ここに挙げたものをすべて使い、`async func` と、両方の書き方の
+`result` も使います。コンポーネントでは wasmtime 自身のネットワークを、JDK、インタプリタ、
+JVM では `java.net` の上に書いたプログラム自身のプロバイダを相手に動き、同じ出力になります。
+
 ### プログラムがホストに渡す future
 
 `future<T>` の引数は、プログラムが作った `WitFuture<T>` です。`WitFuture.of(value)`、
@@ -544,6 +549,10 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
     ...
 }
 ```
+
+[`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) の `totalArea` は、
+sleep してから `WitResult` を返す `async func` です。隣の Lisp のコマンドはインタフェースを
+`:blocking t` でバインドし、答えを待ちます。
 
 ## 制限
 

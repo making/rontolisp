@@ -2,7 +2,7 @@ package example:shapes@0.1.0;
 
 /// Plane geometry over the values a component's export carries beyond numbers and
 /// strings: records, an enum, flags, a variant, lists, an option, a tuple and a
-/// result.
+/// result, one of them across an async func.
 interface geometry {
   record point {
     x: s32,
@@ -52,6 +52,11 @@ interface geometry {
 
   /// The style with bold set.
   embolden: func(s: style) -> style;
+
+  /// The areas of the shapes added up, or the error of the first that has none. An
+  /// async func: the implementation may wait as it works, and the caller waits for
+  /// the answer.
+  total-area: async func(shapes: list<shape>) -> result<f64, string>;
 }
 
 world shapes {

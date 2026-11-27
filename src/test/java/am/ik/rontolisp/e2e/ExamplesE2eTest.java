@@ -92,6 +92,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * interpreter / JVM process, passed to wasmtime as {@code --env NAME=VALUE}. This is how
  * an example takes a knob a WASM leg must also see; {@code args} above is the other way,
  * and a program reads it with {@code uiop:command-line-arguments}.</li>
+ * <li>{@code wasmtime} -- flags (a list) {@code wasmtime run} takes ahead of the module
+ * on the {@code wasm} and {@code wasm-component-run} legs: what the host grants the
+ * program ({@code [-S, inherit-network=y]} for a component calling {@code wasi:sockets}
+ * itself).</li>
  * <li>{@code simd} -- {@code true} runs every leg under {@code --simd}: the interpreter
  * and every compile get the flag, the JVM leg runs with
  * {@code --add-modules jdk.incubator.vector} (as does the interpreter when the driver is
@@ -244,7 +248,7 @@ class ExamplesE2eTest {
 			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
 			@Nullable List<String> library, @Nullable List<String> cli, @Nullable List<String> javaSources,
 			@Nullable List<String> javaSourcePath, @Nullable List<String> javaSourceDep, @Nullable Boolean javaInterop,
-			@Nullable String note) {
+			@Nullable List<String> wasmtime, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -271,7 +275,7 @@ class ExamplesE2eTest {
 		Example withJavaLibraries(List<String> sourcePath, List<String> sourceDep) {
 			return new Example(this.path, this.backends, this.os, this.args, this.stdin, this.stdinFile, this.expect,
 					this.systemPath, this.workDir, this.workFiles, this.env, this.simd, this.parallel, this.library,
-					this.cli, this.javaSources, sourcePath, sourceDep, this.javaInterop, this.note);
+					this.cli, this.javaSources, sourcePath, sourceDep, this.javaInterop, this.wasmtime, this.note);
 		}
 
 		/** The container's name: the path, and the command line when it has one. */
@@ -309,6 +313,19 @@ class ExamplesE2eTest {
 
 		Map<String, String> envOrEmpty() {
 			return this.env == null ? Map.of() : this.env;
+		}
+
+		/**
+		 * What {@code wasmtime run} takes ahead of the module: the {@code wasmtime}
+		 * flags, then {@code --env NAME=VALUE} for every {@code env} entry.
+		 */
+		List<String> wasmtimeFlags() {
+			List<String> flags = new ArrayList<>(this.wasmtime == null ? List.of() : this.wasmtime);
+			for (Map.Entry<String, String> e : envOrEmpty().entrySet()) {
+				flags.add("--env");
+				flags.add(e.getKey() + "=" + e.getValue());
+			}
+			return flags;
 		}
 
 		boolean simdOn() {
@@ -422,7 +439,9 @@ class ExamplesE2eTest {
 	/**
 	 * A {@code cli} takes the leg's options in front of it -- after a leading
 	 * {@code test} -- since {@code -M} and {@code -X} end rontolisp's options, and a file
-	 * takes them behind it. Needs neither the examples opt-in nor a driver.
+	 * takes them behind it; {@code wasmtime run} takes the {@code wasmtime} flags, then
+	 * the {@code env}, ahead of the module. Needs neither the examples opt-in nor a
+	 * driver.
 	 * @throws Exception if the inline manifest cannot be parsed
 	 */
 	@Test
@@ -437,6 +456,8 @@ class ExamplesE2eTest {
 				    cli: [test, "-A:x"]
 				  - path: file.clj
 				    backends: [interpreter]
+				    wasmtime: [-S, inherit-network=y]
+				    env: {GREETING: hi}
 				""", Manifest.class);
 		List<String> legFlags = List.of("-o", "Prog.class");
 
@@ -447,6 +468,10 @@ class ExamplesE2eTest {
 		assertThat(manifest.examples().get(2).invocation("/abs/file.clj", legFlags)).containsExactly("/abs/file.clj",
 				"-o", "Prog.class");
 		assertThat(manifest.examples().get(0).displayName()).isEqualTo("p/deps.edn (-M:run a)");
+		// what wasmtime takes ahead of the module: the host's grants, then the env
+		assertThat(manifest.examples().get(2).wasmtimeFlags()).containsExactly("-S", "inherit-network=y", "--env",
+				"GREETING=hi");
+		assertThat(manifest.examples().get(0).wasmtimeFlags()).isEmpty();
 	}
 
 	/**
@@ -812,7 +837,7 @@ class ExamplesE2eTest {
 						null, Map.of());
 				assertCompiled(compile, example, "wasm (compile)");
 				Result run = exec(runDir, concat(concat(List.of("wasmtime", "run", "--dir", "."),
-						concat(wasmtimeEnvFlags(env), List.of("prog.wasm"))), args), stdin, Map.of());
+						concat(example.wasmtimeFlags(), List.of("prog.wasm"))), args), stdin, Map.of());
 				assertRan(run, example, "wasm (run)");
 			}
 			case WASM_COMPONENT_RUN -> {
@@ -830,7 +855,7 @@ class ExamplesE2eTest {
 						null, Map.of());
 				assertCompiled(compile, example, "wasm-component-run (compile)");
 				Result run = exec(runDir, concat(concat(List.of("wasmtime", "run", "--dir", "."),
-						concat(wasmtimeEnvFlags(env), List.of("prog.wasm"))), args), stdin, Map.of());
+						concat(example.wasmtimeFlags(), List.of("prog.wasm"))), args), stdin, Map.of());
 				assertRan(run, example, "wasm-component-run (run)");
 			}
 			case JVM_COMPILE -> {
@@ -898,16 +923,6 @@ class ExamplesE2eTest {
 			return driver;
 		}
 		return concat(List.of("java", "--add-modules", "jdk.incubator.vector"), driver.subList(1, driver.size()));
-	}
-
-	/** {@code --env NAME=VALUE} for every manifest {@code env} entry. */
-	private static List<String> wasmtimeEnvFlags(Map<String, String> env) {
-		List<String> flags = new ArrayList<>();
-		for (Map.Entry<String, String> e : env.entrySet()) {
-			flags.add("--env");
-			flags.add(e.getKey() + "=" + e.getValue());
-		}
-		return flags;
 	}
 
 	/**
