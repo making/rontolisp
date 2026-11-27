@@ -134,9 +134,9 @@ class JavaWitImportTest {
 	 * byte -56), a result whose error arm is a variant and one whose arm carries nothing,
 	 * each thrown or a {@code WitResult} as the method declares it, a constructor, an own
 	 * handle handed to another; a stream of resources (the connections a socket accepts),
-	 * a {@code stream<u8>} the program writes after the call and one it reads, standard
-	 * input read in a thread before its bytes are there. The WIT is trimmed to the
-	 * members called, each exactly the host's.
+	 * a {@code stream<u8>} the program writes after the call and one it reads, a closed
+	 * resource refusing a call, standard input read in a thread before its bytes are
+	 * there. The WIT is trimmed to the members called, each exactly the host's.
 	 */
 	@Test
 	void everyKindOfValueCrossesWasmtimesOwnInterfaces() throws Exception {
@@ -215,6 +215,15 @@ class JavaWitImportTest {
 						            System.out.println(e.getMessage());
 						        }
 						        accepted.close();
+						        // a closed resource refuses a call; a second close does nothing
+						        client.close();
+						        client.close();
+						        try {
+						            client.getAddressFamily();
+						        }
+						        catch (IllegalStateException e) {
+						            System.out.println(e.getMessage());
+						        }
 						    }
 						}
 						""");
@@ -228,6 +237,7 @@ class JavaWitImportTest {
 				null
 				hello, world -1 null
 				stream<u8> of wasi:sockets/types@0.3.0 is closed
+				tcp-socket of wasi:sockets/types@0.3.0 is closed
 				""");
 		write("http.wit", HTTP_WIT);
 		write("Http.java", HTTP);
@@ -519,6 +529,12 @@ class JavaWitImportTest {
 		refusals.put("void batch(List<Consumer<OutputStream>> parts);",
 				"batch (batch of test:rows/rows@0.1.0, rows.wit:17): its parameter parts is list<stream<u8>>, "
 						+ "carrying stream<u8>, which the binding hands the host only as a parameter of its own");
+		refusals.put("void flag(java.util.Optional<Boolean> v);",
+				"flag (flag of test:rows/rows@0.1.0, rows.wit:22): its parameter v is option<bool>, an option of a "
+						+ "type one of whose values the boundary cannot tell from none");
+		refusals.put("void poke(Thing t);\n    interface Thing {\n    }",
+				"Rows.Thing is thing, a resource of another interface than test:rows/rows@0.1.0, whose methods the "
+						+ "Java subset does not bind yet");
 		refusals.put("WitFuture<Long> load(InputStream data);",
 				"load (load of test:rows/rows@0.1.0, rows.wit:21): its parameter data is stream<u8>, which the "
 						+ "program writes: Consumer<OutputStream> in Java, handed the writable end, not InputStream");
@@ -555,6 +571,13 @@ class JavaWitImportTest {
 			  total: async func() -> u64;
 			  dump: func(sql: string) -> stream<u8>;
 			  load: func(data: stream<u8>) -> future<result<u64, error>>;
+			  flag: func(v: option<bool>);
+			  use other.{thing};
+			  poke: func(t: borrow<thing>);
+			}
+
+			interface other {
+			  resource thing;
 			}
 			""";
 
@@ -913,6 +936,11 @@ class JavaWitImportTest {
 				"Shapes.java:9:1: @WitExport: shapes.wit:50: export 'remembered': the WIT type of the result holds a "
 						+ "stream, which an export does not carry (carried: every primitive type, and a list, an "
 						+ "option, a result, a tuple, a record, a variant, an enum or flags of them)");
+		write("shapes/shapes.wit", SHAPES_WIT.replace("export remembered: func() -> string;",
+				"export remembered: func() -> option<bool>;"));
+		assertThatThrownBy(() -> read(shapes, true)).hasMessageContaining(
+				"remembered (remembered of world shapes, shapes.wit:50): its result is option<bool>, an option of a type "
+						+ "one of whose values the boundary cannot tell from none");
 		write("shapes/shapes.wit", SHAPES_WIT);
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o",
 				this.dir.resolve("shapes-scalar.wasm").toString(), "--component", "--no-gc"))
@@ -1826,6 +1854,7 @@ class JavaWitImportTest {
 			        void connect(IpSocketAddress remoteAddress);
 			        WitStream<TcpSocket> listen();
 			        WitFuture<Void> send(Consumer<OutputStream> data);
+			        void close();
 			        Received receive();
 			    }
 

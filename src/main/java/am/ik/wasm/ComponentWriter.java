@@ -1368,6 +1368,16 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode the defined value type {@code future<T>} where {@code T} is a primitive
+	 * value type, inlined as {@link #definedStream} inlines a stream's element.
+	 * @param payloadValType the payload primitive value type code (e.g. {@link #VT_U32})
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedFutureOfPrim(int payloadValType) {
+		return enc(w -> w.write(0x65).write(0x01).writeSignedLeb128(payloadValType - 0x80));
+	}
+
+	/**
 	 * Encode the defined value type {@code result<_, errType>} (no ok payload, an error
 	 * payload referenced by index), as used by the WASI 0.3 stream/future error channel.
 	 * @param errTypeIndex the component type index of the error type (e.g. an

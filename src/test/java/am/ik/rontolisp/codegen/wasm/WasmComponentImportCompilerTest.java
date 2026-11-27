@@ -531,17 +531,19 @@ class WasmComponentImportCompilerTest {
 		// stream<u8> inlines its u8 element (like the base adapter's own stream<u8>) and
 		// a
 		// future<result<_, error-code>> is a defined future over a defined result -- both
-		// component-type indices DERIVED from the WIT, not hardcoded.
+		// component-type indices DERIVED from the WIT, not hardcoded. A future of a
+		// primitive inlines it, as a stream does: a primitive has no type index.
 		String wit = """
 				package local:x@0.3.0;
 
 				interface streaming {
 				    enum error-code { failed }
 				    read-body: func(body: stream<u8>) -> future<result<_, error-code>>;
+				    ready: func() -> future<u32>;
 				}
 				""";
 		WasmComponentImportCompiler.Import imported = parseImport("local:x/streaming@0.3.0", wit,
-				"(\"read-body\" \"SX:READ-BODY\")");
+				"(\"read-body\" \"SX:READ-BODY\")", "(\"ready\" \"SX:READY\")");
 		byte[] instanceType = WitComponentTypeEncoder.encode(imported, (ownerId, resource) -> {
 			throw new AssertionError("no foreign resource expected: " + ownerId + "#" + resource);
 		}, new java.util.LinkedHashSet<>());
@@ -552,6 +554,7 @@ class WasmComponentImportCompilerTest {
 		// The completion's error-code crosses as a keyword enum declaration; its presence
 		// confirms the future<result<...>> payload chain was walked and encoded.
 		assertThat(containsBytes(instanceType, ComponentWriter.definedEnumOf(List.of("failed")))).isTrue();
+		assertThat(containsBytes(instanceType, new byte[] { 0x65, 0x01, (byte) ComponentWriter.VT_U32 })).isTrue();
 	}
 
 	// A probe interface over every parameter shape the canonical ABI flattens: a variant
