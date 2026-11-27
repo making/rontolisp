@@ -1455,6 +1455,21 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   `patch`. Byte-identical before and after, 8 outputs: `PageHits` (component, class), the
   Lisp `page-hits`, `echo-client.lisp`, `http-hello.lisp`, and m68's sockets, rows and stdin
   programs.
+- **The user-facing reference is `doc/*/java/wit.md`'s four tables** (each WIT type's Java
+  type and where it is declared; each type by direction and position; each output; the
+  boundary rules), every cell read off `JavaWitTypes` / `JavaWitImports` / `JavaWitExports`
+  and the directives, then a test or a probe. A WIT behavior changed changes its cell.
+  Measured 2026-11-27 by probe, not pinned: a `u64` past `Long.MAX_VALUE` that a `--no-wasi`
+  host answers traps (`unreachable`, node 24); `null` handed to an import traps on WASM
+  (`illegal cast` for a `string`, `unreachable` for a record), and an export answering it
+  traps, writing the `NullPointerException` only for a converted answer (a `String` or a
+  `byte[]` crosses unconverted); `error-context` is no type of the WIT reader, so an
+  interface naming it anywhere is refused whole at the annotation and a world's export at
+  its line; an export answering a `char` that is no scalar value is refused by wasmtime 51
+  (`converted integer out of range for char`). Pins of the tables' refusals:
+  `.aStreamAndAFutureTheHostAnswersAreReadInPieces` (`option<bool>`, a future in a list
+  handed over), `.aClassImplementsTheWorldAComponentExports` (`option<bool>` answered),
+  `.everyKindOfValueCrossesWasmtimesOwnInterfaces` (a closed resource called, closed twice).
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
   Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts;
   `aResultIsAWitResultWhereverTheWitHasOne`, a `--no-wasi` module under a JavaScript host) and

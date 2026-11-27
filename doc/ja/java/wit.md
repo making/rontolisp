@@ -147,37 +147,44 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 
 ## 型
 
-| WIT | Java |
-| --- | --- |
-| `bool` | `boolean` |
-| `s8`, `u8` | `byte` |
-| `s16`, `u16` | `short` |
-| `s32`, `u32` | `int` |
-| `s64`, `u64` | `long` |
-| `f32`, `f64` | `float`, `double` |
-| `char` | `int`（コードポイント） |
-| `string` | `String` |
-| `list<u8>` | `byte[]` |
-| `list<T>` | `List<T>` |
-| `option<T>` | `Optional<T>` |
-| `tuple<A, B>` | その要素を持つ、プログラムの record |
-| `record` | メンバーの record。フィールドがコンポーネント |
-| `variant` | メンバーの sealed インタフェース。ケースごとに 1 つの record を permits に持つ（ペイロードはその唯一のコンポーネント） |
-| `enum` | メンバーの enum |
-| `flags` | メンバーの enum の `Set` |
-| リソース、`own<R>`、`borrow<R>` | メンバーインタフェース |
-| インタフェースが `use` でほかのインタフェースから取るリソース | そのインタフェースを表す `@WitImport` インタフェースのメンバーインタフェース |
-| `result<T, E>` | `WitResult<T, E>`。メソッドの戻り値では ok の値にもでき、そのときエラーは `WitException` |
-| `async func` | ホストの応答を待つメソッド（ほかの呼び出しと同じ） |
-| ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>`（値の stream もリソースの stream も） |
-| ホストが返す `stream<u8>` | `java.io.InputStream` |
-| プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る） |
-| プログラムがホストに渡す `option<stream<u8>>` | `Optional<Consumer<OutputStream>>`。stream がなければ空 |
-| ホストが返す `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`） |
-| プログラムがホストに渡す `future<T>` | プログラムが作った、同じ型の `WitFuture<T>` |
+対応は 2 つのアノテーションで共通です。名前の付いた型は、その型を定義する WIT のスコープを
+表すクラスのメンバー型です。インポートするインタフェースなら `@WitImport` インタフェース、
+world なら、world 自身の型は `@WitExport` のクラス、エクスポートするインタフェースの型は
+そのメンバークラスです。各メンバー型は、定義と 1 度ずつ照合されます。
 
-符号なし整数は同じ幅の Java の型に、そのビットのまま入ります。`u8` の 200 は `byte` の -56
-です（`Byte.toUnsignedInt` で 200 に戻ります）。
+| WIT | Java | 宣言する場所 |
+| --- | --- | --- |
+| `bool` | `boolean` | |
+| `s8`, `u8` | `byte` | |
+| `s16`, `u16` | `short` | |
+| `s32`, `u32` | `int` | |
+| `s64`, `u64` | `long` | |
+| `f32`, `f64` | `float`, `double` | |
+| `char` | `int`（コードポイント） | |
+| `string` | `String` | |
+| `list<u8>` | `byte[]` | |
+| `list<T>` | `List<T>`（`T` はボックス型） | |
+| `option<T>` | `Optional<T>` | |
+| `result<T, E>` | `am.ik.rontolisp.wit.WitResult<T, E>`。値を持たない側は `Void`。メソッドの戻り値では ok 側の型にもでき、そのときエラー側は `am.ik.rontolisp.wit.WitException` として投げられる | `rontolisp-java-api` |
+| `tuple<A, B>` | その型を順にコンポーネントに持つ record | プログラムのどこでもよい |
+| `record` | record。フィールドはローワーキャメルケースのコンポーネント | スコープのクラスのメンバー |
+| `variant` | ケースごとに 1 つの record を permits に持つ sealed インタフェース。ペイロードはその唯一のコンポーネント | スコープのクラスのメンバー。record はその中 |
+| `enum` | enum。ケースが定数（`NO_SUCH_STORE`） | スコープのクラスのメンバー |
+| `flags` | enum の `Set`。ラベルが定数 | スコープのクラスのメンバー |
+| 別名（`type id = u32`） | 別名が指す型 | |
+| `use` で取り込んだ record、variant、enum、flags | 上と同じ。名前は `use` 句が与えたもの | 取り込む側のスコープのクラスのメンバー |
+| リソース、`own<R>`、`borrow<R>` | インタフェース。メソッドがリソースのメソッドで、`close()` が解放 | `@WitImport` インタフェースのメンバー |
+| `use` で取り込んだリソース | 定義する側のスコープでそのリソースを表すインタフェース | 定義するインタフェースを表す `@WitImport` インタフェースのメンバー |
+| ホストが返す `stream<u8>` | `java.io.InputStream` | |
+| プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る）。`option` の中なら `Optional<Consumer<OutputStream>>` | |
+| 値の `stream<T>`、リソースの `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
+| `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`）で、`get()` がエラー側を投げる | `rontolisp-java-api` |
+| `async func` | 値を返すメソッド。インポートではホストの応答を待ち、エクスポートではブロックしてよい | |
+| `error-context` | なし。これを使う WIT は拒否される | |
+
+どの型をどこに置けるかは[型を置ける位置](#where-each-type-crosses)、どの出力で使えるかは
+[出力ごとに使えるもの](#what-each-output-takes)、符号なし整数、`Long.MAX_VALUE` を超える
+`u64`、`null`、閉じたリソースの扱いは[境界での扱い](#at-the-boundary)にまとめています。
 
 `result<T, E>` は、WIT のどこにあっても `am.ik.rontolisp.wit.WitResult<T, E>` です。引数、
 リストの要素、option の値、record のフィールド、variant のペイロード、戻り値のいずれでも同じです。
@@ -221,9 +228,8 @@ catch (WitException e) {
 }
 ```
 
-リソースは `close()` で解放します。ハンドルはホストに返り、ストアはそのまま残ります。閉じた
-リソースは `IllegalStateException` を投げ、2 度目の `close()` は何もしません。関数に渡した `own`
-のハンドルは関数のものになり、オブジェクトは閉じられます。
+リソースは `close()` で解放します。ハンドルはホストに返り、ストアはそのまま残ります。関数に
+渡した `own` のハンドルは関数のものになり、オブジェクトは閉じられます。
 
 インタフェースが `use` でほかのインタフェースから取るリソースは、それを定義するインタフェースを
 表す `@WitImport` インタフェースに 1 度だけ宣言し、そこから名前で参照します。`wasi:http/client`
@@ -395,13 +401,8 @@ wasmtime run --invoke 'vowel-count("hello world")' counter.wasm   # 3
 スカラー値のクラス（[`--no-gc` のリアクタ](index.md#a-reactor-on---no-gc)）は、`--no-gc` を
 付けてもコンパイルできます。できるのはスカラーのバックエンドのコンポーネントで、static の初期化は
 インスタンス化のときに実行されます。上のカウンタの `indexOf` を比較に書き換えたものは、そこで
-2,040 バイト、`--no-gc` なしで 12,988 バイトです。`bool`、整数、`f64`、`string` 以外の型を
-受け渡す world は、そこでは WIT の行で拒否されます。スカラーのバックエンドには、レコードや
-リストにあたる値がないためです。これらの型だけを使う `async func` は、そこでもほかの
-コンポーネントと同じようにエクスポートされます。一方、このクラスから `@WitImport` の
-インタフェースは呼べません。`ServiceLoader` が返すバインディングはオブジェクトで、スカラーの
-バックエンドにはオブジェクトがないため、`--component` の有無にかかわらず、取得する箇所で
-拒否されます。
+2,040 バイト、`--no-gc` なしで 12,988 バイトです。そこで使えるものは
+[出力ごとに使えるもの](#what-each-output-takes)にあります。
 
 JDK、インタプリタ、JVM では、アノテーションは何もしません。`vowelCount` は普通の static
 メソッドで、プログラムやテストから呼びます。`main` のないプログラムは、そこでは拒否されます。
@@ -421,21 +422,11 @@ is s32, which is int in Java, not long
 
 ### エクスポートの型
 
-型は[上の表](#the-types)のとおりです。ただし、`@WitExport` のクラスが受け渡せない型は、
-WIT の行で拒否されます。リソース、`stream`、`future` です。リソースは、world がその
-インタフェースをエクスポートする時点で拒否されます。エクスポートするインタフェースが
-リソースを宣言する場合と、`use` 句でほかのインタフェースのリソースを取り込む場合は、
-関数がその型を使うかどうかにかかわらず、インタプリタでも、どの出力（コンポーネント、
-`--no-wasi`、Preview 1 のモジュール、`--no-gc`、`--no-gc --component`）でも拒否されます。Common Lisp の
-プログラムはコンポーネントからリソースをエクスポートでき
-（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)）、Java の
-プログラムはそのコンポーネントのリソースを、ほかのリソースと同じく `@WitImport` で
-インポートできます。名前の付いた型は、インポートする
-インタフェースの場合と同じくメンバー型です。
-world が定義する型はアノテーションを付けたクラスのメンバー型で、エクスポートするインタフェースが
-定義する型は、そのインタフェースのメンバークラスのメンバー型です。world やインタフェースが
-`use` でほかのインタフェースから取り込んだ型も、`use` 句が与えた名前のメンバー型です。tuple はプログラムのレコードで、
-どこに宣言してもかまいません。
+エクスポートの型は[表](#the-types)のとおりで、名前の付け方も同じです。world の型は
+アノテーションを付けたクラスのメンバー型、エクスポートするインタフェースの型はそのメンバー
+クラスのメンバー型、`use` で取り込んだ型は取り込む側のスコープのクラスのメンバー型（名前は
+`use` 句が与えたもの）で、tuple はプログラムのどの record でもかまいません。リソース、
+`stream`、`future` は WIT の行で拒否されます（[型を置ける位置](#where-each-type-crosses)）。
 
 ```console
 interface geometry {
@@ -505,28 +496,18 @@ wasmtime run --invoke 'area(dot)' shapes.wasm            # err("a dot has no are
 ok 側の型（値がなければ `void`）を宣言します。ok 側の型を宣言したメソッドは、エラー側を
 `WitException` として投げます。その `error()` が、対応する Java の型のエラーです（値がなければ
 `null`）。それ以外の例外は、エクスポートが捕まえなかった例外として扱われます
-（[制限](#limitations)）。`Optional`、`List`、レコード、`WitResult` の代わりに `null` を返すと、
-同じ扱いの `NullPointerException` になります。
+（[制限](#limitations)）。
 
 [`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 は、隣にある Lisp の例と同じ world を実装します。その例の Lisp のコマンドは、どちらの
 コンポーネントと合成しても、同じ行を出力します。
 
-符号なし整数は、同じ幅の Java の型にビットのまま入ります。これはどちらの向きでも同じです。
-`u32` の 4294967295 は `int` の -1 になり、`u32` を返すエクスポートが `int` の -1 を返すと
-4294967295 になります。
-
 `async func` のエクスポートも、ほかと同じく値を返す static メソッドです。使える型もほかの
 エクスポートと同じで、レコード、リスト、variant、`result` は `func` と同じように `async func` を
-通ります。出力ごとの扱いは次のとおりです。
-
-| 出力 | `async func` のエクスポート |
-| --- | --- |
-| `--component` | async で lift します。`Thread.sleep` や、インポートした `async func` の呼び出しのようにメソッドがブロックする箇所で、呼び出しは待てます。ブロックする通常の `func` はトラップになります（`cannot block a synchronous task`） |
-| `--component --no-wasi` | これも async で lift しますが、コンポーネントは時計をインポートしないので、sleep するメソッドはトラップになります |
-| `--no-gc --component` | これも async で lift します。使える型は、そこでのほかのエクスポートと同じく `bool`、整数、`f64`、`string` だけです。スカラーのサブセットには待つ手段がありません。スリープするスレッドも（`Thread.sleep` はそこで拒否されます）、`@WitImport` のバインディングを持つオブジェクトもないためです |
-| モジュール（`-o out.wasm` だけ、`--no-wasi`）、`--native` | ほかのエクスポートと同じく、どこにもエクスポートされません。world をエクスポートするのはコンポーネントです |
-| JDK、インタプリタ、JVM | ほかと同じように呼ばれる、ただのメソッドです |
+通ります。コンポーネントはこれを async で lift するので、`Thread.sleep` や、インポートした
+`async func` の呼び出しのようにメソッドがブロックする箇所で、呼び出しは待てます。ブロックする
+通常の `func` はトラップになります（`cannot block a synchronous task`）。出力ごとの扱いは
+[出力ごとに使えるもの](#what-each-output-takes)にあります。
 
 ```console
 export pause: async func(ms: u32) -> u32;
@@ -545,45 +526,74 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 }
 ```
 
+## 型を置ける位置
+
+その型を使える出力（[出力ごとに使えるもの](#what-each-output-takes)）で、宣言のどこに
+何を置けるかを示します。拒否はどのターゲットでもコンパイル時に行われ、Java の宣言の位置で、
+WIT のメンバーの行を示します。
+
+| WIT | インポートの引数 | インポートの戻り値 | エクスポートの引数 | エクスポートの戻り値 | ほかの型の中 |
+| --- | --- | --- | --- | --- | --- |
+| スカラー、`char`、`string`、`list`、`tuple`、`record`、`variant`、`enum`、`flags` | 可 | 可 | 可 | 可 | 可 |
+| `option<T>` | 可 | 可 | 可 | 可 | 可 |
+| `bool`、`list`、`flags`、`option` を要素とする `option` | 拒否（none と見分けられない値がある） | 拒否 | 拒否 | 拒否 | 拒否 |
+| `result<T, E>` | 可 | 可。ok 側の型にしてエラー側を投げてもよい | 可 | 可。ok 側の型にしてエラー側を投げてもよい | 可（`WitResult`） |
+| `WitException` として投げるエラー側の tuple | | 拒否（型を書く場所がない。`WitResult` を返す） | | 拒否（同じ） | |
+| インタフェースのリソース | 可。渡した `own` はオブジェクトが閉じられる | 可 | 未対応（Java のクラスはリソースをエクスポートしない。Common Lisp のプログラムはできる） | 未対応 | インポートでは可（レコードのフィールド、リストの要素） |
+| `use` で取り込んだリソース | 可。もう一方のインタフェースを表す側に宣言する | 可（同じ） | 未対応 | 未対応 | インポートでは可 |
+| `stream<u8>` | 可（`Consumer<OutputStream>`）。ただし `async func` には渡せない（呼び出しが待つ間に、ホストはプログラムが後で書くものを読むため） | 可（`InputStream`） | 拒否（エクスポートは stream を受け渡さない） | 拒否 | インポートの戻り値では可。引数では、それ自身の `option` の中だけ |
+| 値の `stream<T>`、リソースの `stream<T>` | 拒否（ゲストは書けない） | 可（`WitStream<T>`） | 拒否 | 拒否 | インポートの戻り値では可 |
+| `future<T>` | 可（プログラムが作った `WitFuture<T>`） | 可。ただし `bool`、`list`、`flags`、`option` の future は不可（その値を、書き手が捨てた future と見分けられない） | 拒否（エクスポートは future を受け渡さない） | 拒否 | インポートの戻り値では可。引数では拒否 |
+| `error-context` | 拒否（WIT が定義しない型を使うとして、WIT ごと拒否される） | | | | |
+
+エクスポートするインタフェースがリソースを宣言する場合と、その `use` 句がリソースまたは
+ハンドルを含む型を取り込む場合は、関数がその型を使うかどうかにかかわらず、world の
+`export` の行で拒否されます。world 自身の `use` で取り込んだリソースは宣言されず、それを使う
+world の関数は拒否されます。Common Lisp のプログラムはコンポーネントからリソースを
+エクスポートでき（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)）、
+Java のプログラムはそのコンポーネントのリソースを、ほかのリソースと同じくインポートできます。
+
+## 出力ごとに使えるもの
+
+| 出力 | `@WitImport` | `@WitExport`（`main` のないプログラム） | `async func` のエクスポート | エクスポートが捕まえなかった例外 |
+| --- | --- | --- | --- | --- |
+| `--component` | [型を置ける位置](#where-each-type-crosses)のすべての型 | world をエクスポートするリアクタのコンポーネント | async で lift する。メソッドがブロックする箇所で呼び出しは待てる | JDK と同じ行を標準エラー出力に書いてから、呼び出しがトラップになる |
+| `--component --no-wasi` | 拒否（このコンポーネントは何もインポートしない） | `--component` と同じ | async で lift するが、時計をインポートしないので、sleep するメソッドはトラップになる | 何も書かずにトラップになる |
+| `--no-wasi` のモジュール（ホストは `--emit-js-glue` のグルー） | canonical ABI を通して、`stream` と `future` 以外のすべての型。`async func` は不可。`main` からは呼べない（JavaScript のホストが promise で応答しうるため） | 拒否（world をエクスポートするのはコンポーネント） | | |
+| Preview 1 のモジュール（`-o out.wasm`） | 平坦な型（32 ビットまでの整数、浮動小数点数、`bool`、`string`、`list<u8>`、ハンドル）。それらの型の `async func` は普通の呼び出し | 拒否 | | |
+| `--no-gc` のモジュール | 未対応（`ServiceLoader` が返すバインディングにあたるオブジェクトがスカラーのバックエンドになく、取得する箇所で拒否される） | 拒否 | | |
+| `--no-gc --component` | 未対応（同じ） | `bool`、整数、`f64`、`string` だけ。ほかの型は WIT の行で拒否 | それらの型で async で lift する。スカラーのサブセットに待つものはない | 何も書かずにトラップになる |
+| `--native` | なし（ランナーが WIT インタフェースを提供しない。平坦な型のメンバーを呼ぶプログラムは起動せず、ほかのメンバーは拒否される） | 拒否 | | |
+| JDK、インタプリタ、JVM | プログラム自身のプロバイダ。すべての型を、何も変換せずに渡す | アノテーションは何もしない。普通の static メソッドで、`main` のないプログラムは拒否される | ほかと同じように呼ばれるメソッド | ほかの例外と同じ |
+
+JDK 以外のすべてのターゲットで、宣言は WIT と照合されます。ターゲットが受け渡せない型を持つ
+メンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を示して拒否されます。
+
+## 境界での扱い
+
+- 符号なし整数は、同じ幅の Java の型にビットのまま入ります。どちらの向きでも同じです。
+  `u8` の 200 は `byte` の -56 で（`Byte.toUnsignedInt` で 200 に戻ります）、`u32` を返す
+  エクスポートが `int` の -1 を返すと 4294967295 になります。
+- `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えません。それを返すインポートも、
+  それを渡されたエクスポートもトラップになります。`u64` を返すエクスポートが負の `long` を
+  返してもトラップになりますが、エクスポートが返す複合型の値の中（レコードのフィールド、
+  リストの要素）では、同じビットの `u64` になります。
+- `null` は WIT の値ではありません。WASM のターゲットでは、インポートに `null` を渡す呼び出しも、
+  `null` を返すエクスポートもトラップになります。戻り値が `Optional`、`List`、レコード、
+  `WitResult` なら、トラップの前に `NullPointerException` を書きます。JDK、インタプリタ、JVM
+  では、プロバイダがその `null` を受け取ります。
+- 閉じたリソースは `IllegalStateException` を投げ（`tcp-socket of wasi:sockets/types@0.3.0
+  is closed`）、2 度目の `close()` は何もしません。閉じた `InputStream` の読み取りは
+  `IOException` を投げます。
+
 ## 制限
 
-- WASM のモジュールで使える型は、そのモジュールで `rontolisp:wit-import` が使える型と
-  同じです。Preview 1 のコアモジュールでは平坦な型（32 ビットまでの整数、浮動小数点数、
-  `bool`、`string`、`list<u8>`、ハンドル）だけです。コンポーネントではすべての型、`--no-wasi` の
-  モジュールでは `async func`、`stream`、`future` 以外のすべての型です（`flags` も通り、
-  JavaScript のホストからは真偽値のオブジェクトに見えます）。
-  それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
-  示して拒否されます。`--no-gc` では、モジュールでもコンポーネントでも `@WitImport` の
-  インタフェースは束縛されません。スカラーのバックエンドにはオブジェクトがなく、バインディングを
-  取得する箇所で拒否されるためです。
-- `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えず、呼び出しはトラップになります。
-  例外は、エクスポートが返す複合型の値の中（レコードのフィールド、リストの要素）です。そこでは、
-  負の `long` が同じビットの `u64` になります。
-- ネイティブ実行ファイル（`--native`）は Preview 1 のモジュールを動かしますが、そのランナーは
-  WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
-- 宣言の位置で拒否されるもの: プログラムがホストに渡す値の stream とリソースの stream（ゲストは
-  書けないため）。`async func` に渡す `stream<u8>`（呼び出しが待つ間に、ホストはプログラムが
-  呼び出しの後でしか書けないものを読むため）。引数そのものでも引数の `option` でもない位置で
-  渡す `stream<u8>` と、引数そのものでない位置で渡す `future`（レコードのフィールド、リストの
-  要素）。ホストが返す、`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が捨てた
-  future と境界が見分けられないため。プログラムが渡す future はどれでも構いません）。`bool`、
-  `list`、`flags`、`option` を要素とする `option`（境界がその none を見分けられないため）。
-  ほかのインタフェースのリソースを、そのインタフェースを表す `@WitImport` インタフェース以外の
-  場所に宣言したもの。`WitException` として投げるエラーの型にある tuple（型を書く場所がないため。
-  `WitResult` の戻り値なら書けます）。
 - プログラムが書く stream をホストがいつ読むかは、ホストが決めます。ホストが後の呼び出しの中で
   しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため wasmtime の下では、
   `wasi:http` のリクエストはボディを持てません（wasmtime はボディを `client.send` の中で読みます）。
-- `@WitExport` の world のエクスポートは、リソース、`stream`、`future` を受け渡せません。
-  エクスポートするインタフェースが `resource` を宣言する場合と、その `use` 句がリソースまたは
-  ハンドルを含む型を取り込む場合は、関数がその型を使うかどうかにかかわらず、world の
-  `export` の行で拒否されます。world 自身の `use` で取り込んだリソースは宣言されず、
-  それを使う world の関数は拒否されます。`async func` のエクスポートで使える型は
-  ほかのエクスポートと同じです。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、
-  使える型が `bool`、整数、`f64`、`string` だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
-  関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
-- エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
-  java.lang.IllegalStateException: ...`）を標準エラー出力に書いてからトラップになります。
-  最初の呼び出しが実行する static 初期化が捕まえなかった例外も同じです。標準エラー出力を
-  持たない `--no-wasi` のコンポーネントと、`--no-gc` のコンポーネントは、何も書かずに
-  トラップになります。
+- エクスポートが捕まえなかった例外と、最初の呼び出しが実行する static 初期化が捕まえなかった
+  例外は、JDK が書く行（`Exception in thread "main" java.lang.IllegalStateException: ...`）を
+  標準エラー出力に書いてからトラップになります。標準エラー出力を持たない `--no-wasi` の
+  コンポーネントと、`--no-gc` のコンポーネントは、何も書かずにトラップになります。
+- 同じラベルのエクスポート 2 つ（world の関数とインタフェースの関数、または 2 つの
+  インタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。

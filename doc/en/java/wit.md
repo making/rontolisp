@@ -147,37 +147,45 @@ JDK, where the driver leaves the URL to another one.
 
 ## The types
 
-| WIT | Java |
-| --- | --- |
-| `bool` | `boolean` |
-| `s8`, `u8` | `byte` |
-| `s16`, `u16` | `short` |
-| `s32`, `u32` | `int` |
-| `s64`, `u64` | `long` |
-| `f32`, `f64` | `float`, `double` |
-| `char` | `int`, the code point |
-| `string` | `String` |
-| `list<u8>` | `byte[]` |
-| `list<T>` | `List<T>` |
-| `option<T>` | `Optional<T>` |
-| `tuple<A, B>` | a record of the program's with those components |
-| `record` | a member record, a component a field |
-| `variant` | a member sealed interface permitting a record for each case (the payload its one component) |
-| `enum` | a member enum |
-| `flags` | a `Set` of a member enum |
-| a resource, `own<R>`, `borrow<R>` | the member interface |
-| a resource the interface takes from another with `use` | the member interface of the `@WitImport` interface standing for that other one |
-| `result<T, E>` | `WitResult<T, E>`; as a method's answer, also its ok arm, the error arm a `WitException` |
-| an `async func` | a method that waits for the host's answer, as a call does |
-| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>`, of values or of resources |
-| `stream<u8>` the host answers | `java.io.InputStream` |
-| `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end |
-| `option<stream<u8>>` the program hands the host | `Optional<Consumer<OutputStream>>`, empty for no stream |
-| `future<T>` the host answers | `am.ik.rontolisp.wit.WitFuture<T>`, a `future<result<T, E>>` a `WitFuture<T>` (`Void` for no ok value) |
-| `future<T>` the program hands the host | a `WitFuture<T>` the program made, of the same type |
+One mapping serves both annotations. A named type is a member type of the class standing
+for the WIT scope that defines it: the `@WitImport` interface for an imported interface;
+for a world, the `@WitExport` class for the world's own types and its member class for an
+exported interface's. Each is checked against its definition, once.
 
-An unsigned integer is held in the Java type of its width, its bits as Java holds them:
-the `u8` 200 is the `byte` -56 (`Byte.toUnsignedInt` gives 200 back).
+| WIT | Java | Declared |
+| --- | --- | --- |
+| `bool` | `boolean` | |
+| `s8`, `u8` | `byte` | |
+| `s16`, `u16` | `short` | |
+| `s32`, `u32` | `int` | |
+| `s64`, `u64` | `long` | |
+| `f32`, `f64` | `float`, `double` | |
+| `char` | `int`, the code point | |
+| `string` | `String` | |
+| `list<u8>` | `byte[]` | |
+| `list<T>` | `List<T>`, `T` boxed | |
+| `option<T>` | `Optional<T>` | |
+| `result<T, E>` | `am.ik.rontolisp.wit.WitResult<T, E>`, `Void` for an arm carrying nothing; as a method's answer, also its ok arm, the error arm thrown as an `am.ik.rontolisp.wit.WitException` | `rontolisp-java-api` |
+| `tuple<A, B>` | a record whose components are those types, in order | anywhere in the program |
+| `record` | a record, a field a component in lower camel case | a member of the scope's class |
+| `variant` | a sealed interface permitting a record for each case, the payload its one component | a member of the scope's class, the records inside it |
+| `enum` | an enum, a case a constant (`NO_SUCH_STORE`) | a member of the scope's class |
+| `flags` | a `Set` of an enum, a label a constant | a member of the scope's class |
+| an alias (`type id = u32`) | the type it names | |
+| a record, a variant, an enum or flags taken with `use` | as above, under the name the clause gives it | a member of the class of the scope taking it |
+| a resource, `own<R>`, `borrow<R>` | an interface, its methods the resource's, `close()` its release | a member of the `@WitImport` interface |
+| a resource taken with `use` | the interface standing for it in the other scope | a member of the `@WitImport` interface standing for the interface that defines it |
+| `stream<u8>` the host answers | `java.io.InputStream` | |
+| `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end; in an `option`, `Optional<Consumer<OutputStream>>` | |
+| `stream<T>` of values or of resources | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
+| `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`; a `future<result<T, E>>` is a `WitFuture<T>` (`Void` for no ok value) whose `get()` throws the error arm | `rontolisp-java-api` |
+| an `async func` | a method answering its value: an import's waits for the host's answer, an export's may block | |
+| `error-context` | none: a WIT naming it is refused | |
+
+Where each type may stand is [Where each type crosses](#where-each-type-crosses), which
+output carries it [What each output takes](#what-each-output-takes), and what an unsigned
+integer, a `u64` past `Long.MAX_VALUE`, `null` or a closed resource does
+[At the boundary](#at-the-boundary).
 
 `result<T, E>` is an `am.ik.rontolisp.wit.WitResult<T, E>` wherever the WIT has one: a
 parameter, a list's element, an option's value, a record's field, a variant's payload, an
@@ -222,8 +230,7 @@ catch (WitException e) {
 ```
 
 A resource is released by `close()`: the handle goes back to the host, and the store stays.
-A closed resource throws `IllegalStateException`, and a second `close()` does nothing. An
-`own` handle given to a function passes to it, and the object is closed.
+An `own` handle given to a function passes to it, and the object is closed.
 
 A resource an interface takes from another with `use` is declared once, in the
 `@WitImport` interface standing for the interface that defines it, and named from there:
@@ -399,12 +406,7 @@ With `--no-gc` too, a class of scalar values
 ([A reactor on `--no-gc`](index.md#a-reactor-on---no-gc)) compiles to a component of the
 scalar backend, which runs its static initialization when it is instantiated. The counter
 above, its `indexOf` written as comparisons, is 2,040 bytes there and 12,988 without
-`--no-gc`. A world carrying a type other than `bool`, the integers, `f64` and `string` is
-refused there at its WIT line: the scalar backend has no value for a record or a list. An
-`async func` of those types is exported there as by any component. Such a class calls no
-`@WitImport` interface: the binding `ServiceLoader` answers is an object, which the scalar
-backend has none of, and the lookup is refused at its position, with or without
-`--component`.
+`--no-gc`. What it carries there is in [What each output takes](#what-each-output-takes).
 
 Under a JDK, on the interpreter and on the JVM the annotation does nothing: `vowelCount` is
 an ordinary static method, which a program or a test calls. A program with no `main` is
@@ -424,19 +426,12 @@ is s32, which is int in Java, not long
 
 ### The types of an export
 
-The types are those of [the table above](#the-types), but the ones a `@WitExport` class
-does not carry, each refused at its WIT line: a resource, a `stream` and a `future`. A
-resource is refused where the world exports its interface -- an exported interface that
-declares one, or names one of another interface in a `use` clause, is refused whether or
-not a function takes it -- on the interpreter and on every output (a component,
-`--no-wasi`, a Preview 1 module, `--no-gc`, `--no-gc --component`). A Common Lisp program exports one from a component
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)), and a
-Java program imports it from that component as any resource, with `@WitImport`. A named type
-is a member type, as an imported interface's is: of the annotated class for a type the
-world defines, of the interface's member class for a type an exported interface defines.
-A type the world or the interface takes from another with `use` is a member type too,
-under the name the clause gives it there. A tuple is a record of the
-program's, declared anywhere.
+An export's types are [the table's](#the-types), named the same way: a type of the world is
+a member type of the annotated class, a type of an exported interface one of the
+interface's member class, a type taken with `use` one of the class of the scope taking it,
+under the clause's name, and a tuple any record of the program's. A resource, a `stream`
+and a `future` are refused at their WIT line
+([Where each type crosses](#where-each-type-crosses)).
 
 ```console
 interface geometry {
@@ -505,27 +500,18 @@ wasmtime run --invoke 'area(dot)' shapes.wasm            # err("a dot has no are
 A method answering a `result` declares a `WitResult<T, E>`, or its ok arm (`void` for
 none), as an imported interface's method does. The error arm is then a `WitException` the
 method throws, whose `error()` is the error of its Java type (`null` for none); any other
-exception is one the export leaves uncaught ([Limitations](#limitations)). An `Optional`,
-a `List`, a record or a `WitResult` answered as `null` is a `NullPointerException` there.
+exception is one the export leaves uncaught ([Limitations](#limitations)).
 
 [`examples/wit/shapes/Shapes.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 implements the world of the Lisp example beside it; the Lisp command of that example calls
 either component, composed with it, and prints the same lines.
 
-An unsigned integer is the Java type of its width holding its bits both ways: a `u32` of
-4294967295 is the `int` -1, and the `int` -1 an export answers for a `u32` is 4294967295.
-
 An `async func` export is a static method answering its value, as any other, and it takes
 the types any other export takes: a record, a list, a variant or a `result` crosses an
-`async func` as it crosses a `func`. What each output makes of it:
-
-| Output | An `async func` export |
-| --- | --- |
-| `--component` | lifted async: the call may wait where the method blocks, as in a `Thread.sleep` or a call of an imported `async func`. A plain `func` that blocks traps (`cannot block a synchronous task`) |
-| `--component --no-wasi` | lifted async too, but the component imports no clock: a method that sleeps traps |
-| `--no-gc --component` | lifted async too, of `bool`, the integers, `f64` and `string` alone, as every export there. Nothing in the scalar subset waits: it has no thread to sleep in (`Thread.sleep` is refused there) and no object for a `@WitImport` binding |
-| a module (`-o out.wasm` alone, `--no-wasi`), `--native` | exported nowhere, as every export: a world is exported by a component |
-| a JDK, the interpreter, the JVM | the method, called as any other |
+`async func` as it crosses a `func`. A component lifts it async, so the call may wait where
+the method blocks, as in a `Thread.sleep` or a call of an imported `async func`; a plain
+`func` that blocks traps (`cannot block a synchronous task`). What each output makes of it
+is in [What each output takes](#what-each-output-takes).
 
 ```console
 export pause: async func(ms: u32) -> u32;
@@ -544,47 +530,76 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 }
 ```
 
+## Where each type crosses
+
+What a declaration may hold where, on a target that carries the type
+([What each output takes](#what-each-output-takes)). Each refusal is made when the program
+compiles, on every target, at the Java declaration, naming the WIT member's line.
+
+| WIT | Import parameter | Import result | Export parameter | Export result | Inside another type |
+| --- | --- | --- | --- | --- | --- |
+| a scalar, `char`, `string`, `list`, `tuple`, `record`, `variant`, `enum`, `flags` | yes | yes | yes | yes | yes |
+| `option<T>` | yes | yes | yes | yes | yes |
+| `option` of a `bool`, a `list`, `flags` or an `option` | refused: its none is a value too | refused | refused | refused | refused |
+| `result<T, E>` | yes | yes, or its ok arm with the error arm thrown | yes | yes, or its ok arm with the error arm thrown | yes, as a `WitResult` |
+| a tuple in an error arm thrown as a `WitException` | | refused: no type is written for it (answer the `WitResult`) | | refused, likewise | |
+| a resource of the interface | yes; an `own` handed over closes the object | yes | not yet: a Java class does not export a resource (a Common Lisp program does) | not yet | yes in an import (a record's field, a list's element) |
+| a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | not yet | not yet | yes in an import |
+| `stream<u8>` | yes, `Consumer<OutputStream>`, but not to an `async func`: the call waits while the host reads what the program writes after it | yes, `InputStream` | refused: an export carries no stream | refused | in an import result; in a parameter only as an `option` of its own |
+| `stream<T>` of values or of resources | refused: the guest cannot write one | yes, `WitStream<T>` | refused | refused | in an import result |
+| `future<T>` | yes, a `WitFuture<T>` the program made | yes, but not of a `bool`, a `list`, `flags` or an `option`: its value is a future its writer dropped too | refused: an export carries no future | refused | in an import result; in a parameter refused |
+| `error-context` | refused: the WIT is refused as naming a type it does not define | | | | |
+
+An exported interface that declares a resource, or whose `use` clause names one or a type
+holding a handle, is refused at the world's `export` line whether or not a function takes
+it. A `use` of a resource in the world itself is left out, and a function of the world
+naming it is refused. A Common Lisp program exports a resource from a component
+([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)), and a
+Java program imports it from that component as any resource.
+
+## What each output takes
+
+| Output | `@WitImport` | `@WitExport` (a program with no `main`) | An `async func` export | An exception an export leaves uncaught |
+| --- | --- | --- | --- | --- |
+| `--component` | every type of [Where each type crosses](#where-each-type-crosses) | a reactor component exporting the worlds | lifted async: the call may wait where the method blocks | written to standard error as a JDK writes it, then the call traps |
+| `--component --no-wasi` | refused: such a component imports nothing | as `--component` | lifted async, but the component imports no clock: a method that sleeps traps | the call traps, writing nothing |
+| `--no-wasi` module, its host the `--emit-js-glue` glue | through the canonical ABI, every type but a `stream` and a `future`; no `async func`. Not reached from `main`: a JavaScript host may answer with a promise | refused: a world is exported by a component | | |
+| Preview 1 module (`-o out.wasm`) | the flat set: the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`, handles; an `async func` of those a call | refused | | |
+| `--no-gc` module | not yet: the scalar backend has no object for the binding `ServiceLoader` answers, so the lookup is refused | refused | | |
+| `--no-gc --component` | not yet, likewise | of `bool`, the integers, `f64` and `string` alone; anything else refused at its WIT line | lifted async, of those types; nothing in the scalar subset waits | the call traps, writing nothing |
+| `--native` | none: its runner provides no WIT interface, so a program calling a member of the flat set does not start, and any other member is refused | refused | | |
+| a JDK, the interpreter, the JVM | the program's own provider, every type; nothing is converted | the annotation does nothing: ordinary static methods, and a program with no `main` is refused | the method, called as any other | as any exception |
+
+On every target but a JDK the declarations are checked against the WIT. A member a target
+does not carry is refused at its WIT line where the program calls it, as `wit-import`
+refuses it.
+
+## At the boundary
+
+- An unsigned integer is the Java type of its width holding its bits, both ways: the `u8`
+  200 is the `byte` -56 (`Byte.toUnsignedInt` gives 200 back), and the `int` -1 an export
+  answers for a `u32` is 4294967295.
+- A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: an import answering one, and an
+  export called with one, trap. An export's negative `long` answered for a `u64` traps too,
+  but inside a compound value it answers (a record's field, a list's element) it is the
+  `u64` of its bits.
+- `null` is no WIT value. On a WASM target a call handing `null` to an import traps, and so
+  does an export answering it, after writing a `NullPointerException` where its answer is an
+  `Optional`, a `List`, a record or a `WitResult`. Under a JDK, on the interpreter and on
+  the JVM the provider is handed the `null`.
+- A closed resource throws `IllegalStateException` (`tcp-socket of wasi:sockets/types@0.3.0
+  is closed`), and a second `close()` does nothing. A read of a closed `InputStream` throws
+  `IOException`.
+
 ## Limitations
 
-- A WASM module takes the types `rontolisp:wit-import` takes there: a Preview 1 core module
-  the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
-  handles), a component everything, a `--no-wasi` module everything but an `async func`, a
-  `stream` and a `future` (`flags` included, a JavaScript host's object of booleans). A
-  member of any other type is refused at its WIT line where the program calls it, as
-  `wit-import` refuses it. With `--no-gc`, a module or a component, no `@WitImport`
-  interface is bound at all: the lookup of its binding is refused, the scalar backend
-  having no object.
-- A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
-  inside a compound value an export answers (a record's field, a list's element) a
-  negative `long` is the `u64` of its bits.
-- A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
-  interface, so a program calling one does not start there.
-- Refused at the declaration: a stream of values or of resources the program hands the
-  host, which the guest cannot write; a `stream<u8>` the program hands an `async func`
-  (the call waits while the host reads what the program writes only after it); a
-  `stream<u8>` the program hands over in another type than an `option` of its own, and a
-  `future` it hands over in any other type (a record's field, a list's element); a
-  `future` the host answers of a `bool`, a `list`, `flags` or an `option` (whose value the
-  boundary cannot tell from a future its writer dropped; one the program hands over may be
-  of any of them); an
-  `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
-  tell apart; a resource of another interface declared anywhere but in the `@WitImport`
-  interface standing for that interface; a tuple in an error arm thrown as a
-  `WitException`, for which no type is written (a `WitResult` answer carries it).
 - A stream the program writes is read by the host when the host chooses: a write that
   waits for a read the host makes only within a later call never returns. So a
   `wasi:http` request carries no body under wasmtime, which reads it within `client.send`.
-- A `@WitExport` world's export carries no resource, `stream` or `future`: an exported
-  interface that declares a `resource`, or whose `use` clause names a resource or a type
-  holding a handle, is refused at the world's `export` line, whether or not a function
-  takes the type. A `use` of a resource in the world itself is left out, and a function of
-  the world naming it is refused. An `async func` export
-  takes the types any other export takes. Under `--no-gc --component` every export takes
-  `bool`, the integers, `f64` and `string` alone, an `async func` among them. Two
-  exports of one label (a function of the world
-  and an interface's, or two interfaces') are two methods, each of its own class.
-- An exception an export leaves uncaught is reported on standard error by the line a JDK
-  writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call
-  traps; so is one the static initialization run by the first call leaves. A component
-  compiled with `--no-wasi`, which has no standard error, or with `--no-gc` traps and writes
-  nothing.
+- An exception an export leaves uncaught, or one the static initialization run by the
+  first call leaves, is reported on standard error by the line a JDK writes
+  (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call traps.
+  A component compiled with `--no-wasi`, which has no standard error, or with `--no-gc`
+  traps and writes nothing.
+- Two exports of one label (a function of the world and an interface's, or two
+  interfaces') are two methods, each of its own class.

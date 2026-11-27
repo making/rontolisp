@@ -693,6 +693,9 @@ class JavaWitImportTest {
 		refusals.put("void flag(java.util.Optional<Boolean> v);",
 				"flag (flag of test:rows/rows@0.1.0, rows.wit:23): its parameter v is option<bool>, an option of a "
 						+ "type one of whose values the boundary cannot tell from none");
+		refusals.put("void pending(List<WitFuture<Integer>> all);",
+				"pending (pending of test:rows/rows@0.1.0, rows.wit:24): its parameter all is list<future<u32>>, "
+						+ "carrying future<u32>, which the binding hands the host only as a parameter of its own");
 		refusals.put("WitFuture<Long> load(InputStream data);",
 				"load (load of test:rows/rows@0.1.0, rows.wit:21): its parameter data is stream<u8>, which the "
 						+ "program writes: Consumer<OutputStream> in Java, handed the writable end, not InputStream");
@@ -731,6 +734,7 @@ class JavaWitImportTest {
 			  load: func(data: stream<u8>) -> future<result<u64, error>>;
 			  confirm: func(note: option<stream<u8>>, done: future<result<string, error>>) -> string;
 			  flag: func(v: option<bool>);
+			  pending: func(all: list<future<u32>>);
 			}
 			""";
 
