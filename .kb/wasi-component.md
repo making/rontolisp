@@ -237,10 +237,12 @@ note under `Task.enter_implicit_thread`):
 - Not measured (`.todo/178-component-shared-memory-map-collision.md`): whether a waiting call
   holds anything else the call made meanwhile can write over -- bytes staged past the heap
   top, the adapter's page-5 cells.
-- `--no-gc`'s post-return pops to the heap BASE (`NoGcWasmCompiler.postReturnBody`): right
-  while no call of an instance waits beside another (a printing program's exports are all
-  async-typed, so serialized), wrong for a sync-typed export beside an async-typed one that
-  waits.
+- `--no-gc --component` is NOT safe yet: its post-return pops to the heap BASE
+  (`NoGcWasmCompiler.postReturnBody`), so a sync-typed export run while an async-typed one
+  waits in a `:blocking t` import frees what the waiting call holds. Measured 2026-11-27: the
+  same composition with a scalar waiter answers "invalid utf8 encoding"
+  (`.todo/m98-no-gc-a-plain-func-run-while-an-async-func-waits-pops-the-waiting-calls-heap.md`).
+  A printing program's exports are all async-typed, so its calls never overlap.
 - Pins: `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (three composed
   components, the sync call made while the async one waits).
 
@@ -255,8 +257,8 @@ jco references `FutureReadableEnd`/`FutureEnd`/`FutureWritableEnd` and defines n
 longer reproduces -- a flat async export of a Lisp `--component` and of a Java `--component
 --no-wasi` component answers under node; (b) not re-measured.
 
-Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` rejects it
-(`NoGcWasmCompiler.validateComponentExport`). Pinned by `componentAsyncExport*` +
+Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` lifts it the same way
+(`.kb/no-gc-scalar-wasm.md`, "An `async func`"). Pinned by `componentAsyncExport*` +
 `componentSyncExportWithIoWorksWhenTheHostDoesNotBlock` in `WasmLispCompilerIntegrationTest`,
 `componentFetchInsideAsyncExport` (opt-in `RONTOLISP_HTTP_E2E=1`), ci-spec
 `wasm-export-directive-does-not-disturb-run`.

@@ -39,8 +39,9 @@ declaration, emitting a typed Java-callable method on a compiled class.
 - `:async` — `t` lifts the export as an **async** component-model function under
   `--component`, so I/O inside it (`print`, `rontolisp:fetch`, ...) works instead
   of trapping. Defaults to `nil` (a synchronous, pure-compute lift). Meaningful
-  only under `--component`: Preview 1 / `--no-wasi` core exports ignore it, and
-  `--no-gc --component` rejects it.
+  only under `--component`: Preview 1 / `--no-wasi` core exports ignore it.
+  Under `--no-gc --component` it is what lets the export reach an import whose
+  call waits ([`:blocking t`](../../guides/wasm-nogc.md#calls-that-wait-async-func)).
 
 The type designators and their boundary representations are:
 
@@ -86,10 +87,10 @@ way.
   `:string` and `:s-expr` as component-model `string` (`--no-gc` has no
   `:s-expr`). A sync
   (default) export must be pure-compute — I/O inside it traps; declare
-  `:async t` when the export prints or fetches. Under `--no-gc --component`,
-  `:async` is rejected but printing still works, through a built-in WASI 0.3
-  stdout micro-adapter wired in only when the program prints — every export of
-  a printing program is then lifted `async` automatically.
+  `:async t` when the export prints or fetches. Under `--no-gc --component`
+  printing works without it, through a built-in WASI 0.3 stdout micro-adapter
+  wired in only when the program prints — every export of a printing program
+  is then lifted `async` automatically.
   The export name must be lower-kebab-case (rename with `:as` otherwise), and
   adding `--emit-wit` writes the component's WIT world (with every export's typed
   signature) next to the `.wasm`. See

@@ -334,7 +334,11 @@ wasmtime run --invoke 'vowel-count("hello world")' counter.wasm   # 3
 インスタンス化のときに実行されます。上のカウンタの `indexOf` を比較に書き換えたものは、そこで
 2,040 バイト、`--no-gc` なしで 12,988 バイトです。`bool`、整数、`f64`、`string` 以外の型を
 受け渡す world は、そこでは WIT の行で拒否されます。スカラーのバックエンドには、レコードや
-リストにあたる値がないためです。
+リストにあたる値がないためです。これらの型だけを使う `async func` は、そこでもほかの
+コンポーネントと同じようにエクスポートされます。一方、このクラスから `@WitImport` の
+インタフェースは呼べません。`ServiceLoader` が返すバインディングはオブジェクトで、スカラーの
+バックエンドにはオブジェクトがないため、`--component` の有無にかかわらず、取得する箇所で
+拒否されます。
 
 JDK、インタプリタ、JVM では、アノテーションは何もしません。`vowelCount` は普通の static
 メソッドで、プログラムやテストから呼びます。`main` のないプログラムは、そこでは拒否されます。
@@ -449,7 +453,7 @@ ok 側の型（値がなければ `void`）を宣言します。ok 側の型を�
 | --- | --- |
 | `--component` | async で lift します。`Thread.sleep` や、インポートした `async func` の呼び出しのようにメソッドがブロックする箇所で、呼び出しは待てます。ブロックする通常の `func` はトラップになります（`cannot block a synchronous task`） |
 | `--component --no-wasi` | これも async で lift しますが、コンポーネントは時計をインポートしないので、sleep するメソッドはトラップになります |
-| `--no-gc --component` | WIT の行で拒否されます（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)） |
+| `--no-gc --component` | これも async で lift します。使える型は、そこでのほかのエクスポートと同じく `bool`、整数、`f64`、`string` だけです。スカラーのサブセットには待つ手段がありません。スリープするスレッドも（`Thread.sleep` はそこで拒否されます）、`@WitImport` のバインディングを持つオブジェクトもないためです |
 | モジュール（`-o out.wasm` だけ、`--no-wasi`）、`--native` | ほかのエクスポートと同じく、どこにもエクスポートされません。world をエクスポートするのはコンポーネントです |
 | JDK、インタプリタ、JVM | ほかと同じように呼ばれる、ただのメソッドです |
 
@@ -477,7 +481,9 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
   `bool`、`string`、`list<u8>`、ハンドル）だけです。コンポーネントではすべての型、`--no-wasi` の
   モジュールでは `flags` 以外のすべての型です。
   それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
-  示して拒否されます。
+  示して拒否されます。`--no-gc` では、モジュールでもコンポーネントでも `@WitImport` の
+  インタフェースは束縛されません。スカラーのバックエンドにはオブジェクトがなく、バインディングを
+  取得する箇所で拒否されるためです。
 - `Long.MAX_VALUE` を超える `u64` は、どの WASM の境界も越えず、呼び出しはトラップになります。
   例外は、エクスポートが返す複合型の値の中（レコードのフィールド、リストの要素）です。そこでは、
   負の `long` が同じビットの `u64` になります。
@@ -492,8 +498,9 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
   捨てた future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートは
-  `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
+- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は
+  ほかのエクスポートと同じです。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、
+  使える型が `bool`、整数、`f64`、`string` だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
   java.lang.IllegalStateException: ...`）を標準エラー出力に書いてからトラップになります。

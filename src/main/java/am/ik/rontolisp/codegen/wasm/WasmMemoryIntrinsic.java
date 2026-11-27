@@ -116,9 +116,10 @@ enum WasmMemoryIntrinsic {
 							+ intrinsic.params.stream().map(BoundaryType::designator).toList() + " :returns "
 							+ intrinsic.result.designator());
 		}
-		if (decl.async()) {
-			throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' declares \"" + MODULE
-					+ "\".\"" + decl.field() + "\" :async; the module's own memory cannot suspend");
+		if (decl.async() || decl.blocking()) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wasm-import '" + decl.name() + "' declares \"" + MODULE + "\".\"" + decl.field() + "\" "
+							+ (decl.async() ? ":async" : ":blocking") + "; the module's own memory cannot suspend");
 		}
 		return intrinsic;
 	}

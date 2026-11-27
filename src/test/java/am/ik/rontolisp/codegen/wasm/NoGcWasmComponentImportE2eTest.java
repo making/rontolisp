@@ -50,7 +50,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * provider built from the same {@code .wit};</li>
  * <li>a PRINTING consumer composes too: the print micro-adapter's shim and the import
  * shim are two tables the core instantiates against, and its async-lifted export still
- * answers.</li>
+ * answers;</li>
+ * <li>an {@code async func} crosses as a call that waits: the consumer's task, an async
+ * export's, waits for the provider's, which waits for the host's clock.</li>
  * </ul>
  */
 @EnabledIf("am.ik.rontolisp.codegen.wasm.NoGcWasmComponentImportE2eTest#toolsAreAvailable")
@@ -71,6 +73,7 @@ class NoGcWasmComponentImportE2eTest {
 	@BeforeEach
 	void writeWit() throws Exception {
 		Files.writeString(this.tempDir.resolve("bench.wit"), WIT, StandardCharsets.UTF_8);
+		Files.writeString(this.tempDir.resolve("clocks.wit"), CLOCKS, StandardCharsets.UTF_8);
 	}
 
 	private static final String WIT = """
@@ -80,6 +83,7 @@ class NoGcWasmComponentImportE2eTest {
 			  add: func(a: s32, b: s32) -> s32;
 			  greet: func(name: string) -> string;
 			  shout: func(s: string);
+			  nap: async func(ms: u32) -> u64;
 			}
 
 			world provider {
@@ -89,34 +93,55 @@ class NoGcWasmComponentImportE2eTest {
 			world consumer {
 			  import env;
 			  export run: func(n: s32) -> s32;
+			  export doze: async func(ms: u32) -> u64;
+			}
+			""";
+
+	// What the provider's nap waits on: the host's own clock, of which a component
+	// imports the functions it names.
+	private static final String CLOCKS = """
+			package wasi:clocks@0.3.0;
+
+			interface monotonic-clock {
+			  type mark = u64;
+			  now: func() -> mark;
+			  wait-for: async func(how-long: u64);
 			}
 			""";
 
 	// The provider: the interface implemented as ordinary defuns, lifted as the
 	// exported instance `docs:bench/env` (shout counts its argument so it is not
-	// shaken away).
+	// shaken away). nap answers the nanoseconds it waited for the host's clock.
 	private static final String PROVIDER = """
+			(rontolisp:wit-import "clocks.wit" :interface "wasi:clocks/monotonic-clock@0.3.0" :package clock :blocking t)
 			(rontolisp:wit-export "bench.wit" :world provider)
 			(defun add (a b) (+ a b))
 			(defun greet (name) (concatenate 'string "hello " name))
 			(defun shout (s) (length s))
+			(defun nap (ms) (let ((start (clock:now))) (clock:wait-for (* ms 1000000)) (- (clock:now) start)))
 			""";
 
 	// The consumer, bound from the same WIT: run(n) = (length (greet ...)), so the
 	// answer is 9 ("hello big") or 11 ("hello small") only if the scalar, the string
-	// argument and the string result all crossed.
+	// argument and the string result all crossed. doze(ms) is the provider's nap, a call
+	// that waits (:blocking t), so the export whose task waits with it is an async one.
 	private static final String CONSUMER = """
-			(rontolisp:wit-import "bench.wit" :interface "docs:bench/env" :package host)
+			(rontolisp:wit-import "bench.wit" :interface "docs:bench/env" :package host :blocking t)
 			(defun run (n) (host:shout "hey") (length (host:greet (if (> (host:add n n) 10) "big" "small"))))
+			(defun doze (ms) (host:nap ms))
 			(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
+			(rontolisp:wasm-export 'doze :params '(:u32) :returns :u64 :async t)
 			""";
 
 	@Test
-	void scalarsAndStringsCrossBothWaysBetweenTwoComposedComponents() throws Exception {
+	void scalarsStringsAndAWaitCrossBetweenTwoComposedComponents() throws Exception {
 		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
 			Path composed = compose(CONSUMER, level, "consumer-" + level.spelling());
 			assertThat(invoke(composed, "run(6)")).as("optimize=%s", level.spelling()).isEqualTo("9");
 			assertThat(invoke(composed, "run(3)")).as("optimize=%s", level.spelling()).isEqualTo("11");
+			// two tasks wait: the consumer's for the provider's, that one for the clock
+			assertThat(Long.parseLong(invoke(composed, "doze(20)"))).as("optimize=%s", level.spelling())
+				.isGreaterThanOrEqualTo(20_000_000L);
 		}
 	}
 
@@ -127,12 +152,15 @@ class NoGcWasmComponentImportE2eTest {
 		// a hand-written directive spells, so the two programs are the SAME bytes -- and
 		// the hand-written one composes against the provider just the same.
 		String handWritten = """
-				(defpackage host (:use cl) (:export add greet shout))
+				(defpackage host (:use cl) (:export add greet shout nap))
 				(rontolisp:wasm-import 'host:add :from "docs:bench/env" :as "add" :params '(:s32 :s32) :param-names '("a" "b") :returns :s32)
 				(rontolisp:wasm-import 'host:greet :from "docs:bench/env" :as "greet" :params '(:string) :param-names '("name") :returns :string)
 				(rontolisp:wasm-import 'host:shout :from "docs:bench/env" :as "shout" :params '(:string) :param-names '("s") :returns :void)
+				(rontolisp:wasm-import 'host:nap :from "docs:bench/env" :as "nap" :params '(:u32) :param-names '("ms") :returns :u64 :blocking t)
 				(defun run (n) (host:shout "hey") (length (host:greet (if (> (host:add n n) 10) "big" "small"))))
+				(defun doze (ms) (host:nap ms))
 				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
+				(rontolisp:wasm-export 'doze :params '(:u32) :returns :u64 :async t)
 				""";
 		byte[] fromWit = compileComponent(CompileFrontendAccess.noGcComponent(CONSUMER, this.tempDir.toString()),
 				OptimizeLevel.SIZE);
@@ -150,7 +178,7 @@ class NoGcWasmComponentImportE2eTest {
 		// fd_write shim sits beside the generated import shim: two tables, two fixups,
 		// one core. The output carries the printed string, then the invoked result.
 		String printing = """
-				(rontolisp:wit-import "bench.wit" :interface "docs:bench/env" :package host)
+				(rontolisp:wit-import "bench.wit" :interface "docs:bench/env" :package host :blocking t)
 				(defun run (n) (let ((g (host:greet "there"))) (print g) (+ (host:add n n) (length g))))
 				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
 				""";

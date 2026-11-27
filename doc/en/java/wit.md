@@ -334,7 +334,11 @@ With `--no-gc` too, a class of scalar values
 scalar backend, which runs its static initialization when it is instantiated. The counter
 above, its `indexOf` written as comparisons, is 2,040 bytes there and 12,988 without
 `--no-gc`. A world carrying a type other than `bool`, the integers, `f64` and `string` is
-refused there at its WIT line: the scalar backend has no value for a record or a list.
+refused there at its WIT line: the scalar backend has no value for a record or a list. An
+`async func` of those types is exported there as by any component. Such a class calls no
+`@WitImport` interface: the binding `ServiceLoader` answers is an object, which the scalar
+backend has none of, and the lookup is refused at its position, with or without
+`--component`.
 
 Under a JDK, on the interpreter and on the JVM the annotation does nothing: `vowelCount` is
 an ordinary static method, which a program or a test calls. A program with no `main` is
@@ -447,7 +451,7 @@ the types any other export takes: a record, a list, a variant or a `result` cros
 | --- | --- |
 | `--component` | lifted async: the call may wait where the method blocks, as in a `Thread.sleep` or a call of an imported `async func`. A plain `func` that blocks traps (`cannot block a synchronous task`) |
 | `--component --no-wasi` | lifted async too, but the component imports no clock: a method that sleeps traps |
-| `--no-gc --component` | refused at its WIT line ([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)) |
+| `--no-gc --component` | lifted async too, of `bool`, the integers, `f64` and `string` alone, as every export there. Nothing in the scalar subset waits: it has no thread to sleep in (`Thread.sleep` is refused there) and no object for a `@WitImport` binding |
 | a module (`-o out.wasm` alone, `--no-wasi`), `--native` | exported nowhere, as every export: a world is exported by a component |
 | a JDK, the interpreter, the JVM | the method, called as any other |
 
@@ -474,7 +478,8 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
   the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
   handles), a component everything, a `--no-wasi` module everything but `flags`. A member of any
   other type is refused at its WIT line where the program calls it, as `wit-import` refuses
-  it.
+  it. With `--no-gc`, a module or a component, no `@WitImport` interface is bound at all:
+  the lookup of its binding is refused, the scalar backend having no object.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
   inside a compound value an export answers (a record's field, a list's element) a
   negative `long` is the `u64` of its bits.
@@ -492,7 +497,9 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
 - A world's export carries no resource, `stream` or `future`; an `async func` export
-  is refused under `--no-gc`. Two exports of one label (a function of the world
+  takes the types any other export takes. Under `--no-gc --component` every export takes
+  `bool`, the integers, `f64` and `string` alone, an `async func` among them. Two
+  exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK
   writes (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call

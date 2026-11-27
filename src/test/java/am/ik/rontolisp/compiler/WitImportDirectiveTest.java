@@ -987,20 +987,29 @@ class WitImportDirectiveTest {
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageStartingWith(
 					"kv.wit:4: 'tags': the WIT type of parameter 'all' is not one --no-gc --component" + " can carry");
-		assertThatThrownBy(() -> lowerApi("  pull: async func(url: string) -> string;", Backend.WASM_NO_GC_COMPONENT))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageStartingWith("kv.wit:4: 'pull' is an async func, which --no-gc cannot bind");
 	}
 
 	@Test
-	void theNoGcBackendRefusesAnAsyncFuncAgainstTheWitFile() {
-		// :async t answers a (settled) future, and --no-gc has no value for one. The
-		// refusal names the WIT member and line, not the wasm-import the lowering would
-		// have produced.
-		assertThatThrownBy(() -> lowerApi("  pull: async func(url: string) -> string;", Backend.WASM_NO_GC))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageStartingWith("kv.wit:4: 'pull' is an async func, which --no-gc cannot bind")
-			.hasMessageContaining("no future value");
+	void theNoGcBackendBindsAnAsyncFuncOnlyAsACallThatWaits() {
+		// --no-gc has no value for the future an async func's binding answers, so the
+		// member binds under :blocking t alone, as a call that waits and answers its
+		// value: the plain import of a core module (the GC module's lowering, which its
+		// host answers at once or suspends), and in a component the import its wrap
+		// types `async func` and lowers synchronously. Without the option the refusal
+		// names the WIT member and line, not the wasm-import the lowering would have
+		// produced.
+		String body = "  pull: async func(url: string) -> string;";
+		Directive blocking = new Directive(WIT, API, null, null, FieldStyle.CAMEL, null, false, false, true, List.of());
+		assertThat(printed(lower(iface(body), Backend.WASM_NO_GC, blocking)))
+			.isEqualTo(printed(lower(iface(body), Backend.WASM_GC, blocking)));
+		assertThat(printed(lower(iface(body), Backend.WASM_NO_GC_COMPONENT, blocking)))
+			.isEqualTo("(RONTOLISP:WASM-IMPORT 'PULL :FROM \"example:app/api@0.1.0\" :AS \"pull\" :PARAMS"
+					+ " '(:STRING) :PARAM-NAMES '(\"url\") :RETURNS :STRING :BLOCKING T)");
+		for (Backend backend : List.of(Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+			assertThatThrownBy(() -> lowerApi(body, backend)).isInstanceOf(UnsupportedOperationException.class)
+				.hasMessage("kv.wit:4: 'pull' is an async func, which --no-gc binds under :blocking t only, as a call"
+						+ " that waits and answers its value (the scalar backend has no future value)");
+		}
 	}
 
 	@Test

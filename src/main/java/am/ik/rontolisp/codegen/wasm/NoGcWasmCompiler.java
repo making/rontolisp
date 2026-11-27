@@ -392,7 +392,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * non-component output (a printing program's single {@code fd_write} import is
 	 * satisfied by the fixed print micro-adapter modules the wrap wires in) -- but it
 	 * narrows the surface: export names must match the component-model {@code label}
-	 * grammar and {@code :async} is rejected.
+	 * grammar, and an import whose call waits ({@code :blocking t}) is reached from
+	 * {@code :async t} exports only.
 	 */
 	private final boolean component;
 
@@ -489,8 +490,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		/**
 		 * Selects {@code --no-gc --component}. When {@code true}, the module is wrapped
 		 * as a reactor-style WASM component whose scalar exports are typed
-		 * component-model exports; export names must be lower-kebab-case and
-		 * {@code :async} is rejected.
+		 * component-model exports; export names must be lower-kebab-case.
 		 * @param component whether to wrap the module as a component
 		 * @return this builder
 		 */
@@ -810,6 +810,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		this.usedGlobals = new LinkedHashSet<>();
 		this.firstCalls = new HashMap<>();
+		Map<String, Map<String, @Nullable LispCons>> calls = new HashMap<>();
 		List<String> reachable = new ArrayList<>();
 		while (!work.isEmpty()) {
 			String name = work.poll();
@@ -830,7 +831,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				this.callSites = new HashMap<>();
 				this.locatedForm = null;
 				collectCalls(progn(defun.body()), new HashSet<>(defun.params()), defuns, callees, name, false);
+				Map<String, @Nullable LispCons> sites = new LinkedHashMap<>();
+				calls.put(name, sites);
 				for (String callee : callees) {
+					sites.put(callee, this.callSites.get(callee));
 					if (!defuns.containsKey(callee) && !importDecls.containsKey(callee)
 							&& !refusedDefuns.containsKey(callee)) {
 						throw new UnsupportedOperationException(
@@ -1013,6 +1017,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// program takes the print-FREE shape: one core module, no imports, SYNC
 			// lifts -- and the nogc (empty-world) WIT.
 			final boolean printAdapter = mem.printUsed() && !this.noWasi;
+			refuseWaitsOutsideAnAsyncTask(exportDecls, importDecls, calls, printAdapter);
 			this.componentWit = WitEmitter.emitNoGc(
 					printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls, hostImports);
 			return NoGcWasmComponentBuilder.build(module, exportDecls, printAdapter, hostImports);
@@ -1036,10 +1041,91 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	}
 
 	/**
+	 * Refuses a call that waits where no task may: an import that is an
+	 * {@code async func} ({@code :blocking t}) lowers synchronously, so its caller's task
+	 * waits in the host until the function returns, which the component model lets the
+	 * task of an async-typed export do and no other -- an export that is none, and the
+	 * top level, which the start function runs in no task at all, trap there (measured on
+	 * wasmtime 51: "cannot block a synchronous task before returning", once the function
+	 * does wait). This backend has no first-class function, so the calls are all there is
+	 * and the refusal names the path.
+	 * @param exportDecls the export directives
+	 * @param importDecls every import declaration, by Lisp name
+	 * @param calls each reached function's callees with the first call of each
+	 * @param printAdapter whether the program prints through the micro-adapter, whose
+	 * exports are all async-typed
+	 */
+	private static void refuseWaitsOutsideAnAsyncTask(List<WasmExportCompiler.Decl> exportDecls,
+			Map<String, WasmImportCompiler.Decl> importDecls, Map<String, Map<String, @Nullable LispCons>> calls,
+			boolean printAdapter) {
+		if (importDecls.values().stream().noneMatch(WasmImportCompiler.Decl::blocking)) {
+			return;
+		}
+		for (WasmExportCompiler.Decl decl : exportDecls) {
+			if (decl.async() || printAdapter) {
+				continue;
+			}
+			List<String> path = pathToAWait(decl.name(), importDecls, calls);
+			if (path != null) {
+				throw waitRefusal("export '" + decl.exportName() + "' reaches the async func '" + path.getLast() + "' ("
+						+ String.join(" -> ", path) + "), whose call waits, and only the task of an async func"
+						+ " may wait: export it :async t (an `async func` in a WIT world)", path, calls);
+			}
+		}
+		List<String> path = pathToAWait(NoGcTopLevel.START, importDecls, calls);
+		if (path != null) {
+			throw waitRefusal("the top level reaches the async func '" + path.getLast() + "' ("
+					+ String.join(" -> ", path.subList(1, path.size()))
+					+ "), whose call waits, and a component's top level runs in no task: call it from an :async t"
+					+ " export", path, calls);
+		}
+	}
+
+	// The shortest chain of calls from a function to an import whose call waits, both
+	// ends included, or null where it reaches none.
+	private static @Nullable List<String> pathToAWait(String from, Map<String, WasmImportCompiler.Decl> importDecls,
+			Map<String, Map<String, @Nullable LispCons>> calls) {
+		Map<String, String> cameFrom = new HashMap<>();
+		Deque<String> work = new ArrayDeque<>(List.of(from));
+		while (!work.isEmpty()) {
+			String name = work.poll();
+			WasmImportCompiler.Decl imported = importDecls.get(name);
+			if (imported != null && imported.blocking()) {
+				List<String> path = new ArrayList<>();
+				for (String at = name; at != null; at = cameFrom.get(at)) {
+					path.addFirst(at);
+				}
+				return path;
+			}
+			for (String callee : calls.getOrDefault(name, Map.of()).keySet()) {
+				if (!callee.equals(from) && cameFrom.putIfAbsent(callee, name) == null) {
+					work.add(callee);
+				}
+			}
+		}
+		return null;
+	}
+
+	// The refusal, noted at each call of the path a source file locates, the import's
+	// own first.
+	private static UnsupportedOperationException waitRefusal(String message, List<String> path,
+			Map<String, Map<String, @Nullable LispCons>> calls) {
+		UnsupportedOperationException refusal = new UnsupportedOperationException(message);
+		for (int i = path.size() - 1; i > 0; i--) {
+			LispCons call = Objects.requireNonNull(calls.get(path.get(i - 1))).get(path.get(i));
+			if (call != null) {
+				SourceProvenance.noteFailure(call, refusal);
+			}
+		}
+		return refusal;
+	}
+
+	/**
 	 * Validates an export directive against the {@code --component} constraints: a
 	 * lower-kebab-case export name (the component-model {@code label} grammar).
 	 * {@code :string} lifts through the canonical string ABI; {@code :s-expr} is already
 	 * rejected for every {@code --no-gc} output by {@link #validateScalarTypes}.
+	 * {@code :async t} is the export's function type, which the wrap lifts against.
 	 * @param decl the parsed export directive
 	 */
 	private static void validateComponentExport(WasmExportCompiler.Decl decl) {
@@ -1047,16 +1133,6 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
 					+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
-		}
-		// :async is the GC component's opt-in for I/O inside an export; here it is not a
-		// user-level knob: a printing program's exports become async lifts automatically
-		// (the print bridge's blocking park needs an async-typed task) and every other
-		// I/O op is a compile error, so an explicit :async request is a clear error
-		// rather than a silently-ignored option.
-		if (decl.async()) {
-			throw new UnsupportedOperationException("rontolisp:wasm-export :async is not supported with --no-gc"
-					+ " --component for '" + decl.name() + "' (a printing program's exports are lifted async"
-					+ " automatically; every other I/O op is rejected at compile time)");
 		}
 	}
 
@@ -1081,8 +1157,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (decl.async()) {
 			throw new UnsupportedOperationException("rontolisp:wasm-import :async is not supported with --no-gc for '"
 					+ decl.name() + "': a started-equals-settled future is still a future, and this backend has no"
-					+ " value to represent one (the whole async surface is rejected here). Drop :async t -- the host"
-					+ " call is synchronous");
+					+ " value to represent one (the whole async surface is rejected here). Drop :async t -- the call"
+					+ " answers the function's value; :blocking t declares a function the call waits for (an `async"
+					+ " func` of a component)");
 		}
 	}
 
@@ -1093,7 +1170,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * WIT interface id) and its field and parameter names are labels of the instance's
 	 * type. The types themselves need no further check -- every designator this backend
 	 * takes has a component value type -- and {@code :async} is refused after this like
-	 * everywhere else on {@code --no-gc}.
+	 * everywhere else on {@code --no-gc}; {@code :blocking t} is the function's type.
 	 * @param decl the parsed declaration
 	 */
 	private static void validateComponentImport(WasmImportCompiler.Decl decl) {
