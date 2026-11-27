@@ -311,6 +311,90 @@ programs:
               }
           }
 
+          static Map<String, List<String>> answer = Map.of();
+
+          static RuntimeException broken;
+
+          static IOException failing;
+
+          static IOException putFailing;
+
+          // a cookie handler of the program's own: what the client asks it and hands it
+          static class Recording extends java.net.CookieHandler {
+              public Map<String, List<String>> get(URI uri, Map<String, List<String>> headers) throws IOException {
+                  System.out.println("get " + local(uri) + " " + headers);
+                  if (broken != null) {
+                      throw broken;
+                  }
+                  if (failing != null) {
+                      throw failing;
+                  }
+                  return answer;
+              }
+
+              public void put(URI uri, Map<String, List<String>> headers) throws IOException {
+                  System.out.println("put " + local(uri) + " " + headers.get("set-cookie"));
+                  if (putFailing != null) {
+                      throw putFailing;
+                  }
+              }
+          }
+
+          static void cookies() throws IOException, InterruptedException {
+              System.out.println("== a-cookie-handler-is-asked-before-each-request-and-handed-each-reply");
+              try {
+                  HttpClient.newBuilder().cookieHandler(null);
+              }
+              catch (NullPointerException e) {
+                  System.out.println("null " + e.getClass().getName());
+              }
+              java.net.CookieManager manager = new java.net.CookieManager();
+              HttpClient kept = HttpClient.newBuilder().cookieHandler(manager).build();
+              System.out.println((kept.cookieHandler().get() == manager) + " " + CLIENT.cookieHandler());
+              System.out.println(kept.send(to("/headers").build(), HttpResponse.BodyHandlers.ofString()).body());
+              kept.send(to("/cookies").build(), HttpResponse.BodyHandlers.ofString());
+              System.out.println(manager.getCookieStore().getCookies() + " " + manager.getCookieStore().getURIs());
+              HttpResponse<String> sent = kept.send(to("/headers").header("Cookie", "own=1").build(),
+                      HttpResponse.BodyHandlers.ofString());
+              System.out.println(sent.body() + " " + sent.request().headers().map());
+              HttpClient recorded = HttpClient.newBuilder()
+                  .cookieHandler(new Recording())
+                  .followRedirects(HttpClient.Redirect.NORMAL)
+                  .build();
+              answer = Map.of("Cookie", List.of("x=1", "y=2"), "Cookie2", List.of("$Version=1"), "X-Other", List.of("o"));
+              System.out.println(text(recorded, to("/headers?q#frag").header("X-Mine", "m").build()));
+              answer = Map.of("cookie", List.of("u=1"), "COOKIE2", List.of("c=3", "d=4"));
+              System.out.println(text(recorded, to("/headers").header("cookie", "low").header("Cookie", "own").build()));
+              System.out.println(text(recorded, to("/headers").header("Cookie2", "own2").build()));
+              answer = Map.of("Cookie", List.of());
+              System.out.println(text(recorded, to("/headers").header("Cookie", "own=1").header("Cookie", "own=2").build()));
+              answer = Map.of("Cookie", List.of(""));
+              System.out.println(text(recorded, to("/headers").build()));
+              answer = Map.of();
+              System.out.println(text(recorded, to("/redirect").build()));
+              System.out.println(text(recorded, to("/cookies").build()));
+              // what the handler throws is the cause of what send throws
+              for (int i = 0; i < 3; i++) {
+                  failing = i == 0 ? new IOException("get failed") : null;
+                  broken = i == 1 ? new IllegalStateException("get broke") : null;
+                  putFailing = i == 2 ? new IOException("put failed") : null;
+                  try {
+                      recorded.send(to("/hello").build(), HttpResponse.BodyHandlers.ofString());
+                  }
+                  catch (IOException e) {
+                      System.out.println(e + " / " + e.getCause() + " " + (e.getCause() == (i == 1 ? broken : i == 0 ? failing : putFailing)));
+                  }
+              }
+              failing = null;
+              broken = null;
+              putFailing = null;
+          }
+
+          static String text(HttpClient client, HttpRequest request) throws IOException, InterruptedException {
+              HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+              return response.statusCode() + " [" + response.body() + "]";
+          }
+
           static void limits() throws IOException, InterruptedException {
               System.out.println("== a-request-and-a-connection-have-time-limits");
               HttpRequest slow = to("/slow").timeout(Duration.ofMillis(100)).build();
@@ -349,6 +433,7 @@ programs:
               redirects();
               uris();
               failures();
+              cookies();
               limits();
           }
       }
@@ -472,6 +557,42 @@ programs:
       HTTP_1_1 HTTP_2 Optional.empty false
       22 hello-from-fetch
       true java.io.IOException: closed
+      == a-cookie-handler-is-asked-before-each-request-and-handed-each-reply
+      null java.lang.NullPointerException
+      true Optional.empty
+      {}
+      [a=1, b=2] [http://127.0.0.1]
+      {cookie=[a=1; b=2; own=1]} {Cookie=[own=1]}
+      get /headers?q#frag {X-Mine=[m]}
+      put /headers?q#frag null
+      200 [{cookie=[x=1; y=2], cookie2=[$Version=1], x-mine=[m]}]
+      get /headers {cookie=[low, own]}
+      put /headers null
+      200 [{cookie=[u=1; low; own], cookie2=[c=3, d=4]}]
+      get /headers {Cookie2=[own2]}
+      put /headers null
+      200 [{cookie=[u=1], cookie2=[own2]}]
+      get /headers {Cookie=[own=1, own=2]}
+      put /headers null
+      200 [{cookie=[own=1; own=2]}]
+      get /headers {}
+      put /headers null
+      200 [{cookie=[]}]
+      get /redirect {}
+      put /redirect null
+      get /hello {}
+      put /hello null
+      200 [hello-from-fetch]
+      get /cookies {}
+      put /cookies [a=1, b=2]
+      200 [two]
+      get /hello {}
+      java.io.IOException: get failed / java.io.IOException: get failed true
+      get /hello {}
+      java.io.IOException: get broke / java.lang.IllegalStateException: get broke true
+      get /hello {}
+      put /hello null
+      java.io.IOException: put failed / java.io.IOException: put failed true
       == a-request-and-a-connection-have-time-limits
       Optional[PT0.1S] Optional.empty Optional.empty
       java.net.http.HttpTimeoutException: request timed out / null false
@@ -558,6 +679,32 @@ programs:
               System.out.println(CLIENT.sendAsync(nowhere, HttpResponse.BodyHandlers.ofString())
                   .handle((response, thrown) -> response + " " + (thrown == null ? null : thrown.getClass().getName()))
                   .join());
+              // what a cookie handler throws is what the future fails with
+              for (int i = 0; i < 3; i++) {
+                  int n = i;
+                  HttpClient failing = HttpClient.newBuilder().cookieHandler(new java.net.CookieHandler() {
+                      public java.util.Map<String, List<String>> get(URI uri, java.util.Map<String, List<String>> headers)
+                              throws IOException {
+                          if (n == 0) {
+                              throw new IOException("get failed");
+                          }
+                          if (n == 1) {
+                              throw new IllegalStateException("get broke");
+                          }
+                          return java.util.Map.of();
+                      }
+
+                      public void put(URI uri, java.util.Map<String, List<String>> headers) throws IOException {
+                          throw new IOException("put failed");
+                      }
+                  }).build();
+                  try {
+                      failing.sendAsync(to("/hello"), HttpResponse.BodyHandlers.ofString()).get();
+                  }
+                  catch (ExecutionException e) {
+                      System.out.println(e + " / " + e.getCause() + " / " + e.getCause().getCause());
+                  }
+              }
           }
 
           static void overlapping() throws Exception {
@@ -622,6 +769,9 @@ programs:
       java.util.concurrent.CompletionException: java.net.ConnectException / java.net.ConnectException
       java.util.concurrent.ExecutionException: java.net.ConnectException / java.net.ConnectException
       null java.util.concurrent.CompletionException
+      java.util.concurrent.ExecutionException: java.io.IOException: get failed / java.io.IOException: get failed / null
+      java.util.concurrent.ExecutionException: java.lang.IllegalStateException: get broke / java.lang.IllegalStateException: get broke / null
+      java.util.concurrent.ExecutionException: java.io.IOException: put failed / java.io.IOException: put failed / null
       == a-request-is-on-its-way-when-send-async-returns
       released
       first line

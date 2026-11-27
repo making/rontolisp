@@ -859,8 +859,10 @@ a URI that is no absolute `http` or `https` one. `followRedirects(Redirect.NORMA
 `ConnectException`. `HttpRequest.Builder.timeout` limits how long a reply may take to start
 and `HttpClient.Builder.connectTimeout` how long a connection may take, each a
 `java.time.Duration`: a request that passes one is an `HttpTimeoutException` or an
-`HttpConnectTimeoutException`. What the transports cannot give and what is not there:
-[Deviations](deviations.md#the-http-client).
+`HttpConnectTimeoutException`. `HttpClient.Builder.cookieHandler` gives a client a
+`java.net.CookieManager` or a handler of the program's own: the client sends the cookies it
+answers and hands it those of each reply. What the transports cannot give and what is not
+there: [Deviations](deviations.md#the-http-client).
 
 `com.sun.net.httpserver` has the server: an `HttpServer`, its contexts, and an `HttpHandler`
 answering an `HttpExchange`. It serves through the transport of the target, so one source

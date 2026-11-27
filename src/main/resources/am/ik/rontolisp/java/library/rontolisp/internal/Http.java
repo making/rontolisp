@@ -7,7 +7,8 @@
 // answers the exchange with the request on its way (timed0 under fetch's two
 // timeouts), reply0 waits for all of its reply.
 // What a JDK's client was seen to do with a request is written here over the two: the
-// refusals of a builder, the redirects, the body a handler makes.
+// refusals of a builder, the redirects, the body a handler makes, what it asks a cookie
+// handler and what it sends of the answer.
 package rontolisp.internal;
 
 import java.io.ByteArrayInputStream;
@@ -15,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.net.ConnectException;
+import java.net.CookieHandler;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
@@ -203,6 +205,122 @@ public final class Http {
     }
 
     private static Wire wire = new Wire();
+
+    /**
+     * The fields a client sends of a request and what it does with those of a reply: a
+     * client given no cookie handler sends the request's own and keeps nothing, so a
+     * program that gives none makes no jar but this one.
+     */
+    private static class Jar {
+
+        static final Jar NONE = new Jar();
+
+        Optional<CookieHandler> handler() {
+            return Optional.empty();
+        }
+
+        /** The request's fields as name, value, name, value. */
+        ArrayList<String> fields(HttpRequest request) {
+            ArrayList<String> flat = new ArrayList<>();
+            for (Map.Entry<String, List<String>> field : request.headers().map().entrySet()) {
+                for (String value : field.getValue()) {
+                    flat.add(field.getKey());
+                    flat.add(value);
+                }
+            }
+            return flat;
+        }
+
+        void keep(URI uri, HttpHeaders headers) {
+        }
+    }
+
+    /**
+     * A cookie handler's jar, as a JDK 25's client was seen to use one: asked with the
+     * request's URI and fields before each request a send makes, redirects too, and
+     * handed each reply's URI and fields. Of its answer the Cookie values, under any case,
+     * go ahead of the request's own in one field joined by "; ", the Cookie2 values each
+     * a field where the request has none of its own; the other names are not sent.
+     */
+    private static final class HandledJar extends Jar {
+
+        private final CookieHandler handler;
+
+        HandledJar(CookieHandler handler) {
+            this.handler = handler;
+        }
+
+        Optional<CookieHandler> handler() {
+            return Optional.of(handler);
+        }
+
+        ArrayList<String> fields(HttpRequest request) {
+            HttpHeaders own = request.headers();
+            ArrayList<String> cookies = new ArrayList<>();
+            ArrayList<String> cookies2 = new ArrayList<>();
+            try {
+                Map<String, List<String>> answer = handler.get(request.uri(), own.map());
+                for (Map.Entry<String, List<String>> field : answer.entrySet()) {
+                    if ("Cookie".equalsIgnoreCase(field.getKey())) {
+                        cookies.addAll(field.getValue());
+                    }
+                    else if ("Cookie2".equalsIgnoreCase(field.getKey())) {
+                        cookies2.addAll(field.getValue());
+                    }
+                }
+            }
+            catch (IOException | RuntimeException failed) {
+                throw new Refusal(failed);
+            }
+            ArrayList<String> flat = new ArrayList<>();
+            for (Map.Entry<String, List<String>> field : own.map().entrySet()) {
+                if (field.getKey().equalsIgnoreCase("Cookie")) {
+                    cookies.addAll(field.getValue());
+                }
+                else {
+                    for (String value : field.getValue()) {
+                        flat.add(field.getKey());
+                        flat.add(value);
+                    }
+                }
+            }
+            if (!cookies.isEmpty()) {
+                flat.add("Cookie");
+                flat.add(String.join("; ", cookies));
+            }
+            if (own.firstValue("Cookie2").isEmpty()) {
+                for (String value : cookies2) {
+                    flat.add("Cookie2");
+                    flat.add(value);
+                }
+            }
+            return flat;
+        }
+
+        void keep(URI uri, HttpHeaders headers) {
+            try {
+                handler.put(uri, headers.map());
+            }
+            catch (IOException | RuntimeException failed) {
+                throw new Refusal(failed);
+            }
+        }
+    }
+
+    /**
+     * What a cookie handler threw: a blocking send throws an IOException of its message
+     * holding it, the future of sendAsync fails with it, as a JDK 25's do.
+     */
+    private static final class Refusal extends RuntimeException {
+
+        Refusal(Throwable failed) {
+            super(failed);
+        }
+
+        IOException thrown() {
+            return new IOException(getCause().getMessage(), getCause());
+        }
+    }
 
     /**
      * A time limit a builder is given. From here on the program's requests leave by the
@@ -609,6 +727,8 @@ public final class Http {
 
         private Duration connect;
 
+        private Jar jar = Jar.NONE;
+
         public ClientBuilder connectTimeout(Duration duration) {
             this.connect = limit(duration);
             return this;
@@ -638,8 +758,16 @@ public final class Http {
             return this;
         }
 
+        public ClientBuilder cookieHandler(CookieHandler cookieHandler) {
+            if (cookieHandler == null) {
+                throw new NullPointerException();
+            }
+            this.jar = new HandledJar(cookieHandler);
+            return this;
+        }
+
         public HttpClient build() {
-            return new Client(redirects, version, executor, connect);
+            return new Client(redirects, version, executor, connect, jar);
         }
     }
 
@@ -653,13 +781,20 @@ public final class Http {
 
         private final Duration connect;
 
+        private final Jar jar;
+
         private volatile boolean closed;
 
-        Client(Redirect redirects, Version version, Executor executor, Duration connect) {
+        Client(Redirect redirects, Version version, Executor executor, Duration connect, Jar jar) {
             this.redirects = redirects;
             this.version = version;
             this.executor = executor;
             this.connect = connect;
+            this.jar = jar;
+        }
+
+        public Optional<CookieHandler> cookieHandler() {
+            return jar.handler();
         }
 
         public Optional<Duration> connectTimeout() {
@@ -700,6 +835,9 @@ public final class Http {
             catch (IOException failed) {
                 throw wire.thrown(failed);
             }
+            catch (Refusal refused) {
+                throw refused.thrown();
+            }
         }
 
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(HttpRequest request,
@@ -718,12 +856,18 @@ public final class Http {
             catch (IOException failed) {
                 return CompletableFuture.failedFuture(failed);
             }
+            catch (Refusal refused) {
+                return CompletableFuture.failedFuture(refused.getCause());
+            }
             Supplier<HttpResponse<T>> rest = () -> {
                 try {
                     return answered(request, responseBodyHandler, exchange);
                 }
                 catch (IOException failed) {
                     throw new CompletionException(failed);
+                }
+                catch (Refusal refused) {
+                    throw new CompletionException(refused.getCause());
                 }
             };
             return executor == null ? CompletableFuture.supplyAsync(rest) : CompletableFuture.supplyAsync(rest, executor);
@@ -742,13 +886,7 @@ public final class Http {
                 throw new UnsupportedOperationException(
                         "expectContinue(true) is not supported by the experimental Java subset");
             }
-            ArrayList<String> flat = new ArrayList<>();
-            for (Map.Entry<String, List<String>> field : request.headers().map().entrySet()) {
-                for (String value : field.getValue()) {
-                    flat.add(field.getKey());
-                    flat.add(value);
-                }
-            }
+            ArrayList<String> flat = jar.fields(request);
             byte[] octets = null;
             Optional<HttpRequest.BodyPublisher> publisher = request.bodyPublisher();
             if (publisher.isPresent()) {
@@ -792,6 +930,7 @@ public final class Http {
                     values.add(flat[i + 1]);
                 }
                 HttpHeaders headers = HttpHeaders.of(fields, (String name, String value) -> true);
+                jar.keep(current.uri(), headers);
                 HttpRequest next = hops < 4 ? redirected(current, status, headers) : null;
                 if (next == null) {
                     T body = read(handler.apply(new Info(status, headers)), octets0(reply));

@@ -538,6 +538,11 @@ own" is a number of our own, not a JDK's.
   (`Scan.java`) reads third-party class files as data and copies nothing.
 - **k69 `java.net.URL`, a resource's URL, the loaders above the program's**:
   `URL.hashCode` our own.
+- **m78 `java.net`'s cookies and a client's cookie handler**: RFC 2965 3.3.2 for the
+  embedded dot; the date an Expires is read as, the version a header is, the port list,
+  the domain matching and every refusal's words from JDK 25's answers. The in-memory
+  store's name is what `getClass()` answered; its index of the cookies, and the order of
+  its answers, are ours (`deviations.md`). The epoch day of a date is our own arithmetic.
 - **k29 Unicode normalization** (`eval/unicode-normalization.lisp`): written from Unicode
   Standard Annex #15 and the Unicode Standard's sections 3.11 (decomposition, canonical
   ordering, canonical composition) and 3.12 (Hangul by arithmetic); nobody opened OpenJDK's
