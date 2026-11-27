@@ -30,18 +30,28 @@ public class ThrowableTypeAssert<T extends Throwable> {
     @SuppressWarnings("unchecked")
     public ThrowableAssertAlternative<T> isThrownBy(ThrowingCallable throwingCallable) {
         Throwable thrown = ThrowableAssert.catchThrowable(throwingCallable);
-        String prefix = description == null ? "" : "[" + description + "] ";
-        if (thrown == null) {
-            throw new AssertionError(prefix + "\nExpecting code to raise a throwable.");
-        }
-        if (!expectedThrowableType.isInstance(thrown)) {
-            throw new AssertionError(prefix + "\nExpecting actual throwable to be an instance of:\n  "
-                    + expectedThrowableType.getName() + "\nbut was:\n  " + Shown.thrown(thrown).replace("\n", "\n  "));
-        }
-        ThrowableAssertAlternative<T> checked = new ThrowableAssertAlternative<>((T) thrown);
+        checkThrowableType(thrown);
+        ThrowableAssertAlternative<T> checked = buildThrowableTypeAssert((T) thrown);
         if (description != null) {
             checked.as(description);
         }
         return checked;
+    }
+
+    // What the code threw is of the class expected.
+    protected void checkThrowableType(Throwable throwable) {
+        String prefix = description == null ? "" : "[" + description + "] ";
+        if (throwable == null) {
+            throw new AssertionError(prefix + "\nExpecting code to raise a throwable.");
+        }
+        if (!expectedThrowableType.isInstance(throwable)) {
+            throw new AssertionError(prefix + "\nExpecting actual throwable to be an instance of:\n  "
+                    + expectedThrowableType.getName() + "\nbut was:\n  " + Shown.thrown(throwable).replace("\n", "\n  "));
+        }
+    }
+
+    // The assertion of what the code threw.
+    protected ThrowableAssertAlternative<T> buildThrowableTypeAssert(T throwable) {
+        return new ThrowableAssertAlternative<>(throwable);
     }
 }

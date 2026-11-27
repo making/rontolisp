@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of a completable future: how it completed, and with what.
 public abstract class AbstractCompletableFutureAssert<SELF extends AbstractCompletableFutureAssert<SELF, RESULT>, RESULT>
@@ -108,12 +109,14 @@ public abstract class AbstractCompletableFutureAssert<SELF extends AbstractCompl
         return myself;
     }
 
+    @Uncollected
     public ObjectAssert<RESULT> succeedsWithin(Duration timeout) {
         isNotNull();
         return carried(new ObjectAssert<>(AbstractFutureAssert.within(this, actual, timeout.toNanos(), TimeUnit.NANOSECONDS,
                 Shown.of(timeout))));
     }
 
+    @Uncollected
     public ObjectAssert<RESULT> succeedsWithin(long timeout, TimeUnit unit) {
         isNotNull();
         return carried(new ObjectAssert<>(AbstractFutureAssert.within(this, actual, timeout, unit,

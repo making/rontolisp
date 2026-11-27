@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of an optional value.
 public class OptionalAssert<VALUE> extends AbstractAssert<OptionalAssert<VALUE>, Optional<VALUE>> {
@@ -62,9 +63,10 @@ public class OptionalAssert<VALUE> extends AbstractAssert<OptionalAssert<VALUE>,
         return myself;
     }
 
+    @Uncollected
     public ObjectAssert<VALUE> get() {
         isPresent();
-        return new ObjectAssert<>(actual.get());
+        return carried(new ObjectAssert<>(actual.get()));
     }
 
     @Override

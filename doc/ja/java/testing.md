@@ -132,7 +132,7 @@ $T -o cart-tests-comp.wasm --component && \
 
 | アノテーション | 実行されるもの |
 | --- | --- |
-| `@Test` | `@TempDir` と `TestInfo` 以外のパラメータのないメソッド |
+| `@Test` | `@TempDir`、`TestInfo`、および AssertJ のエクステンションが与える[ソフトアサーション](#soft-assertions)以外のパラメータのないメソッド |
 | `@RepeatedTest` | メソッドを `value` 回実行します。各回には `RepetitionInfo` を与え、`name` (`{displayName}`、`{currentRepetition}`、`{totalRepetitions}`) で名前を付けます。失敗が `failureThreshold` 回に達すると残りはスキップします。JUnit と同じく、スキップする回にもインスタンスは作ります。`value` が正でない、しきい値が範囲外、名前が空白のときはテストのエラーです |
 | `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (`classes` 以外の全要素)、`@CsvSource` (`value`、`textBlock`、`delimiter`、`delimiterString`、`quoteCharacter`、`emptyValue`、`nullValues`、`ignoreLeadingAndTrailingWhitespace`)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッドか、`@TestInstance(PER_CLASS)` なら共有インスタンスのメソッド、または名前を省いてテストと同名のもの。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@FieldSource` (文字列リテラルで名前を書いたそのクラスのフィールドか、名前を省いてテストと同名のもの。static か、`@TestInstance(PER_CLASS)` なら共有インスタンスのもの。値は `Iterable`、配列、またはストリームかそのどちらかを返す `Supplier`)、`@EnumSource` (`value`、`names`、`mode`、`from`、`to`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。引数は JUnit と同じように変換します。文字列はプリミティブ型とそのボックス (数値の `_` は除く)、enum、JUnit が変換する JDK の型 (`File`、`Path`、`URI`、`URL`、`UUID`、`BigDecimal`、`BigInteger`、`Charset`、言語タグによる `Locale`、`java.time` の型)、`String` を取る static ファクトリメソッドかコンストラクタを持つクラスに変換します。数値はプリミティブ型には拡大変換し、ボックスにはしません。JUnit が変換できない値は、JUnit と同じ文言でその実行のエラーになります |
 | `@TestFactory` | メソッドが作るテストを実行します。戻り値は `DynamicNode`、その配列、または `DynamicNode` の `Stream`・`Iterable`・`Iterator` です。`DynamicTest` はそれぞれ 1 つのテストとして数え、順番で名前を付け (`prices[2]`。`DynamicContainer` の中なら `prices[2][1]`)、表示名とともに報告します。`@BeforeEach` と `@AfterEach` は各テストの前後ではなく、ファクトリの前後で 1 回実行します。ストリームはテストの後で閉じます。テストを作る途中でファクトリやコンテナが投げた例外は、それ自身のエラーです。それまでに作られたテストは実行済みです |
@@ -147,6 +147,7 @@ $T -o cart-tests-comp.wasm --component && \
 | `@Disabled` | テストをスキップとして数えます。クラスなら、そのテストと `@Nested` クラスをそれぞれ数えます |
 | `@TempDir` | 型が `Path` か `File` のフィールドまたはパラメータ。それぞれに専用のディレクトリを `/tmp` に作ります。static フィールドのものはそのクラスのテスト全体の前後、ほかは各テストの前後で、終わると中身ごと削除します |
 | `@DisplayName` | テストに付けたものは、失敗したときにテスト名の後ろに書かれます。テストやクラスに付けたものは `TestInfo` の表示名になります |
+| `@ExtendWith` | クラスに付けた AssertJ の `SoftAssertionsExtension` だけを扱います。そのクラス、その下位クラス、その `@Nested` クラスの各テストに[ソフトアサーション](#soft-assertions)を与えます |
 
 同じソースを複数回書いたときは、JUnit と同じ順で行を与えます。同じ種類のソースをまとめて、
 そのうち最初のものを書いた位置で使います。`Named` の引数は、その中身を渡します。
@@ -179,7 +180,7 @@ default メソッドと、static の `@BeforeAll`・`@AfterAll`)。アノテー�
 
 | `assertThat` の対象 | 検査 |
 | --- | --- |
-| 任意の値 | `isEqualTo` (配列どうしは要素で比較)、`isNotEqualTo`、`isNull`、`isNotNull`、`isSameAs`、`isNotSameAs`、`isInstanceOf`、`isNotInstanceOf`、`isExactlyInstanceOf`、`isInstanceOfSatisfying`、`isIn`、`isNotIn` (値の並びか `Iterable`)、`hasToString`、`doesNotHaveToString`、`matches`、`satisfies`、`asInstanceOf`、および `as`、`describedAs`、`withFailMessage`、`overridingErrorMessage` |
+| 任意の値 | `isEqualTo` (配列どうしは要素で比較)、`isNotEqualTo`、`isNull`、`isNotNull`、`isSameAs`、`isNotSameAs`、`isInstanceOf`、`isNotInstanceOf`、`isExactlyInstanceOf`、`isInstanceOfSatisfying`、`isIn`、`isNotIn` (値の並びか `Iterable`)、`hasToString`、`doesNotHaveToString`、`matches`、`satisfies` (渡した要件をすべて実行し、失敗をまとめて投げます)、`asInstanceOf`、および `as`、`describedAs`、`withFailMessage`、`overridingErrorMessage` |
 | オブジェクト | 関数を取る `extracting` とプロパティかフィールドの名前を取る `extracting` (複数の名前ならリスト)、`hasFieldOrProperty`、`hasFieldOrPropertyWithValue`、`usingRecursiveComparison` (`Map`、`Iterable`、オブジェクトの配列、`Optional` にもあります) とその `isEqualTo`、`isNotEqualTo`、`ignoringFields`、`comparingOnlyFields`、`ignoringActualNullFields`、`ignoringExpectedNullFields`、`ignoringCollectionOrder`、`withStrictTypeChecking` |
 | プログラムの `Comparable` (列挙型を含む) | `isGreaterThan`、`isGreaterThanOrEqualTo`、`isLessThan`、`isLessThanOrEqualTo`、`isBetween`、`isStrictlyBetween`、`isEqualByComparingTo`、`isNotEqualByComparingTo` |
 | `String` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`isBlank`、`isNotBlank`、`hasSize` とその 4 つの比較、`contains`、`doesNotContain`、`containsIgnoringCase`、`containsSubsequence`、`startsWith`、`doesNotStartWith`、`endsWith`、`doesNotEndWith`、`isEqualToIgnoringCase`、`matches`、`doesNotMatch` |
@@ -208,6 +209,92 @@ default メソッドと、static の `@BeforeAll`・`@AfterAll`)。アノテー�
 コレクション・配列・マップ・`Optional` は中身で比べます。プログラムがメンバーを保持しない
 ライブラリのクラスをフィールドごとに比べようとすると拒否します。
 
+## ソフトアサーション
+
+`SoftAssertions`、`AutoCloseableSoftAssertions`、`SoftAssertions.assertSoftly` は、
+`Assertions` なら最初の失敗で投げるところを、失敗を集めて先へ進みます。
+
+```console
+$ cat src/test/java/shop/TotalsTest.java
+package shop;
+
+import org.assertj.core.api.SoftAssertions;
+import org.junit.jupiter.api.Test;
+
+class TotalsTest {
+
+    @Test
+    void everyCheckRuns() {
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(1200 + 2 * 450).isEqualTo(2000);
+        softly.assertThat("cup").startsWith("t").endsWith("p").hasSize(4);
+        softly.assertAll();
+    }
+
+}
+$ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 src/test/java/shop/TotalsTest.java
+Running shop.TotalsTest
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! -- in shop.TotalsTest
+shop.TotalsTest.everyCheckRuns <<< FAILURE!
+
+Multiple Failures (3 failures)
+-- failure 1 --
+expected: 2000
+ but was: 2100
+-- failure 2 --
+Expecting actual:
+  "cup"
+to start with:
+  "t"
+-- failure 3 --
+Expected size: 4 but was: 3 in:
+"cup"
+
+Results:
+
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+```
+
+プロバイダには、上の表の種類の `assertThat`、`assertThatThrownBy`、`assertThatCode`、
+`assertThatObject`、`assertThatExceptionOfType` と例外の種類ごとの同種のメソッド、`fail`、
+`shouldHaveThrown`、`failBecauseExceptionWasNotThrown`、`check`、`assertAlso`、
+`collectAssertionError`、`errorsCollected`、`assertionErrorsCollected`、`wasSuccess`、
+`succeeded`、`setAfterAssertionErrorCollected`、`addAfterAssertionErrorCollected`、
+`setDelegate`、`getDelegate`、`proxy`、`assertAll` があります。`assertAll` は、集めた失敗を
+AssertJ の `AssertJMultipleFailuresError` (`MultipleFailuresError` の下位クラス) にまとめて
+投げます。次の点は AssertJ と同じです。
+
+- 失敗した検査は失敗をプロバイダに渡し、メソッドチェーンは先へ進みます。検査が別の検査を
+  呼んだ場合、呼ばれた側は呼んだ側の一部です。アサーションクラスが AssertJ のものでも
+  プログラムのものでも同じです。
+- `softly.proxy(PersonAssert.class, Person.class, person)` は、プログラムのアサーション
+  クラスを、値を受け取るコンストラクタで作り、ソフトにします。`private` でも `final` でも
+  ないメソッドが検査になります。失敗した検査は、戻り値の型に合えばアサーション自身を、
+  合わなければ `null`、`0`、`false` を返します。
+- アサーションが返す別のアサーション (`extracting`、`asInstanceOf`、`first`、`cause`、
+  `usingRecursiveComparison` など) もソフトで、説明は元のアサーションのものを引き継ぎます。
+  プログラムのアサーションクラスのメソッドが返すアサーションはソフトになりません。
+- `AssertionError` でない例外はそのまま投げます。
+
+テストクラスに `@ExtendWith(SoftAssertionsExtension.class)` を付けると、各テストに
+ソフトアサーションを与えます。対象は、型がプロバイダのクラス (`SoftAssertions`、
+`AutoCloseableSoftAssertions`、それらの下位にあるプログラムのクラス) であるテストメソッドの
+パラメータと、`@InjectSoftAssertions` を付けたインスタンスフィールドです。どれも失敗を
+そのテストの 1 つのコレクタに渡します。テストが例外を投げずに終わると、`@AfterEach` の前に、
+集めた失敗をまとめて投げます。
+
+AssertJ との違いは次のとおりです。
+
+- AssertJ は、集めた各失敗のメッセージの末尾にテストのファイルと行
+  (`at CartTest.aLine(CartTest.java:19)`) を足します。サブセットは失敗の行を持たないので、
+  メッセージにこの行はありません。
+- 別のアサーションを返すメソッドが失敗すると (別の型の値への `asInstanceOf`、原因のない例外の
+  `cause`、`null` への `extracting`)、失敗をそのまま投げます。AssertJ も多くの場合そうしますが、
+  `extracting`、`map`、`Optional` の `get` では失敗を集めたうえで別の例外を投げます。`first`、
+  `last`、`element`、`singleElement` は、AssertJ と同じく失敗を集めて `null` を返します。
+- ソフトアサーションの検査は、それを作ったスレッドで行ってください。2 つのスレッドが同時に
+  行う検査は区別しません。
+
 ## ないもの
 
 JUnit のアノテーションのうちテストの実行が扱わないもの、扱うアノテーションの要素のうち読まない
@@ -221,13 +308,18 @@ error: src/test/java/shop/PrinterTest.java:13:5: the annotation org.junit.jupite
 ```
 
 ないものの例は次のとおりです。条件 (`@EnabledOnOs`、`@EnabledIf`)、`@TestTemplate`、
-エクステンション、別スレッドで実行する `@Timeout` (`threadMode = SEPARATE_THREAD`)、
+AssertJ の `SoftAssertionsExtension` 以外のエクステンションとメソッドに付けた
+`SoftAssertionsExtension`、テストの前後に実行するメソッドやコンストラクタに与える
+ソフトアサーション、`static` や `final` の `@InjectSoftAssertions` フィールド、
+別スレッドで実行する `@Timeout` (`threadMode = SEPARATE_THREAD`)、
 アノテーション型に付けた JUnit のアノテーション (合成アノテーション)、上の表にない要素 (`@ValueSource` の
 `classes`、`@TempDir` の `cleanup` と `factory`)、`Class` のパラメータに与える文字列、`@TempDir`
-でも `TestInfo` でもない `@Test` メソッドや `@TestFactory` メソッドのパラメータ、戻り値の型が
+でも `TestInfo` でもエクステンションのソフトアサーションでもない `@Test` メソッドや
+`@TestFactory` メソッドのパラメータ、戻り値の型が
 `DynamicNode` を示さない `@TestFactory` メソッド (`Object`、型引数のない `Stream`)、型が JUnit のものであるパラメータ化
 テストのパラメータ (`ArgumentsAccessor`、引数を表示名に含む `TestInfo`)、繰り返しでないテストの
-前後で与える `RepetitionInfo`。AssertJ では、ソフトアサーションと、上の表にない検査 (`Path` の
+前後で与える `RepetitionInfo`。AssertJ では、BDD のソフトアサーション (`BDDSoftAssertions`)、
+クラスを受け取る `SoftAssertionsProvider.assertSoftly`、上の表にない検査 (`Path` の
 `hasParent`、再帰比較の独自のコンパレータとイントロスペクション戦略、`ZonedDateTime`・`URI`・
 `BigDecimal` に固有の検査。これらの値は `Comparable` として扱います)。テストクラスのコンストラクタは 1 つで、
 パラメータは `TestInfo` と `@TempDir` のディレクトリにできます。テストクラスの中の `static` クラスは、ファイル直下のクラスとして

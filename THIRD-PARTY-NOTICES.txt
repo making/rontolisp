@@ -646,17 +646,23 @@ Files:
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLongAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractObjectAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractPathAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractSoftAssertions.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractStringAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractTemporalAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractThrowableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AfterAssertionErrorCollected.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AssertFactory.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AssertionErrorCollector.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/Assertions.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AutoCloseableSoftAssertions.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AutoCloseableSoftAssertionsProvider.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/BooleanAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ByteArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharacterAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ClassAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CompletableFutureAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DefaultAssertionErrorCollector.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DurationAssert.java
@@ -670,6 +676,7 @@ Files:
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntegerAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IterableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/Java6StandardSoftAssertionsProvider.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ListAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LocalDateAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LocalDateTimeAssert.java
@@ -683,12 +690,20 @@ Files:
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/OptionalAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/PathAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/RecursiveComparisonAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/SoftAssertions.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/SoftAssertionsProvider.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/SoftThrowableAssertAlternative.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/SoftThrowableTypeAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/StandardSoftAssertionsProvider.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/StringAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssertAlternative.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableTypeAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/junit/jupiter/InjectSoftAssertions.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/junit/jupiter/SoftAssertionsExtension.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/data/MapEntry.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/data/Offset.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/error/AssertJMultipleFailuresError.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/groups/Tuple.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/util/introspection/IntrospectionError.java
 Use: The part of AssertJ's assertions the Java subset has, which `rontolisp test` runs a Java

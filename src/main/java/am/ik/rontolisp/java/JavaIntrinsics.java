@@ -2393,6 +2393,12 @@ final class JavaIntrinsics {
 		// streams' package cannot name
 		natives.put("rontolisp.internal.Flow.listed(Object[])", (lowering, call) -> lowering
 			.library("java.util.ImmutableCollections", "listed", List.of(call.argument(0))));
+		// the collector of a soft assertion: a slot of AssertJ's AbstractAssert that only
+		// a program making soft assertions has
+		natives.put("rontolisp.internal.Soft.collector0(Object)",
+				(lowering, call) -> list(JavaLowering.COLLECTOR, call.argument(0)));
+		natives.put("rontolisp.internal.Soft.collect0(Object,Object)",
+				(lowering, call) -> call("setf", list(JavaLowering.COLLECTOR, call.argument(0)), call.argument(1)));
 		natives.put("rontolisp.internal.Support.copy(Object)",
 				(lowering, call) -> call("copy-structure", call.argument(0)));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));

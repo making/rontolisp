@@ -33905,6 +33905,1792 @@ standalone:
       Results:
 
       Tests run: 32, Failures: 0, Errors: 28, Skipped: 0
+  # AssertJ's soft assertions, in a program of its own: a program that makes one lowers
+  # every check of an assertion another way -- a failure of it is handed to a collector
+  # where the assertion has one --, which the programs above are not. `q/SoftTest.java`
+  # holds a chain going on past a failure, a check called by a check, what is collected
+  # and what `assertAll` says, an assertion another one answers, an assertion class of
+  # the program's made soft by `proxy`, requirements, and every kind of value;
+  # `q/SoftExtensionTest.java` what AssertJ's extension gives a test. AssertJ ends each
+  # collected failure's message with the test's file and line, which the runner has not:
+  # `SoftTest` prints its messages without those lines and the oracle leaves them out of
+  # a failed test's.
+  - name: soft-assertions-collect-what-fails-and-the-chain-goes-on
+    file: q/SoftTest.java
+    tests: [q.SoftTest, q.SoftExtensionTest]
+    status: 1
+    files:
+      q/SoftExtensionTest.java: |
+        package q;
+
+        import java.util.stream.Stream;
+
+        import org.assertj.core.api.AutoCloseableSoftAssertions;
+        import org.assertj.core.api.SoftAssertions;
+        import org.assertj.core.api.junit.jupiter.InjectSoftAssertions;
+        import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+        import org.junit.jupiter.api.AfterEach;
+        import org.junit.jupiter.api.BeforeEach;
+        import org.junit.jupiter.api.ClassOrderer;
+        import org.junit.jupiter.api.DynamicTest;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.RepeatedTest;
+        import org.junit.jupiter.api.RepetitionInfo;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestClassOrder;
+        import org.junit.jupiter.api.TestFactory;
+        import org.junit.jupiter.api.TestInstance;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.api.extension.ExtendWith;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.ValueSource;
+
+        import static org.assertj.core.api.Assertions.assertThat;
+
+        // What AssertJ's extension gives a test: soft assertions for its parameters and for its
+        // fields of @InjectSoftAssertions, all handing their failures to one collector of the
+        // test, and those failures thrown together where the test ends without throwing, before
+        // what runs after each test.
+        @ExtendWith(SoftAssertionsExtension.class)
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        @TestClassOrder(ClassOrderer.ClassName.class)
+        class SoftExtensionTest {
+
+            @InjectSoftAssertions
+            SoftAssertions field;
+
+            @InjectSoftAssertions
+            SoftAssertions second;
+
+            SoftAssertions plain;
+
+            @BeforeEach
+            void before() {
+                System.out.println("before: the fields are one " + (field == second) + ", the other field " + plain + ", collected "
+                        + field.errorsCollected().size());
+                field.assertThat("before").isEqualTo("b");
+            }
+
+            @AfterEach
+            void after() {
+                System.out.println("after: collected " + field.errorsCollected().size() + ", the last check "
+                        + (field.wasSuccess() ? "passed" : "failed"));
+            }
+
+            @Test
+            void a01aParameter(SoftAssertions softly) {
+                System.out.println(softly == field);
+                softly.assertThat(1).isEqualTo(2);
+                softly.assertThat("a").isEqualTo("b");
+            }
+
+            @Test
+            void a02aField() {
+                field.assertThat(1).isEqualTo(3);
+            }
+
+            @Test
+            void a03nothingMore(SoftAssertions softly) {
+                softly.assertThat(1).isEqualTo(1);
+            }
+
+            @Test
+            void a04theTestThrows(SoftAssertions softly) {
+                softly.assertThat(1).isEqualTo(4);
+                throw new IllegalStateException("thrown");
+            }
+
+            @Test
+            void a05anAssertionFails(SoftAssertions softly) {
+                softly.assertThat(1).isEqualTo(5);
+                assertThat(1).isEqualTo(55);
+            }
+
+            @Test
+            void a06twoParameters(SoftAssertions one, AutoCloseableSoftAssertions two) {
+                one.assertThat(1).isEqualTo(6);
+                two.assertThat(1).isEqualTo(66);
+            }
+
+            @ParameterizedTest
+            @ValueSource(ints = { 1, 2 })
+            void a07rows(int value, SoftAssertions softly) {
+                softly.assertThat(value).isEqualTo(1);
+            }
+
+            @Test
+            void a08assertedInTheTest(SoftAssertions softly) {
+                softly.assertThat(1).isEqualTo(8);
+                try {
+                    softly.assertAll();
+                }
+                catch (AssertionError all) {
+                    System.out.println("asserted");
+                }
+            }
+
+            @RepeatedTest(2)
+            void a09repeated(SoftAssertions softly, RepetitionInfo info) {
+                softly.assertThat(info.getCurrentRepetition()).isEqualTo(3);
+            }
+
+            @TestFactory
+            Stream<DynamicTest> a10aFactory(SoftAssertions softly) {
+                softly.assertThat(1).isEqualTo(10);
+                return Stream.of(DynamicTest.dynamicTest("made", () -> softly.assertThat(1).isEqualTo(11)));
+            }
+
+            static class Base {
+
+                @InjectSoftAssertions
+                SoftAssertions base;
+
+            }
+
+            @Nested
+            class AnInnerClass extends Base {
+
+                @InjectSoftAssertions
+                SoftAssertions inner;
+
+                @Test
+                void nested(SoftAssertions softly) {
+                    System.out.println((inner == field) + " " + (inner == base) + " " + (inner == softly));
+                    inner.assertThat(1).isEqualTo(12);
+                    softly.assertThat(1).isEqualTo(13);
+                }
+
+            }
+
+            @Nested
+            @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+            @TestMethodOrder(MethodOrderer.MethodName.class)
+            class OneInstance {
+
+                @InjectSoftAssertions
+                SoftAssertions shared;
+
+                SoftAssertions seen;
+
+                @Test
+                void a() {
+                    seen = shared;
+                    shared.assertThat(1).isEqualTo(14);
+                }
+
+                @Test
+                void b() {
+                    System.out.println("one instance: " + (seen == shared));
+                    shared.assertThat(1).isEqualTo(15);
+                }
+
+            }
+
+            @Nested
+            @TestMethodOrder(MethodOrderer.MethodName.class)
+            class WhatRunsAfter {
+
+                @AfterEach
+                void later() {
+                    field.assertThat(1).isEqualTo(16);
+                    throw new IllegalStateException("after");
+                }
+
+                @Test
+                void a() {
+                    field.assertThat(1).isEqualTo(17);
+                }
+
+                @Test
+                void b() {
+                }
+
+            }
+
+        }
+    source: |
+      package q;
+
+      import java.io.IOException;
+      import java.time.Duration;
+      import java.util.ArrayList;
+      import java.util.List;
+      import java.util.Map;
+      import java.util.Optional;
+      import java.util.concurrent.CompletableFuture;
+      import java.util.function.Consumer;
+
+      import org.assertj.core.api.AbstractAssert;
+      import org.assertj.core.api.AbstractSoftAssertions;
+      import org.assertj.core.api.AbstractStringAssert;
+      import org.assertj.core.api.AutoCloseableSoftAssertions;
+      import org.assertj.core.api.SoftAssertions;
+      import org.assertj.core.api.StringAssert;
+      import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+      import org.junit.jupiter.api.MethodOrderer;
+      import org.junit.jupiter.api.Test;
+      import org.junit.jupiter.api.TestMethodOrder;
+
+      import static org.assertj.core.api.Assertions.assertThat;
+      import static org.assertj.core.api.Assertions.tuple;
+      import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
+
+      // AssertJ's soft assertions: a check that fails hands its failure to the collector and
+      // the chain goes on, a check called by a check is part of it, and assertAll throws what
+      // was collected. AssertJ ends each failure's message with a line naming the test's file
+      // and line, which is left out of what is printed here.
+      @TestMethodOrder(MethodOrderer.MethodName.class)
+      class SoftTest {
+
+          record Person(String name, int age) {
+          }
+
+          // An assertion class of the program's, which a provider makes soft by proxy.
+          static class PersonAssert extends AbstractAssert<PersonAssert, Person> {
+
+              public PersonAssert(Person actual) {
+                  super(actual, PersonAssert.class);
+              }
+
+              public PersonAssert hasName(String name) {
+                  isNotNull();
+                  if (!actual.name().equals(name)) {
+                      failWithMessage("name %s but %s", name, actual.name());
+                  }
+                  return this;
+              }
+
+              public PersonAssert hasTwoNames() {
+                  hasName("x");
+                  hasName("y");
+                  return this;
+              }
+
+              public PersonAssert isOld() {
+                  assertThat(actual.age()).isEqualTo(-1);
+                  return this;
+              }
+
+              public PersonAssert refuses() {
+                  throw new IllegalStateException("other");
+              }
+
+              public AbstractStringAssert<?> name() {
+                  isNotNull();
+                  return new StringAssert(actual.name());
+              }
+
+              public int count() {
+                  throw new AssertionError("count failed");
+              }
+
+              public boolean flag() {
+                  throw new AssertionError("flag failed");
+              }
+
+              public String text() {
+                  throw new AssertionError("text failed");
+              }
+
+              public Object object() {
+                  throw new AssertionError("object failed");
+              }
+
+              protected PersonAssert guarded() {
+                  throw new AssertionError("guarded failed");
+              }
+
+              public final PersonAssert sealed() {
+                  throw new AssertionError("final failed");
+              }
+
+          }
+
+          static String said(Throwable thrown) {
+              return thrown.getClass().getName() + ":"
+                      + String.valueOf(thrown.getMessage()).replaceAll("\nat [^\n]*\\.java:[0-9]+\\)", "");
+          }
+
+          // What a piece of code collects: each failure on a line of its own, then what the code
+          // threw, then what assertAll says.
+          static void shown(String title, Consumer<SoftAssertions> code) {
+              System.out.println("== " + title);
+              SoftAssertions softly = new SoftAssertions();
+              try {
+                  code.accept(softly);
+              }
+              catch (Throwable thrown) {
+                  System.out.println("threw " + said(thrown));
+              }
+              System.out.println(softly.errorsCollected().size() + " collected, the last check "
+                      + (softly.wasSuccess() ? "passed" : "failed"));
+              try {
+                  softly.assertAll();
+              }
+              catch (AssertionError all) {
+                  System.out.println(said(all));
+              }
+          }
+
+          @Test
+          void aChainGoesOnPastAFailure() {
+              shown("none", softly -> softly.assertThat(1).isEqualTo(1).isPositive());
+              shown("one", softly -> softly.assertThat(1).isEqualTo(2));
+              shown("a chain", softly -> softly.assertThat("abc").isEqualTo("x").startsWith("b").endsWith("c").isEmpty());
+              shown("a check called by a check", softly -> softly.assertThat((Object) null).isInstanceOf(String.class).isNotNull());
+              shown("described", softly -> {
+                  softly.assertThat(1).as("first %s", "x").isEqualTo(2);
+                  softly.assertThat("a").as("second").isEqualTo("b").withFailMessage("own %d", 3).isEmpty();
+              });
+              shown("a check that returns nothing", softly -> {
+                  softly.assertThat("a").isNull();
+                  softly.assertThat("a").isNotNull().isNull();
+              });
+              shown("the last check", softly -> {
+                  softly.assertThat(1).isEqualTo(2);
+                  softly.assertThat(1).as("described").isEqualTo(1);
+              });
+              shown("what is not an assertion's failure", softly -> softly.assertThat("abc").matches(v -> {
+                  throw new IllegalStateException("thrown");
+              }).isEqualTo("z"));
+          }
+
+          @Test
+          void bWhatIsCollected() {
+              SoftAssertions softly = new SoftAssertions();
+              System.out.println(softly.wasSuccess() + " " + softly.errorsCollected());
+              softly.assertThat(1).isEqualTo(2);
+              softly.assertThat(true).isFalse();
+              softly.assertThat(List.of(1, 2)).as("list").contains(3).hasSize(5);
+              softly.assertThat(Map.of("a", 1)).containsKey("b").containsEntry("a", 1);
+              for (Throwable each : softly.errorsCollected()) {
+                  System.out.println(each.getClass().getName());
+              }
+              softly.errorsCollected().clear();
+              softly.assertionErrorsCollected().clear();
+              System.out.println(softly.assertionErrorsCollected().size() + " " + softly.wasSuccess());
+              try {
+                  softly.assertAll();
+              }
+              catch (AssertionError all) {
+                  System.out.println(all.getClass().getSuperclass().getName());
+                  System.out.println(((org.opentest4j.MultipleFailuresError) all).getFailures().size());
+              }
+              System.out.println(softly.errorsCollected().size());
+              shown("a failure of the test's own", s -> {
+                  Object answered = s.fail("failed %s", "x");
+                  s.fail("plain");
+                  s.fail("with a cause", new RuntimeException("c"));
+                  s.fail();
+                  s.fail(new IllegalStateException("t"));
+                  s.failBecauseExceptionWasNotThrown(IllegalStateException.class);
+                  s.shouldHaveThrown(IllegalArgumentException.class);
+                  System.out.println(answered + " " + s.errorsCollected().get(2).getCause());
+              });
+              shown("collected by hand", s -> {
+                  s.collectAssertionError(new AssertionError("mine"));
+                  s.succeeded();
+              });
+              shown("a piece of code checked", s -> {
+                  s.check(() -> assertThat(1).isEqualTo(2));
+                  s.check(() -> {
+                  });
+                  s.check(() -> {
+                      throw new IOException("io");
+                  });
+              });
+              shown("another collector's too", s -> {
+                  SoftAssertions other = new SoftAssertions();
+                  other.assertThat(1).isEqualTo(2);
+                  other.assertThat(1).isEqualTo(3);
+                  s.assertThat("a").isEqualTo("b");
+                  s.assertAlso(other);
+                  System.out.println(other.errorsCollected().size());
+              });
+              shown("told of each failure", s -> {
+                  s.setAfterAssertionErrorCollected(error -> System.out.println("told " + said(error)));
+                  s.assertThat(1).isEqualTo(2);
+                  s.addAfterAssertionErrorCollected(error -> System.out.println("told again " + said(error)));
+                  s.fail("f");
+                  s.setAfterAssertionErrorCollected(error -> System.out.println("told instead " + said(error)));
+                  s.fail("g");
+              });
+              shown("handed to another collector", s -> {
+                  SoftAssertions other = new SoftAssertions();
+                  System.out.println(s.getDelegate());
+                  s.setDelegate(other);
+                  s.assertThat(1).isEqualTo(2);
+                  s.assertThat(1).isEqualTo(1);
+                  System.out.println(other.errorsCollected().size() + " " + s.errorsCollected().size() + " " + other.wasSuccess()
+                          + " " + (s.getDelegate().get() == other));
+              });
+              shown("thrown together by a collector", s -> {
+                  s.fail("x");
+                  AbstractSoftAssertions.assertAll(s);
+              });
+          }
+
+          @Test
+          void cAssertedWhereTheCodeEnds() {
+              try {
+                  SoftAssertions.assertSoftly(softly -> {
+                      softly.assertThat(1).isEqualTo(2);
+                      softly.assertThat(2).isEqualTo(3);
+                  });
+              }
+              catch (AssertionError all) {
+                  System.out.println(said(all));
+              }
+              SoftAssertions.assertSoftly(softly -> softly.assertThat(1).isEqualTo(1));
+              try {
+                  SoftAssertions.assertSoftly(softly -> {
+                      softly.assertThat(1).isEqualTo(2);
+                      throw new IllegalStateException("thrown");
+                  });
+              }
+              catch (RuntimeException thrown) {
+                  System.out.println(said(thrown));
+              }
+              try (AutoCloseableSoftAssertions softly = new AutoCloseableSoftAssertions()) {
+                  softly.assertThat(1).isEqualTo(2);
+                  softly.assertThat("a").isEqualTo("b");
+              }
+              catch (AssertionError all) {
+                  System.out.println(said(all));
+              }
+          }
+
+          @Test
+          void dWhatAPieceOfCodeThrows() {
+              shown("thrown", softly -> {
+                  softly.assertThatThrownBy(() -> {
+                      throw new IllegalStateException("abc");
+                  }).hasMessageStartingWith("x").hasMessageEndingWith("y").hasMessageStartingWith("a");
+                  softly.assertThatThrownBy(() -> {
+                  }).hasMessageStartingWith("z");
+                  softly.assertThatThrownBy(() -> {
+                  }, "described %s", 1).hasMessageStartingWith("z");
+                  softly.assertThatCode(() -> {
+                  }).doesNotThrowAnyException();
+                  softly.assertThatCode(() -> {
+                      throw new IllegalStateException("abc");
+                  }).hasMessageEndingWith("q");
+              });
+              shown("of a type", softly -> {
+                  softly.assertThatExceptionOfType(IllegalStateException.class).isThrownBy(() -> {
+                  }).withMessageEndingWith("b");
+                  softly.assertThatIllegalStateException().as("why").isThrownBy(() -> {
+                      throw new IllegalStateException("abc");
+                  }).withMessageEndingWith("x").withMessageStartingWith("y").withMessageStartingWith("a");
+                  softly.assertThatIOException().isThrownBy(() -> {
+                      throw new IOException("io");
+                  }).withMessageStartingWith("q");
+              });
+              shown("a check of the alternative's own throws", softly -> {
+                  try {
+                      softly.assertThatIllegalStateException().isThrownBy(() -> {
+                          throw new IllegalStateException("abc");
+                      }).withMessageEndingWith("x").isSameAs("other");
+                  }
+                  catch (AssertionError thrown) {
+                      System.out.println(thrown.getClass().getName());
+                  }
+              });
+          }
+
+          @Test
+          void eAnotherAssertionOfASoftOne() {
+              Person ann = new Person("ann", 3);
+              List<Person> people = List.of(ann, new Person("bob", 5));
+              shown("a property", softly -> softly.assertThat(ann).extracting("name").isEqualTo("x").isEqualTo("y"));
+              shown("a function", softly -> softly.assertThat(ann).as("d").extracting(Person::age).isEqualTo(4).isEqualTo(5));
+              shown("several properties",
+                      softly -> softly.assertThat(ann).extracting("name", "age").containsExactly("x", 3).hasSize(3));
+              shown("as an instance",
+                      softly -> softly.assertThat((Object) "abc").asInstanceOf(STRING).startsWith("x").endsWith("y"));
+              shown("an element", softly -> {
+                  softly.assertThat(people).first().isEqualTo(1).isEqualTo(2);
+                  softly.assertThat(people).last().isEqualTo(1);
+                  softly.assertThat(people).element(0).isEqualTo(1);
+              });
+              shown("the elements' properties", softly -> {
+                  softly.assertThat(people).extracting("name").containsExactly("x").hasSize(1);
+                  softly.assertThat(people).extracting(Person::age).containsExactly(1).hasSize(1);
+                  softly.assertThat(people).extracting("name", "age").containsExactly(tuple("x", 1)).hasSize(1);
+                  softly.assertThat(people).map(Person::age).containsExactly(1).hasSize(1);
+                  softly.assertThat(people).filteredOn(person -> person.age() > 3).hasSize(3).hasSize(4);
+                  softly.assertThat(people).filteredOn("name", "ann").hasSize(3).hasSize(4);
+              });
+              shown("an optional's value", softly -> softly.assertThat(Optional.of("a")).get().isEqualTo("b").isEqualTo("c"));
+              shown("a cause", softly -> {
+                  softly.assertThat(new RuntimeException("a", new IllegalStateException("b")))
+                      .cause()
+                      .hasMessageStartingWith("c")
+                      .hasMessageEndingWith("d");
+                  softly.assertThat(new RuntimeException("a", new IllegalStateException("b")))
+                      .rootCause()
+                      .hasMessageStartingWith("c");
+              });
+              shown("a future's result",
+                      softly -> softly.assertThat(CompletableFuture.completedFuture("v"))
+                          .succeedsWithin(Duration.ofSeconds(1))
+                          .isEqualTo("w")
+                          .isEqualTo("u"));
+              shown("no element to answer", softly -> {
+                  Object answered = softly.assertThat(new ArrayList<String>()).first();
+                  System.out.println(answered);
+                  answered = softly.assertThat(people).singleElement();
+                  System.out.println(answered);
+                  answered = softly.assertThat(new ArrayList<String>()).last();
+                  System.out.println(answered);
+              });
+              shown("no instance", softly -> softly.assertThat((Object) 3).asInstanceOf(STRING).startsWith("x"));
+              shown("no content", softly -> softly.assertThat(java.nio.file.Path.of("/nonexistent-soft")).content().isEmpty());
+          }
+
+          @Test
+          void fAnAssertionClassOfTheProgram() {
+              Person ann = new Person("ann", 3);
+              shown("a chain",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).hasName("bob").hasName("carl").hasName("ann"));
+              shown("checks called by a check",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).hasTwoNames().hasName("z"));
+              shown("an assertion in a check", softly -> softly.proxy(PersonAssert.class, Person.class, ann).isOld().isOld());
+              shown("another exception",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).refuses().hasName("q"));
+              shown("an assertion it answers is no soft one",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).name().isEqualTo("bob").startsWith("z"));
+              shown("what a failed check answers", softly -> {
+                  PersonAssert soft = softly.proxy(PersonAssert.class, Person.class, ann);
+                  System.out.println(soft.count() + " " + soft.flag() + " " + soft.text() + " " + (soft.object() == soft) + " "
+                          + softly.proxy(PersonAssert.class, Person.class, null).name());
+              });
+              shown("a protected check",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).guarded().hasName("1"));
+              shown("a final method is no check",
+                      softly -> softly.proxy(PersonAssert.class, Person.class, ann).sealed().hasName("1"));
+          }
+
+          @Test
+          void gRequirements() {
+              shown("assertions in requirements", softly -> softly.assertThat("abc").satisfies(value -> {
+                  assertThat(value).isEqualTo("x");
+                  assertThat(value).isEqualTo("y");
+              }).isEqualTo("z"));
+              shown("soft assertions in requirements", softly -> softly.assertThat("abc").satisfies(value -> {
+                  softly.assertThat(value).isEqualTo("x").isEqualTo("x2");
+                  softly.assertThat(value).isEqualTo("y");
+              }).isEqualTo("z"));
+              shown("another provider's in requirements", softly -> {
+                  SoftAssertions other = new SoftAssertions();
+                  softly.assertThat("abc").satisfies(value -> other.assertThat(value).isEqualTo("x").isEqualTo("x2")).isEqualTo("z");
+                  System.out.println(other.errorsCollected().size());
+              });
+              shown("a soft assertion in an assertion's requirements",
+                      softly -> assertThat("abc").satisfies(value -> softly.assertThat(value).isEqualTo("x").isEqualTo("y")));
+              shown("of a class", softly -> softly.assertThat((Object) "a")
+                  .isInstanceOfSatisfying(String.class, value -> assertThat(value).isEqualTo("b"))
+                  .isInstanceOfSatisfying(Integer.class, value -> {
+                  })
+                  .isEqualTo("c"));
+              shown("of an optional's value",
+                      softly -> softly.assertThat(Optional.of("a")).hasValueSatisfying(value -> assertThat(value).isEqualTo("b")).contains("c"));
+              try {
+                  assertThat("abc").satisfies(value -> assertThat(value).isEqualTo("x"), value -> assertThat(value).startsWith("y"));
+              }
+              catch (AssertionError all) {
+                  System.out.println(said(all));
+              }
+          }
+
+          @Test
+          void hWhatAnAnswerIsDescribedAs() {
+              List<Person> people = List.of(new Person("ann", 3));
+              Throwable caused = new RuntimeException("a", new IllegalStateException("b"));
+              List<ThrowingCallable> checks = List.of(() -> assertThat(people).first().isEqualTo(1),
+                      () -> assertThat(people).as("d").first().isEqualTo(1),
+                      () -> assertThat(people).as("d").extracting(Person::age).hasSize(3),
+                      () -> assertThat(people).as("d").filteredOn(person -> true).hasSize(3),
+                      () -> assertThat(Optional.of("a")).as("d").get().isEqualTo("b"),
+                      () -> assertThat(caused).as("d").cause().hasMessageStartingWith("c"));
+              for (ThrowingCallable check : checks) {
+                  try {
+                      check.call();
+                  }
+                  catch (Throwable thrown) {
+                      System.out.println(said(thrown));
+                  }
+              }
+              shown("of a soft assertion", softly -> {
+                  softly.assertThat(people).first().isEqualTo(1);
+                  softly.assertThat(people).as("d").first().isEqualTo(1);
+                  softly.assertThat(people).as("d").extracting(Person::age).hasSize(3);
+                  softly.assertThat(people).as("d").filteredOn(person -> true).hasSize(3);
+                  softly.assertThat(Optional.of("a")).as("d").get().isEqualTo("b");
+                  softly.assertThat(caused).as("d").cause().hasMessageStartingWith("c");
+                  softly.assertThat(people).extracting("name").hasSize(3);
+              });
+          }
+
+          @Test
+          void iEveryKindOfValue() {
+              shown("numbers and texts", softly -> {
+                  softly.assertThat(true).isFalse();
+                  softly.assertThat(Boolean.TRUE).isFalse();
+                  softly.assertThat('a').isEqualTo('b');
+                  softly.assertThat(Character.valueOf('a')).isEqualTo('b');
+                  softly.assertThat(1).isZero();
+                  softly.assertThat(Integer.valueOf(1)).isZero();
+                  softly.assertThat(1L).isZero();
+                  softly.assertThat(Long.valueOf(1)).isZero();
+                  softly.assertThat(1.5f).isZero();
+                  softly.assertThat(Float.valueOf(1.5f)).isZero();
+                  softly.assertThat(1.5).isZero();
+                  softly.assertThat(Double.valueOf(1.5)).isZero();
+                  softly.assertThat("a").isEmpty();
+                  softly.assertThat(new Version(1)).isGreaterThan(new Version(2));
+                  softly.assertThat(Size.S).isEqualTo(Size.L);
+                  softly.assertThat(new Person("ann", 3)).isEqualTo("ann");
+                  softly.assertThatObject("a").isEqualTo("b");
+              });
+              shown("arrays and collections", softly -> {
+                  softly.assertThat(new byte[] { 1 }).hasSize(2).isEmpty();
+                  softly.assertThat(new char[] { 'a' }).contains('b').hasSize(2);
+                  softly.assertThat(new int[] { 1 }).contains(2).hasSize(2).containsExactly(3);
+                  softly.assertThat(new long[] { 1 }).contains(2L).hasSize(2);
+                  softly.assertThat(new double[] { 1.5 }).hasSize(2).isEmpty();
+                  softly.assertThat(new String[] { "a" }).contains("b").hasSize(2).containsExactly("c").doesNotContain("a");
+                  softly.assertThat(new ArrayList<>(List.of(1))).contains(2).doesNotContain(1).containsSequence(3).containsOnly(4);
+                  softly.assertThat((Iterable<Integer>) new java.util.TreeSet<>(List.of(1))).contains(2).hasSize(2);
+                  softly.assertThat(Map.of("a", 1)).containsKey("b").containsOnlyKeys("z").containsEntry("a", 2).hasSize(3);
+                  softly.assertThat(Optional.of("a")).isEmpty().contains("b");
+              });
+              shown("the others", softly -> {
+                  softly.assertThat(String.class).isInterface();
+                  softly.assertThat(java.nio.file.Path.of("/nonexistent-soft")).exists().hasFileName("x");
+                  softly.assertThat(new java.io.File("/nonexistent-soft")).exists().hasName("x");
+                  softly.assertThat(java.time.LocalDate.of(2020, 1, 2)).isAfter(java.time.LocalDate.of(2020, 1, 3)).hasYear(2021);
+                  softly.assertThat(java.time.LocalDateTime.of(2020, 1, 2, 3, 4)).isBefore(java.time.LocalDateTime.of(2020, 1, 1, 3, 4));
+                  softly.assertThat(java.time.LocalTime.of(3, 4)).isAfter(java.time.LocalTime.of(3, 5));
+                  softly.assertThat(java.time.Instant.ofEpochSecond(1)).isAfter(java.time.Instant.ofEpochSecond(2));
+                  softly.assertThat(Duration.ofSeconds(90)).isNegative().hasSeconds(5);
+                  softly.assertThat(new CompletableFuture<String>()).isDone().isCancelled();
+                  softly.assertThat((java.util.concurrent.Future<String>) new CompletableFuture<String>()).isDone();
+              });
+          }
+
+          record Version(int major) implements Comparable<Version> {
+
+              public int compareTo(Version other) {
+                  return Integer.compare(major, other.major);
+              }
+
+          }
+
+          enum Size {
+
+              S, M, L
+
+          }
+
+      }
+    stdout: |
+      Running q.SoftTest
+      == none
+      0 collected, the last check passed
+      == one
+      1 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      == a chain
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      Expecting actual:
+        "abc"
+      to start with:
+        "b"
+      -- failure 3 --
+      Expecting empty but was: "abc"
+      == a check called by a check
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Expecting actual not to be null
+      -- failure 2 --
+      Expecting actual not to be null
+      == described
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      [first x] 
+      expected: 2
+       but was: 1
+      -- failure 2 --
+      [second] 
+      expected: "b"
+       but was: "a"
+      -- failure 3 --
+      [second] own 3
+      == a check that returns nothing
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: null
+       but was: "a"
+      -- failure 2 --
+      expected: null
+       but was: "a"
+      == the last check
+      1 collected, the last check passed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      == what is not an assertion's failure
+      threw java.lang.IllegalStateException:thrown
+      0 collected, the last check passed
+      true []
+      org.opentest4j.AssertionFailedError
+      org.opentest4j.AssertionFailedError
+      java.lang.AssertionError
+      java.lang.AssertionError
+      java.lang.AssertionError
+      5 true
+      org.opentest4j.MultipleFailuresError
+      5
+      5
+      == a failure of the test's own
+      null java.lang.RuntimeException: c
+      7 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (7 failures)
+      -- failure 1 --failed x
+      -- failure 2 --plain
+      -- failure 3 --with a cause
+      -- failure 4 --
+      -- failure 5 --
+      -- failure 6 --IllegalStateException should have been thrown
+      -- failure 7 --IllegalArgumentException should have been thrown
+      == collected by hand
+      1 collected, the last check passed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --mine
+      == a piece of code checked
+      threw java.lang.RuntimeException:java.io.IOException: io
+      1 collected, the last check passed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      == another collector's too
+      2
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "a"
+      -- failure 2 --
+      expected: 2
+       but was: 1
+      -- failure 3 --
+      expected: 3
+       but was: 1
+      == told of each failure
+      told org.opentest4j.AssertionFailedError:
+      expected: 2
+       but was: 1
+      told java.lang.AssertionError:f
+      told again java.lang.AssertionError:f
+      told instead java.lang.AssertionError:g
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      -- failure 2 --f
+      -- failure 3 --g
+      == handed to another collector
+      Optional.empty
+      1 1 true true
+      1 collected, the last check passed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      == thrown together by a collector
+      threw org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --x
+      1 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --x
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      -- failure 2 --
+      expected: 3
+       but was: 2
+      java.lang.IllegalStateException:thrown
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: 2
+       but was: 1
+      -- failure 2 --
+      expected: "b"
+       but was: "a"
+      == thrown
+      7 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (7 failures)
+      -- failure 1 --
+      Expecting actual:
+        "abc"
+      to start with:
+        "x"
+      -- failure 2 --
+      Expecting actual:
+        "abc"
+      to end with:
+        "y"
+      -- failure 3 --
+      Expecting code to raise a throwable.
+      -- failure 4 --
+      Expecting actual not to be null
+      -- failure 5 --
+      [described 1] 
+      Expecting code to raise a throwable.
+      -- failure 6 --
+      [described 1] 
+      Expecting actual not to be null
+      -- failure 7 --
+      Expecting actual:
+        "abc"
+      to end with:
+        "q"
+      == of a type
+      5 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (5 failures)
+      -- failure 1 --
+      Expecting code to raise a throwable.
+      -- failure 2 --
+      Expecting actual not to be null
+      -- failure 3 --
+      [why] 
+      Expecting actual:
+        "abc"
+      to end with:
+        "x"
+      -- failure 4 --
+      [why] 
+      Expecting actual:
+        "abc"
+      to start with:
+        "y"
+      -- failure 5 --
+      Expecting actual:
+        "io"
+      to start with:
+        "q"
+      == a check of the alternative's own throws
+      java.lang.AssertionError
+      1 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      Expecting actual:
+        "abc"
+      to end with:
+        "x"
+      == a property
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "x"
+       but was: "ann"
+      -- failure 2 --
+      expected: "y"
+       but was: "ann"
+      == a function
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      [d] 
+      expected: 4
+       but was: 3
+      -- failure 2 --
+      [d] 
+      expected: 5
+       but was: 3
+      == several properties
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Expecting actual:
+        ["ann", 3]
+      to contain exactly (and in same order):
+        ["x", 3]
+      but some elements were not found:
+        ["x"]
+      and others were not expected:
+        ["ann"]
+      -- failure 2 --
+      Expected size: 3 but was: 2 in:
+      ["ann", 3]
+      == as an instance
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Expecting actual:
+        "abc"
+      to start with:
+        "x"
+      -- failure 2 --
+      Expecting actual:
+        "abc"
+      to end with:
+        "y"
+      == an element
+      4 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (4 failures)
+      -- failure 1 --
+      expected: 1
+       but was: Person[name=ann, age=3]
+      -- failure 2 --
+      expected: 2
+       but was: Person[name=ann, age=3]
+      -- failure 3 --
+      expected: 1
+       but was: Person[name=bob, age=5]
+      -- failure 4 --
+      expected: 1
+       but was: Person[name=ann, age=3]
+      == the elements' properties
+      12 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (12 failures)
+      -- failure 1 --
+      Expecting actual:
+        ["ann", "bob"]
+      to contain exactly (and in same order):
+        ["x"]
+      but some elements were not found:
+        ["x"]
+      and others were not expected:
+        ["ann", "bob"]
+      -- failure 2 --
+      Expected size: 1 but was: 2 in:
+      ["ann", "bob"]
+      -- failure 3 --
+      Expecting actual:
+        [3, 5]
+      to contain exactly (and in same order):
+        [1]
+      but some elements were not found:
+        [1]
+      and others were not expected:
+        [3, 5]
+      -- failure 4 --
+      Expected size: 1 but was: 2 in:
+      [3, 5]
+      -- failure 5 --
+      Expecting actual:
+        [("ann", 3), ("bob", 5)]
+      to contain exactly (and in same order):
+        [("x", 1)]
+      but some elements were not found:
+        [("x", 1)]
+      and others were not expected:
+        [("ann", 3), ("bob", 5)]
+      -- failure 6 --
+      Expected size: 1 but was: 2 in:
+      [("ann", 3), ("bob", 5)]
+      -- failure 7 --
+      Expecting actual:
+        [3, 5]
+      to contain exactly (and in same order):
+        [1]
+      but some elements were not found:
+        [1]
+      and others were not expected:
+        [3, 5]
+      -- failure 8 --
+      Expected size: 1 but was: 2 in:
+      [3, 5]
+      -- failure 9 --
+      Expected size: 3 but was: 1 in:
+      [Person[name=bob, age=5]]
+      -- failure 10 --
+      Expected size: 4 but was: 1 in:
+      [Person[name=bob, age=5]]
+      -- failure 11 --
+      Expected size: 3 but was: 1 in:
+      [Person[name=ann, age=3]]
+      -- failure 12 --
+      Expected size: 4 but was: 1 in:
+      [Person[name=ann, age=3]]
+      == an optional's value
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "a"
+      -- failure 2 --
+      expected: "c"
+       but was: "a"
+      == a cause
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      Expecting actual:
+        "b"
+      to start with:
+        "c"
+      -- failure 2 --
+      Expecting actual:
+        "b"
+      to end with:
+        "d"
+      -- failure 3 --
+      Expecting actual:
+        "b"
+      to start with:
+        "c"
+      == a future's result
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "w"
+       but was: "v"
+      -- failure 2 --
+      expected: "u"
+       but was: "v"
+      == no element to answer
+      null
+      null
+      null
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      Expecting actual not to be empty
+      -- failure 2 --
+      Expected size: 1 but was: 2 in:
+      [Person[name=ann, age=3], Person[name=bob, age=5]]
+      -- failure 3 --
+      Expecting actual not to be empty
+      == no instance
+      threw java.lang.AssertionError:
+      Expecting actual:
+        3
+      to be an instance of:
+        java.lang.String
+      but was instance of:
+        java.lang.Integer
+      0 collected, the last check passed
+      == no content
+      threw java.lang.AssertionError:
+      Expecting path:
+        /nonexistent-soft
+      to exist (symbolic links were followed).
+      0 collected, the last check passed
+      == a chain
+      2 collected, the last check passed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --name bob but ann
+      -- failure 2 --name carl but ann
+      == checks called by a check
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --name x but ann
+      -- failure 2 --name z but ann
+      == an assertion in a check
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: -1
+       but was: 3
+      -- failure 2 --
+      expected: -1
+       but was: 3
+      == another exception
+      threw java.lang.IllegalStateException:other
+      0 collected, the last check passed
+      == an assertion it answers is no soft one
+      threw org.opentest4j.AssertionFailedError:
+      expected: "bob"
+       but was: "ann"
+      0 collected, the last check passed
+      == what a failed check answers
+      0 false null true null
+      5 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (5 failures)
+      -- failure 1 --count failed
+      -- failure 2 --flag failed
+      -- failure 3 --text failed
+      -- failure 4 --object failed
+      -- failure 5 --
+      Expecting actual not to be null
+      == a protected check
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --guarded failed
+      -- failure 2 --name 1 but ann
+      == a final method is no check
+      threw java.lang.AssertionError:final failed
+      0 collected, the last check passed
+      == assertions in requirements
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      expected: "z"
+       but was: "abc"
+      == soft assertions in requirements
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      expected: "z"
+       but was: "abc"
+      == another provider's in requirements
+      0
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      expected: "z"
+       but was: "abc"
+      == a soft assertion in an assertion's requirements
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      expected: "y"
+       but was: "abc"
+      == of a class
+      3 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "a"
+      -- failure 2 --
+      Expecting actual:
+        "a"
+      to be an instance of:
+        java.lang.Integer
+      but was instance of:
+        java.lang.String
+      -- failure 3 --
+      expected: "c"
+       but was: "a"
+      == of an optional's value
+      2 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "a"
+      -- failure 2 --
+      Expecting actual:
+        Optional[a]
+      to contain:
+        "c"
+      but did not.
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "x"
+       but was: "abc"
+      -- failure 2 --
+      Expecting actual:
+        "abc"
+      to start with:
+        "y"
+      org.opentest4j.AssertionFailedError:[List check first element] 
+      expected: 1
+       but was: Person[name=ann, age=3]
+      org.opentest4j.AssertionFailedError:[d check first element] 
+      expected: 1
+       but was: Person[name=ann, age=3]
+      java.lang.AssertionError:[d] 
+      Expected size: 3 but was: 1 in:
+      [3]
+      java.lang.AssertionError:[d] 
+      Expected size: 3 but was: 1 in:
+      [Person[name=ann, age=3]]
+      org.opentest4j.AssertionFailedError:[d] 
+      expected: "b"
+       but was: "a"
+      java.lang.AssertionError:[d] 
+      Expecting actual:
+        "b"
+      to start with:
+        "c"
+
+      == of a soft assertion
+      7 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (7 failures)
+      -- failure 1 --
+      expected: 1
+       but was: Person[name=ann, age=3]
+      -- failure 2 --
+      [d] 
+      expected: 1
+       but was: Person[name=ann, age=3]
+      -- failure 3 --
+      [d] 
+      Expected size: 3 but was: 1 in:
+      [3]
+      -- failure 4 --
+      [d] 
+      Expected size: 3 but was: 1 in:
+      [Person[name=ann, age=3]]
+      -- failure 5 --
+      [d] 
+      expected: "b"
+       but was: "a"
+      -- failure 6 --
+      [d] 
+      Expecting actual:
+        "b"
+      to start with:
+        "c"
+      -- failure 7 --
+      Expected size: 3 but was: 1 in:
+      ["ann"]
+      == numbers and texts
+      17 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (17 failures)
+      -- failure 1 --
+      Expecting value to be false but was true
+      -- failure 2 --
+      Expecting value to be false but was true
+      -- failure 3 --
+      expected: 'b'
+       but was: 'a'
+      -- failure 4 --
+      expected: 'b'
+       but was: 'a'
+      -- failure 5 --
+      expected: 0
+       but was: 1
+      -- failure 6 --
+      expected: 0
+       but was: 1
+      -- failure 7 --
+      expected: 0L
+       but was: 1L
+      -- failure 8 --
+      expected: 0L
+       but was: 1L
+      -- failure 9 --
+      expected: 0.0f
+       but was: 1.5f
+      -- failure 10 --
+      expected: 0.0f
+       but was: 1.5f
+      -- failure 11 --
+      expected: 0.0
+       but was: 1.5
+      -- failure 12 --
+      expected: 0.0
+       but was: 1.5
+      -- failure 13 --
+      Expecting empty but was: "a"
+      -- failure 14 --
+      Expecting actual:
+        Version[major=1]
+      to be greater than:
+        Version[major=2]
+      -- failure 15 --
+      expected: L
+       but was: S
+      -- failure 16 --
+      expected: "ann"
+       but was: Person[name=ann, age=3]
+      -- failure 17 --
+      expected: "b"
+       but was: "a"
+      == arrays and collections
+      27 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (27 failures)
+      -- failure 1 --
+      Expected size: 2 but was: 1 in:
+      [1]
+      -- failure 2 --
+      Expecting empty but was: [1]
+      -- failure 3 --
+      Expecting char[]:
+        ['a']
+      to contain:
+        ['b']
+      but could not find the following char(s):
+        ['b']
+      -- failure 4 --
+      Expected size: 2 but was: 1 in:
+      ['a']
+      -- failure 5 --
+      Expecting int[]:
+        [1]
+      to contain:
+        [2]
+      but could not find the following int(s):
+        [2]
+      -- failure 6 --
+      Expected size: 2 but was: 1 in:
+      [1]
+      -- failure 7 --
+      Expecting actual:
+        [1]
+      to contain exactly (and in same order):
+        [3]
+      but some elements were not found:
+        [3]
+      and others were not expected:
+        [1]
+      -- failure 8 --
+      Expecting long[]:
+        [1L]
+      to contain:
+        [2L]
+      but could not find the following long(s):
+        [2L]
+      -- failure 9 --
+      Expected size: 2 but was: 1 in:
+      [1L]
+      -- failure 10 --
+      Expected size: 2 but was: 1 in:
+      [1.5]
+      -- failure 11 --
+      Expecting empty but was: [1.5]
+      -- failure 12 --
+      Expecting String[]:
+        ["a"]
+      to contain:
+        ["b"]
+      but could not find the following string(s):
+        ["b"]
+      -- failure 13 --
+      Expected size: 2 but was: 1 in:
+      ["a"]
+      -- failure 14 --
+      Expecting actual:
+        ["a"]
+      to contain exactly (and in same order):
+        ["c"]
+      but some elements were not found:
+        ["c"]
+      and others were not expected:
+        ["a"]
+      -- failure 15 --
+      Expecting
+        ["a"]
+      not to contain
+        ["a"]
+      but found
+        ["a"]
+      -- failure 16 --
+      Expecting ArrayList:
+        [1]
+      to contain:
+        [2]
+      but could not find the following element(s):
+        [2]
+      -- failure 17 --
+      Expecting
+        [1]
+      not to contain
+        [1]
+      but found
+        [1]
+      -- failure 18 --
+      Expecting actual:
+        [1]
+      to contain sequence:
+        [3]
+      -- failure 19 --
+      Expecting ArrayList:
+        [1]
+      to contain only:
+        [4]
+      element(s) not found:
+        [4]
+      and element(s) not expected:
+        [1]
+      -- failure 20 --
+      Expecting TreeSet:
+        [1]
+      to contain:
+        [2]
+      but could not find the following element(s):
+        [2]
+      -- failure 21 --
+      Expected size: 2 but was: 1 in:
+      [1]
+      -- failure 22 --
+      Expecting actual:
+        {"a"=1}
+      to contain key:
+        "b"
+      -- failure 23 --
+      Expecting actual:
+        {"a"=1}
+      to contain only following keys:
+        ["z"]
+      keys not found:
+        ["z"]
+      and keys not expected:
+        ["a"]
+      -- failure 24 --
+      Expecting map:
+        {"a"=1}
+      to contain entries:
+        ["a"=2]
+      but the following map entries had different values:
+        ["a"=1 (expected: 2)]
+      -- failure 25 --
+      Expected size: 3 but was: 1 in:
+      {"a"=1}
+      -- failure 26 --
+      Expecting an empty Optional but was containing value: "a"
+      -- failure 27 --
+      Expecting actual:
+        Optional[a]
+      to contain:
+        "b"
+      but did not.
+      == the others
+      15 collected, the last check failed
+      org.assertj.core.error.AssertJMultipleFailuresError:
+      Multiple Failures (15 failures)
+      -- failure 1 --
+      Expecting
+        java.lang.String
+      to be an interface
+      -- failure 2 --
+      Expecting path:
+        /nonexistent-soft
+      to exist (symbolic links were followed).
+      -- failure 3 --
+      Expecting
+        /nonexistent-soft
+      to have name:
+        "x"
+      but had:
+        nonexistent-soft
+      -- failure 4 --
+      Expecting file:
+        /nonexistent-soft
+      to exist.
+      -- failure 5 --
+      Expecting
+        /nonexistent-soft
+      to have name:
+        "x"
+      but had:
+        "nonexistent-soft"
+      -- failure 6 --
+      Expecting actual:
+        2020-01-02 (java.time.LocalDate)
+      to be strictly after:
+        2020-01-03 (java.time.LocalDate)
+      -- failure 7 --
+      Expecting actual:
+        2020-01-02 (java.time.LocalDate)
+      to be on "year" 2021
+      -- failure 8 --
+      Expecting actual:
+        2020-01-02T03:04 (java.time.LocalDateTime)
+      to be strictly before:
+        2020-01-01T03:04 (java.time.LocalDateTime)
+      when comparing values using 'ChronoLocalDateTime.timeLineOrder()'
+      -- failure 9 --
+      Expecting actual:
+        03:04
+      to be strictly after:
+        03:05
+      -- failure 10 --
+      Expecting actual:
+        1970-01-01T00:00:01Z
+      to be strictly after:
+        1970-01-01T00:00:02Z
+      -- failure 11 --
+      Expecting actual:
+        1M30S
+      to be less than:
+        0S 
+      -- failure 12 --
+      Expecting Duration:
+        1M30S
+      to have 5L seconds but had 90L
+      -- failure 13 --
+      Expecting
+        <CompletableFuture[Incomplete]>
+      to be done.
+      Be aware that the state of the future in this message might not reflect the one at the time when the assertion was performed as it is evaluated later on
+      -- failure 14 --
+      Expecting
+        <CompletableFuture[Incomplete]>
+      to be cancelled.
+      Be aware that the state of the future in this message might not reflect the one at the time when the assertion was performed as it is evaluated later on
+      -- failure 15 --
+      Expecting
+        <CompletableFuture[Incomplete]>
+      to be done.
+      Be aware that the state of the future in this message might not reflect the one at the time when the assertion was performed as it is evaluated later on
+      Tests run: 9, Failures: 0, Errors: 0, Skipped: 0 -- in q.SoftTest
+      Running q.SoftExtensionTest
+      before: the fields are one true, the other field null, collected 0
+      false
+      after: collected 3, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 1, the last check passed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 3, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 1, the last check passed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      asserted
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 3, the last check failed
+      Running q.SoftExtensionTest$AnInnerClass
+      before: the fields are one true, the other field null, collected 0
+      true true false
+      after: collected 3, the last check failed
+      Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! -- in q.SoftExtensionTest$AnInnerClass
+      q.SoftExtensionTest$AnInnerClass.nested <<< FAILURE!
+
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 12
+       but was: 1
+      -- failure 3 --
+      expected: 13
+       but was: 1
+      Running q.SoftExtensionTest$OneInstance
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      one instance: true
+      after: collected 2, the last check failed
+      Tests run: 2, Failures: 2, Errors: 0, Skipped: 0 <<< FAILURE! -- in q.SoftExtensionTest$OneInstance
+      q.SoftExtensionTest$OneInstance.a <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 14
+       but was: 1
+      q.SoftExtensionTest$OneInstance.b <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 15
+       but was: 1
+      Running q.SoftExtensionTest$WhatRunsAfter
+      before: the fields are one true, the other field null, collected 0
+      after: collected 3, the last check failed
+      before: the fields are one true, the other field null, collected 0
+      after: collected 2, the last check failed
+      Tests run: 2, Failures: 2, Errors: 0, Skipped: 0 <<< FAILURE! -- in q.SoftExtensionTest$WhatRunsAfter
+      q.SoftExtensionTest$WhatRunsAfter.a <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 17
+       but was: 1
+      q.SoftExtensionTest$WhatRunsAfter.b <<< FAILURE!
+
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      Tests run: 13, Failures: 11, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.SoftExtensionTest
+      q.SoftExtensionTest.a01aParameter <<< FAILURE!
+
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 2
+       but was: 1
+      -- failure 3 --
+      expected: "b"
+       but was: "a"
+      q.SoftExtensionTest.a02aField <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 3
+       but was: 1
+      q.SoftExtensionTest.a03nothingMore <<< FAILURE!
+
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      q.SoftExtensionTest.a04theTestThrows <<< ERROR!
+      java.lang.IllegalStateException: thrown
+      q.SoftExtensionTest.a05anAssertionFails <<< FAILURE!
+
+      expected: 55
+       but was: 1
+      q.SoftExtensionTest.a06twoParameters <<< FAILURE!
+
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 6
+       but was: 1
+      -- failure 3 --
+      expected: 66
+       but was: 1
+      q.SoftExtensionTest.a07rows[1] <<< FAILURE!
+
+      Multiple Failures (1 failure)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      q.SoftExtensionTest.a07rows[2] <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 1
+       but was: 2
+      q.SoftExtensionTest.a08assertedInTheTest <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 8
+       but was: 1
+      q.SoftExtensionTest.a09repeated[1] <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 3
+       but was: 1
+      q.SoftExtensionTest.a09repeated[2] <<< FAILURE!
+
+      Multiple Failures (2 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 3
+       but was: 2
+      q.SoftExtensionTest.a10aFactory <<< FAILURE!
+
+      Multiple Failures (3 failures)
+      -- failure 1 --
+      expected: "b"
+       but was: "before"
+      -- failure 2 --
+      expected: 10
+       but was: 1
+      -- failure 3 --
+      expected: 11
+       but was: 1
+
+      Results:
+
+      Tests run: 27, Failures: 16, Errors: 1, Skipped: 0
 refused:
   scaffold: |
     class Refused {

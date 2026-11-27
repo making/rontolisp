@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.assertj.core.error.AssertJMultipleFailuresError;
 import org.jspecify.annotations.Nullable;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.engine.support.descriptor.ClassSource;
@@ -236,7 +237,7 @@ public final class JavaTestOracle {
 		}
 		said.append(failure ? " <<< FAILURE!\n" : " <<< ERROR!\n");
 		if (failure) {
-			said.append(thrown.getMessage() == null ? thrown.getClass().getName() : thrown.getMessage());
+			said.append(thrown.getMessage() == null ? thrown.getClass().getName() : message(thrown));
 		}
 		else {
 			said.append(thrown);
@@ -249,6 +250,18 @@ public final class JavaTestOracle {
 		// known when its tests are over
 		String method = name == null ? "\uffff" : name.replaceFirst("\\[.*$", "");
 		counted.problems.add(new String[] { method, said.append('\n').toString() });
+	}
+
+	/**
+	 * What a failure says. AssertJ ends the message of each failure that soft assertions
+	 * collected, and of each that a group of requirements threw, with a line naming the
+	 * test's file and line ({@code at Class.method(File.java:12)}); the runner knows no
+	 * line of a failure, so those lines are left out of what the two are compared by.
+	 */
+	private static String message(Throwable thrown) {
+		String message = java.util.Objects.requireNonNull(thrown.getMessage());
+		return thrown instanceof AssertJMultipleFailuresError ? message.replaceAll("\nat [^\n]*\\.java:\\d+\\)", "")
+				: message;
 	}
 
 	private static void report(String className, Running counted, boolean own) {

@@ -10,6 +10,7 @@ import java.util.function.Function;
 
 import rontolisp.internal.Introspected;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of an object: a value taken from it, by a function or by the name of a
 // property or a field (rontolisp.internal.Introspected), is asserted on in its turn.
@@ -24,13 +25,10 @@ public abstract class AbstractObjectAssert<SELF extends AbstractObjectAssert<SEL
         super(actual);
     }
 
+    @Uncollected
     public <T> AbstractObjectAssert<?, T> extracting(Function<? super ACTUAL, T> extractor) {
         isNotNull();
-        ObjectAssert<T> extracted = new ObjectAssert<>(extractor.apply(actual));
-        if (descriptionText() != null) {
-            extracted.as(descriptionText());
-        }
-        return extracted;
+        return carried(new ObjectAssert<>(extractor.apply(actual)));
     }
 
     public SELF hasFieldOrProperty(String name) {
@@ -53,11 +51,13 @@ public abstract class AbstractObjectAssert<SELF extends AbstractObjectAssert<SEL
         return myself;
     }
 
+    @Uncollected
     public AbstractObjectAssert<?, ?> extracting(String propertyOrField) {
         isNotNull();
         return extracted(new ObjectAssert<>(Introspected.value(actual, propertyOrField)), propertyOrField);
     }
 
+    @Uncollected
     public ListAssert<Object> extracting(String... propertiesOrFields) {
         isNotNull();
         List<Object> values = new ArrayList<>();

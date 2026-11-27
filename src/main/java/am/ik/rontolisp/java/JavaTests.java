@@ -68,6 +68,20 @@ final class JavaTests {
 
 	private static final String NODE = API + "DynamicNode";
 
+	private static final String EXTEND_WITH = API + "extension.ExtendWith";
+
+	/**
+	 * AssertJ's extension giving a test its soft assertions, the one extension a run
+	 * runs: the generated code does what it does.
+	 */
+	private static final String SOFT_EXTENSION = "org.assertj.core.api.junit.jupiter.SoftAssertionsExtension";
+
+	private static final String INJECT_SOFT = "org.assertj.core.api.junit.jupiter.InjectSoftAssertions";
+
+	private static final String SOFT_PROVIDER = "org.assertj.core.api.SoftAssertionsProvider";
+
+	private static final String SOFT = "rontolisp.internal.Soft";
+
 	/**
 	 * The annotations of JUnit's that a run of tests runs, each with the elements of it
 	 * that the run reads; {@code name} of a parameterized test only names its runs. Any
@@ -84,6 +98,7 @@ final class JavaTests {
 			Map.entry(API + "TestInstance", Set.of("value")), Map.entry(API + "TestMethodOrder", Set.of("value")),
 			Map.entry(API + "TestClassOrder", Set.of("value")), Map.entry(API + "Order", Set.of("value")),
 			Map.entry(API + "TestFactory", Set.of()), Map.entry(API + "Timeout", Set.of("value", "unit", "threadMode")),
+			Map.entry(EXTEND_WITH, Set.of("value")),
 			Map.entry(PARAMS + "ParameterizedTest", Set.of("name", "autoCloseArguments")),
 			Map.entry(PROVIDER + "ValueSource",
 					Set.of("shorts", "bytes", "ints", "longs", "floats", "doubles", "chars", "booleans", "strings")),
@@ -211,7 +226,10 @@ final class JavaTests {
 		REPETITION,
 
 		/** An argument of a parameterized test's row. */
-		ROW
+		ROW,
+
+		/** Soft assertions of AssertJ's, where its extension gives them. */
+		SOFT
 
 	}
 
@@ -227,6 +245,8 @@ final class JavaTests {
 		}
 		Set<Integer> onAnnotationTypes = new HashSet<>();
 		onAnnotationTypes(unit.tree().classes(), onAnnotationTypes);
+		Set<Integer> onClasses = new HashSet<>();
+		onClasses(unit.tree().classes(), onClasses);
 		for (Annotation written : unit.tree().annotations()) {
 			JavaClass type = type(written, null, unit);
 			if (type == null || !type.name.startsWith(JUNIT)) {
@@ -240,12 +260,38 @@ final class JavaTests {
 				throw JavaClasses.unsupported(unit.source(), written.pos(),
 						"the annotation " + type.name + " on an annotation type");
 			}
+			if (type.name.equals(EXTEND_WITH)) {
+				// the one extension a run runs, where the run reads it: on a class
+				List<String> value = texts(written, "value", unit);
+				String named = value.size() == 1 && value.get(0).endsWith(".class")
+						? value.get(0).substring(0, value.get(0).length() - ".class".length()).strip() : "";
+				JavaClass extension = named.isEmpty() ? null
+						: type(new Annotation(written.pos(), named, List.of()), null, unit);
+				if (extension == null || !extension.name.equals(SOFT_EXTENSION)) {
+					throw JavaClasses.unsupported(unit.source(), written.pos(),
+							"an @ExtendWith of " + (value.isEmpty() ? "no extension" : String.join(", ", value)));
+				}
+				if (!onClasses.contains(written.pos())) {
+					throw JavaClasses.unsupported(unit.source(), written.pos(),
+							"the annotation " + type.name + " on what is no class");
+				}
+			}
 			for (JavaSyntax.ElementPair pair : written.pairs()) {
 				if (!read.contains(pair.name())) {
 					throw JavaClasses.unsupported(unit.source(), written.pos(),
 							"the element " + pair.name() + " of @" + type.simpleName());
 				}
 			}
+		}
+	}
+
+	/** Where the annotations of some classes, and of the classes in them, start. */
+	private static void onClasses(List<JavaSyntax.ClassDeclaration> declarations, Set<Integer> into) {
+		for (JavaSyntax.ClassDeclaration declaration : declarations) {
+			for (Annotation each : declaration.annotations()) {
+				into.add(each.pos());
+			}
+			onClasses(declaration.nested(), into);
 		}
 	}
 
@@ -297,6 +343,15 @@ final class JavaTests {
 
 		/** The instance fields given a temporary directory for each test. */
 		final List<JavaClass.Field> directories = new ArrayList<>();
+
+		/**
+		 * Whether AssertJ's extension gives the class's tests their soft assertions: it
+		 * is named on the class, on one above it or on one around it.
+		 */
+		boolean soft;
+
+		/** The instance fields given soft assertions for each test. */
+		final List<JavaClass.Field> softFields = new ArrayList<>();
 
 		/** The {@code @Nested} classes with tests in it, which run inside its run. */
 		final List<Suite> nested = new ArrayList<>();
@@ -607,6 +662,8 @@ final class JavaTests {
 		suite.timeoutOwn = timed != null;
 		suite.timeout = timed != null ? timed(timed.annotation(), this.classes.unit(timed.type()))
 				: around == null ? null : around.timeout;
+		suite.soft = inherited(type, EXTEND_WITH) != null || around != null && around.soft;
+		this.soft = suite.soft;
 		tags(type, suite.tags);
 		if (around != null) {
 			suite.tags.addAll(around.tags);
@@ -621,6 +678,16 @@ final class JavaTests {
 			check(this.classes.unit(declaring));
 			for (JavaClass.Field field : declaring.fields) {
 				JavaSyntax.Field declaration = field.declaration;
+				if (suite.soft && field.owner == declaring && declaration != null
+						&& annotations(declaring, declaration.pos()).containsKey(INJECT_SOFT)) {
+					JavaClass.Source source = this.classes.unit(declaring).source();
+					if (field.isStatic || field.isFinal) {
+						throw JavaClasses.unsupported(source, declaration.pos(),
+								"an @InjectSoftAssertions field that is " + (field.isStatic ? "static" : "final"));
+					}
+					provider(field.type, source, declaration.pos());
+					suite.softFields.add(field);
+				}
 				if (field.owner != declaring || declaration == null
 						|| !annotations(declaring, declaration.pos()).containsKey(TEMP_DIR)) {
 					continue;
@@ -658,11 +725,11 @@ final class JavaTests {
 						givens(declaring, method, null);
 					}
 					else if (factory) {
-						givens(declaring, method, "a @TestFactory method", Given.DIRECTORY, Given.INFO);
+						givens(declaring, method, "a @TestFactory method", Given.DIRECTORY, Given.INFO, Given.SOFT);
 					}
 					else {
 						givens(declaring, method, repeated ? "a @RepeatedTest method" : "a @Test method",
-								Given.DIRECTORY, Given.INFO, repeated ? Given.REPETITION : Given.INFO);
+								Given.DIRECTORY, Given.INFO, repeated ? Given.REPETITION : Given.INFO, Given.SOFT);
 					}
 					suite.tests.add(annotated);
 				}
@@ -881,14 +948,17 @@ final class JavaTests {
 			if (kind == Given.DIRECTORY) {
 				directory(type, "parameter " + parameter.name(), source, parameter.pos());
 			}
+			if (kind == Given.SOFT) {
+				provider(type, source, parameter.pos());
+			}
 			if (what == null) {
 				if (kind == Given.INFO) {
 					throw JavaClasses.unsupported(source, parameter.pos(),
 							"a TestInfo parameter of a @ParameterizedTest method");
 				}
-				if (kind != Given.DIRECTORY && givens.contains(Given.DIRECTORY)) {
+				if (kind == Given.ROW && (givens.contains(Given.DIRECTORY) || givens.contains(Given.SOFT))) {
 					throw JavaClasses.unsupported(source, parameter.pos(),
-							"a parameter given by a row after a @TempDir parameter");
+							"a parameter given by a row after a parameter JUnit gives");
 				}
 				// what JUnit would make of its own rather than take from a row
 				if (kind == Given.ROW && type instanceof ClassType named
@@ -910,8 +980,34 @@ final class JavaTests {
 			return Given.DIRECTORY;
 		}
 		String name = type instanceof ClassType named ? named.declaration().name : "";
+		if (this.soft && type instanceof ClassType named && isProvider(named.declaration())) {
+			return Given.SOFT;
+		}
 		return name.equals(API + "TestInfo") ? Given.INFO
 				: name.equals(API + "RepetitionInfo") ? Given.REPETITION : Given.ROW;
+	}
+
+	/**
+	 * Whether AssertJ's extension gives the tests of the class being read or written
+	 * their soft assertions: a parameter of a provider's type is then given one.
+	 */
+	private boolean soft;
+
+	/** Whether a class is a provider of AssertJ's soft assertions. */
+	private boolean isProvider(JavaClass type) {
+		JavaClass provider = this.classes.qualified(SOFT_PROVIDER);
+		return provider != null && type.isSubclassOf(provider);
+	}
+
+	/**
+	 * Refuses soft assertions declared of a type the run makes no instance of: AssertJ's
+	 * extension makes one with the constructor of no parameter.
+	 */
+	private void provider(JavaType type, JavaClass.Source source, int pos) {
+		if (!(type instanceof ClassType named) || !isProvider(named.declaration()) || named.declaration().isAbstract
+				|| named.declaration().isInterface) {
+			throw JavaClasses.unsupported(source, pos, "soft assertions of the type " + type);
+		}
 	}
 
 	private boolean isDirectory(JavaClass declaring, JavaSyntax.Parameter parameter) {
@@ -1379,6 +1475,7 @@ final class JavaTests {
 					case INFO -> info;
 					case REPETITION -> "repetition";
 					case ROW -> argument(type, p);
+					case SOFT -> SOFT + ".delegating(new " + JavaAnnotations.erasedText(type) + "(), soft)";
 				});
 		}
 		return arguments.toString();
@@ -1636,6 +1733,7 @@ final class JavaTests {
 		Method method = test.method();
 		List<Suite> nest = suite.nest();
 		Slots slots = new Slots("directories");
+		this.soft = suite.soft;
 		boolean info = gives(method, Given.INFO);
 		for (Suite level : nest) {
 			info |= level.constructor.contains(Given.INFO) && !level.perClass;
@@ -1656,6 +1754,13 @@ final class JavaTests {
 		body.append(instances(suite, true, slots, "info", "        "));
 		List<String> before = new ArrayList<>();
 		List<String> after = new ArrayList<>();
+		if (suite.soft) {
+			// the collector of the test's soft assertions: the ones its fields and its
+			// parameters are given hand their failures to it
+			body.append("        org.assertj.core.api.DefaultAssertionErrorCollector soft = "
+					+ "new org.assertj.core.api.DefaultAssertionErrorCollector();\n");
+			before.addAll(softFields(nest));
+		}
 		for (int i = 0; i < nest.size(); i++) {
 			Suite own = nest.get(i);
 			String variable = i == nest.size() - 1 ? "instance" : "outer" + i;
@@ -1693,8 +1798,13 @@ final class JavaTests {
 					+ limit(timeout, method) + ", () -> " + called + ");\n            " + DYNAMIC + ".run(run, "
 					+ literal(method.name) + ", made)";
 		}
+		if (suite.soft) {
+			// what the test's soft assertions collected is thrown where the test ends
+			// without throwing, before what runs after each test (measured)
+			call += ";\n            org.assertj.core.api.AbstractSoftAssertions.assertAll(soft)";
+		}
 		if (before.isEmpty() && after.isEmpty() && slots.count == 0 && !closing) {
-			return body.append("        ").append(call).append(";\n").toString();
+			return body.append("        ").append(call.replace("\n    ", "\n")).append(";\n").toString();
 		}
 		if (slots.count > 0) {
 			body.insert(0, "        java.nio.file.Path[] directories = new java.nio.file.Path[" + slots.count + "];\n");
@@ -1717,6 +1827,49 @@ final class JavaTests {
 				.append(");\n");
 		}
 		return body.append("        if (thrown != null) {\n            throw thrown;\n        }\n").toString();
+	}
+
+	/**
+	 * The statements giving the fields of {@code @InjectSoftAssertions} of a test's
+	 * instances their soft assertions, as AssertJ's extension gives them (measured): one
+	 * provider for all the fields of one type, handing its failures to the test's
+	 * collector; an instance shared by the tests of its class keeps the provider it was
+	 * given first.
+	 */
+	private static List<String> softFields(List<Suite> nest) {
+		// each field's type and what it is assigned through, and for each type the first
+		// field of a shared instance
+		List<String[]> fields = new ArrayList<>();
+		Map<String, String> kept = new LinkedHashMap<>();
+		for (int i = 0; i < nest.size(); i++) {
+			Suite own = nest.get(i);
+			String variable = i == nest.size() - 1 ? "instance" : "outer" + i;
+			for (JavaClass.Field field : own.softFields) {
+				String type = JavaAnnotations.erasedText(field.type);
+				String target = (field.owner == own.type ? variable : "((" + field.owner.name + ") " + variable + ")")
+						+ "." + field.name;
+				fields.add(new String[] { type, target });
+				if (own.perClass) {
+					kept.putIfAbsent(type, target);
+				}
+			}
+		}
+		Map<String, String> providers = new LinkedHashMap<>();
+		List<String> statements = new ArrayList<>();
+		for (String[] field : fields) {
+			String type = field[0];
+			String provider = providers.get(type);
+			if (provider == null) {
+				provider = "soft$" + providers.size();
+				providers.put(type, provider);
+				String shared = kept.get(type);
+				statements.add(type + " " + provider + " = " + SOFT + ".delegating("
+						+ (shared == null ? "" : shared + " != null ? " + shared + " : ") + "new " + type
+						+ "(), soft)");
+			}
+			statements.add(field[1] + " = " + provider);
+		}
+		return statements;
 	}
 
 	/**

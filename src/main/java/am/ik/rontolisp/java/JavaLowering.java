@@ -1277,6 +1277,12 @@ final class JavaLowering implements JavaEmitter.Context {
 				this.classes.calendars = true;
 				this.classes.changed();
 			}
+			if (!this.classes.softAssertions && method.owner.name.equals(SOFT)) {
+				// what was lowered throwing its failures is lowered again handing them
+				// to a collector where the assertion has one
+				this.classes.softAssertions = true;
+				this.classes.changed();
+			}
 			if (!this.classes.monitors && (method.owner.name.equals(THREAD) || isServer(method.owner))) {
 				// what was lowered holding no monitor is lowered again holding one: a
 				// thread of the program's, or the threads a server's handlers run on
@@ -1636,6 +1642,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				continue;
 			}
 			structure.add(list(JavaNames.slot(field.slot()), defaultValue(field.type)));
+		}
+		if (this.classes.softAssertions && declaration.name.equals(ABSTRACT_ASSERT)) {
+			// the collector of a soft assertion, which no assertion of a program that
+			// makes none has a place for
+			structure.add(list(JavaNames.slot("soft%"), NIL));
 		}
 		out.add(list(structure));
 	}
@@ -2054,6 +2065,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<Local> bound = bindParameters(method);
 		parameters.addAll(symbols(bound));
 		LispVal body = functionBody(Objects.requireNonNull(written.body()));
+		LispSymbol name = JavaNames.function(method);
+		// the check of an assertion that may be a soft one: its body is a function of its
+		// own, called by what hands a failure of it to the assertion's collector
+		LispSymbol thrown = isCheck(method, written) ? new LispSymbol(name.name() + "%thrown") : null;
+		LispVal check = thrown == null ? null : softCheck(method, written, form(thrown, parameters));
 		this.scopes.pop();
 		this.effects = saved;
 		this.classes.methodParameters = List.of();
@@ -2066,8 +2082,136 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (first != null) {
 			body = call("progn", first, body);
 		}
-		this.functions.add(form(cl("defun"),
-				prepend(JavaNames.function(method), prepend(list(parameters), declaring(bound, List.of(body))))));
+		if (thrown != null) {
+			this.functions
+				.add(form(cl("defun"), prepend(thrown, prepend(list(parameters), declaring(bound, List.of(body))))));
+			body = Objects.requireNonNull(check);
+		}
+		this.functions
+			.add(form(cl("defun"), prepend(name, prepend(list(parameters), declaring(bound, List.of(body))))));
+	}
+
+	private static final String ABSTRACT_ASSERT = "org.assertj.core.api.AbstractAssert";
+
+	/**
+	 * The class of the library a soft assertion is made by and its checks call: a program
+	 * that reaches it makes soft assertions.
+	 */
+	private static final String SOFT = "rontolisp.internal.Soft";
+
+	/**
+	 * The accessor of an assertion's collector: a slot only a program that makes soft
+	 * assertions has ({@link JavaClasses#softAssertions}), which the natives of
+	 * {@code rontolisp.internal.Soft} read and write.
+	 */
+	static final LispSymbol COLLECTOR = new LispSymbol(ABSTRACT_ASSERT + ".soft%");
+
+	/**
+	 * Whether a method is a check of an assertion that may be a soft one: in a program
+	 * that makes soft assertions ({@link JavaClasses#softAssertions}), a method of a
+	 * class under AssertJ's {@code AbstractAssert} that a subclass could override -- an
+	 * instance method neither private nor final --, which is what AssertJ's own soft
+	 * assertions catch the failures of (measured: {@code .kb/java-frontend.md}, "Tests of
+	 * a program"). A final method of the library's is one too: AssertJ's final checks
+	 * hand over to methods that are not, and the library's need not be written so.
+	 */
+	private boolean isCheck(Method method, JavaSyntax.Method written) {
+		if (!this.classes.softAssertions || method.isStatic || method.isPrivate
+				|| written.modifiers().contains("final") && !isLibrary(method.owner)) {
+			return false;
+		}
+		for (JavaClass type = method.owner; type != null; type = type.superclass) {
+			if (type.name.equals(ABSTRACT_ASSERT)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * What a check of an assertion that may be a soft one does: of an assertion with no
+	 * collector, or inside another check, its body and nothing else; else its body as the
+	 * one check running, a failure of it handed to the collector and answered by the
+	 * assertion itself where the method's type takes it, by that type's default where it
+	 * does not. A method the library marks {@code @Uncollected} -- one answering another
+	 * assertion, or setting what the next failure says -- is the one check running and
+	 * throws what fails in it. Another assertion a method of the library's answers is
+	 * made a soft one of the same collector; one a method of the program's answers is
+	 * not, as under AssertJ.
+	 * @param body the call of the method's body
+	 */
+	private LispVal softCheck(Method method, JavaSyntax.Method written, LispVal body) {
+		int pos = written.pos();
+		Expression soft = new Select(pos, new Select(pos, new Name(pos, "rontolisp"), "internal"), "Soft");
+		Expression self = new This(pos);
+		boolean isVoid = this.returnType == Primitive.VOID;
+		Expression checked = new JavaSyntax.Lowered(pos, new Typed(body, this.returnType));
+		List<Statement> statements = new ArrayList<>();
+		statements.add(new If(pos, new Unary(pos, "!", new Call(pos, soft, "begins", List.of(self), false), false),
+				isVoid ? new Block(pos, List.of(new ExpressionStatement(pos, checked), new Return(pos, null)), pos)
+						: new Return(pos, checked),
+				null));
+		boolean uncollected = isLibrary(method.owner) && written.modifiers().contains("@Uncollected");
+		JavaClass answered = this.types.erased(this.returnType) instanceof ClassType type
+				&& type.declaration().absent == null ? type.declaration() : null;
+		if (isLibrary(method.owner) && answered != null && isAssertion(answered)
+				&& (uncollected || !method.owner.isSubclassOf(answered))) {
+			checked = new Call(pos, soft, "answered", List.of(self, checked), false);
+		}
+		Statement running = isVoid ? new ExpressionStatement(pos, checked) : new Return(pos, checked);
+		if (uncollected) {
+			statements.add(new Try(pos, new Block(pos, List.of(running), pos), List.of(), new Block(pos,
+					List.of(new ExpressionStatement(pos, new Call(pos, soft, "left", List.of(), false))), pos)));
+		}
+		else {
+			String failure = "soft$failure";
+			List<Statement> failed = new ArrayList<>();
+			failed.add(new ExpressionStatement(pos,
+					new Call(pos, soft, "failed", List.of(self, new Name(pos, failure)), false)));
+			if (!isVoid) {
+				failed.add(new Return(pos, new JavaSyntax.Lowered(pos,
+						new Typed(answeredFailing(method, answered, pos), this.returnType))));
+			}
+			statements.add(new Try(pos, new Block(pos, List.of(running), pos),
+					List.of(new Catch(pos, List.of(new TypeName(pos, "java.lang.AssertionError", List.of(), false, 0)),
+							failure, new Block(pos, failed, pos))),
+					new Block(pos,
+							List.of(new ExpressionStatement(pos, new Call(pos, soft, "ended", List.of(self), false))),
+							pos)));
+		}
+		return functionBody(new Block(pos, statements, pos));
+	}
+
+	/** Whether a class is AssertJ's {@code AbstractAssert}, a class under it or above. */
+	private static boolean isAssertion(JavaClass type) {
+		if (type.name.equals("java.lang.Object")) {
+			return true;
+		}
+		for (JavaClass each = type; each != null; each = each.superclass) {
+			if (each.name.equals(ABSTRACT_ASSERT)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * What a check of a soft assertion that failed answers: the assertion where the
+	 * method's type, erased, takes it -- known from the class declaring the method, else
+	 * asked of the assertion --, else what a variable of that type starts as.
+	 * @param answered the class the method's type erases to, or {@code null} for none
+	 */
+	private LispVal answeredFailing(Method method, @Nullable JavaClass answered, int pos) {
+		if (answered == null) {
+			return defaultValue(this.returnType);
+		}
+		if (answered.name.equals("java.lang.Object") || method.owner.isSubclassOf(answered)) {
+			return THIS;
+		}
+		if (!answered.isInterface && !answered.isSubclassOf(method.owner)) {
+			return NIL;
+		}
+		return call("if", instanceTest(THIS, method.owner.self(), answered.self(), pos, "a cast"), THIS, NIL);
 	}
 
 	/**
@@ -15580,7 +15724,7 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private LispVal expressionStatement(Expression expression) {
 		boolean allowed = expression instanceof Assign || expression instanceof Call || expression instanceof New
-				|| (expression instanceof Unary unary
+				|| expression instanceof JavaSyntax.Lowered || (expression instanceof Unary unary
 						&& (unary.operator().equals("++") || unary.operator().equals("--")));
 		if (!allowed) {
 			throw error(expression.pos(), "not a statement");

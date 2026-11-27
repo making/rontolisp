@@ -666,8 +666,10 @@ class JavaSpecE2eTest {
 	 * a test given its time in a thread of its own; a RepetitionInfo given around a test
 	 * that is not repeated; a parameter of a parameterized test that JUnit would make of
 	 * its own, or whose TestInfo would name its arguments; a text a parameterized test's
-	 * source gives to a class parameter. A test factory JUnit would not run -- one
-	 * declared to return what holds no test -- is an error where it is declared.
+	 * source gives to a class parameter; an extension that is not AssertJ's of soft
+	 * assertions, that one where the run does not read it, and the soft assertions it
+	 * gives nothing under JUnit. A test factory JUnit would not run -- one declared to
+	 * return what holds no test -- is an error where it is declared.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
@@ -704,7 +706,22 @@ class JavaSpecE2eTest {
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.aggregator."
 						+ "ArgumentsAccessor; import org.junit.jupiter.params.provider.CsvSource; class T { "
 						+ "@ParameterizedTest @CsvSource(\"a, 1\") void t(ArgumentsAccessor row) { } }", "row)",
-						"a parameter of the type org.junit.jupiter.params.aggregator.ArgumentsAccessor" } };
+						"a parameter of the type org.junit.jupiter.params.aggregator.ArgumentsAccessor" },
+				{ "import org.junit.jupiter.api.Test; import org.junit.jupiter.api.extension.*; "
+						+ "@ExtendWith(Extension.class) class T { @Test void t() { } }", "@ExtendWith",
+						"an @ExtendWith of Extension.class" },
+				{ "import org.assertj.core.api.junit.jupiter.*; import org.junit.jupiter.api.Test; import org.junit."
+						+ "jupiter.api.extension.*; class T { @ExtendWith(SoftAssertionsExtension.class) @Test void t() { } }",
+						"@ExtendWith",
+						"the annotation org.junit.jupiter.api.extension.ExtendWith on what is no class" },
+				{ "import org.assertj.core.api.*; import org.assertj.core.api.junit.jupiter.*; import org.junit.jupiter."
+						+ "api.*; import org.junit.jupiter.api.extension.*; @ExtendWith(SoftAssertionsExtension.class) "
+						+ "class T { @BeforeEach void b(SoftAssertions softly) { } @Test void t() { } }", "softly)",
+						"a parameter of a @BeforeEach method" },
+				{ "import org.assertj.core.api.*; import org.assertj.core.api.junit.jupiter.*; import org.junit.jupiter."
+						+ "api.*; import org.junit.jupiter.api.extension.*; @ExtendWith(SoftAssertionsExtension.class) "
+						+ "class T { @InjectSoftAssertions static SoftAssertions shared; @Test void t() { } }",
+						"shared", "an @InjectSoftAssertions field that is static" } };
 		List<DynamicNode> legs = new ArrayList<>();
 		for (String[] refusal : refusals) {
 			legs.add(dynamicTest(refusal[2], () -> {

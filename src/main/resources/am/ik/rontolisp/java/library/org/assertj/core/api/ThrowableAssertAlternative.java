@@ -13,44 +13,60 @@ public class ThrowableAssertAlternative<ACTUAL extends Throwable>
         super(actual);
     }
 
+    // The assertion whose checks the ones reading on from "is thrown by" are: this one,
+    // or a soft assertion of the throwable.
+    protected AbstractThrowableAssert<?, ACTUAL> getDelegate() {
+        return this;
+    }
+
     public ThrowableAssertAlternative<ACTUAL> withMessage(String message) {
-        return hasMessage(message);
+        getDelegate().hasMessage(message);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessage(String message, Object... parameters) {
-        return hasMessage(message, parameters);
+        getDelegate().hasMessage(message, parameters);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessageContaining(String description) {
-        return hasMessageContaining(description);
+        getDelegate().hasMessageContaining(description);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessageNotContaining(String content) {
-        return hasMessageNotContaining(content);
+        getDelegate().hasMessageNotContaining(content);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessageStartingWith(String description) {
-        return hasMessageStartingWith(description);
+        getDelegate().hasMessageStartingWith(description);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessageEndingWith(String description) {
-        return hasMessageEndingWith(description);
+        getDelegate().hasMessageEndingWith(description);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withMessageMatching(String regex) {
-        return hasMessageMatching(regex);
+        getDelegate().hasMessageMatching(regex);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withNoCause() {
-        return hasNoCause();
+        getDelegate().hasNoCause();
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withCauseInstanceOf(Class<? extends Throwable> type) {
-        return hasCauseInstanceOf(type);
+        getDelegate().hasCauseInstanceOf(type);
+        return myself;
     }
 
     public ThrowableAssertAlternative<ACTUAL> withRootCauseInstanceOf(Class<? extends Throwable> type) {
-        return hasRootCauseInstanceOf(type);
+        getDelegate().hasRootCauseInstanceOf(type);
+        return myself;
     }
 
     public AbstractThrowableAssert<?, ?> havingCause() {

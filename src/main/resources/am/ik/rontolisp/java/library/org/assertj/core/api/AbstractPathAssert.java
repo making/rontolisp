@@ -15,6 +15,7 @@ import java.util.stream.Stream;
 
 import rontolisp.internal.Delta;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of a path: whether it is there and what it is, its name, what it holds.
 public abstract class AbstractPathAssert<SELF extends AbstractPathAssert<SELF>> extends AbstractComparableAssert<SELF, Path> {
@@ -151,11 +152,13 @@ public abstract class AbstractPathAssert<SELF extends AbstractPathAssert<SELF>> 
         return said(!listed().isEmpty(), "\nExpecting path " + Shown.of(actual) + " not to be empty");
     }
 
+    @Uncollected
     public AbstractStringAssert<?> content() {
         isRegularFile();
         return carried(new StringAssert(new String(bytes(), StandardCharsets.UTF_8)));
     }
 
+    @Uncollected
     public AbstractByteArrayAssert<?> binaryContent() {
         isRegularFile();
         return carried(new ByteArrayAssert(bytes()));

@@ -33,3 +33,10 @@ Two designs, to be measured against each other before either is made:
 Either way the report differs from the JUnit oracle's by these lines: the corpus case's
 `stdout:` then needs a rule for the JDK leg (the oracle can name the line of a frame, not
 of a statement).
+
+Another reader of the line (m83, measured of AssertJ 3.27.7 under a JDK): soft assertions
+end the message of each failure they collect with `at Class.method(File.java:N)` -- the
+first frame outside AssertJ, `at SoftTest.lambda$a$0(SoftTest.java:12)` for a lambda --,
+in `errorsCollected()` and in `assertAll`'s text (`.kb/java-frontend.md`, "Soft
+assertions"). The library's part writes no such line; `JavaTestOracle.message` and the
+corpus's `SoftTest.said` take the lines out, which a line known here would let go.

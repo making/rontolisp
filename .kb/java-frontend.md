@@ -2043,7 +2043,92 @@ JDK in the front end's semantics, the library and the host.
     is a longest common subsequence's runs of lines, each at its line in the EXPECTED text.
   - Seen differ, not this item's: `List.of(1, 2)` is the library's `ListN` where a JDK has
     `List12` (`Expecting List12:`); a `File` directory's listing order.
-  - Soft assertions are refused by name (`.todo/m83`).
+  - An assertion another one answers is described as the first (`carried`): `cause`,
+    `rootCause`, `Optional.get`, an iterable's `extracting` by a function, `filteredOn`,
+    `map` too (measured 2026-11-27; they dropped it); an element's is the collection's
+    description, else `List` / `Iterable`, and ` check first element`.
+- **Soft assertions: measured and decided** (AssertJ 3.27.7, JUnit 6.0.3, JDK 25, 2026-11-27;
+  pinned by the `standalone:` case `soft-assertions-collect-what-fails-and-the-chain-goes-on`,
+  `q/SoftTest.java` and `q/SoftExtensionTest.java`, four backends against the oracle; the
+  refusals by `JavaSpecE2eTest#whatARunOfTestsDoesNotRunIsRefusedByName`):
+  - **The front end makes the check, the library does not write it**
+    (`JavaLowering.softCheck`). In a program that reaches `rontolisp.internal.Soft`
+    (`JavaClasses.softAssertions`, a pass flag as `monitors` is) an instance method of a
+    class under `AbstractAssert`, neither private nor -- in a program's class -- final, is
+    two functions: its body (`name%thrown`) and `if (!Soft.begins(this)) body; else try {
+    body } catch (AssertionError) { Soft.failed; answer } finally { Soft.ended }`. The
+    collector is a slot (`soft%`) the lowering adds to `AbstractAssert`'s structure under
+    the same flag, read and written by `Soft`'s two natives: the Java source has no field
+    for it, so **a program that makes no soft assertion is byte-identical** (`UrlCodecTest`
+    242,289 B wasm / 367,293 class / 244,499 component, `SqlTest` 294,379,
+    `examples/java/shop` 321,439). Against that, measured: the wrapper in every check of
+    every run (the flag forced on, what checks wrapped by hand would cost) `UrlCodecTest`
+    244,119 B, `SqlTest` 298,550, the class 372,251; a Java field for the collector alone
+    +219 / +560 B, and +4.5 KB on a test of `asInstanceOf` (a slot of every assertion
+    structure the factories make). A test of two checks: 192,417 B wasm, soft 203,909,
+    under the extension 204,216. Rejected: a subclass an assertion class as AssertJ's
+    proxies are (every inherited check overridden for each concrete class, and each
+    assertion a method answers would need its subclass made), and wrappers by hand (a
+    program's own assertion class could not be soft, and each new check would have to
+    remember).
+  - **What AssertJ does, each by a probe**: a failure is collected and the chain goes on;
+    only the OUTERMOST check collects, of any soft assertion -- a soft check inside
+    another provider's check, or inside `satisfies`, throws to the one running
+    (`Soft.running`, one static flag); a failed check answers the assertion where the
+    method's erased type takes it (`Object` too), else `null` / `0` / `false`
+    (`answeredFailing`); a final method of a program's class is no check, a protected or
+    package-private one is; AssertJ's own final checks hand over to `xForProxy` methods,
+    so every final method of the LIBRARY's is wrapped (no body has to be written that
+    way); another exception than an `AssertionError` goes through; `wasSuccess` is the
+    last check's (`check` of code that returns sets it too); `satisfies`, of a hard
+    assertion too, runs every group and throws an `AssertJMultipleFailuresError`.
+  - **`@Uncollected`** (`rontolisp.internal`, read as a modifier of a library method
+    alone): the methods answering another assertion and those setting what a failure
+    says. Their wrapper holds `running` and catches nothing, so what fails in them is
+    thrown, as AssertJ's `asInstanceOf`, `cause`, `rootCause`, `content`, `succeedsWithin`
+    and `havingCause` throw it. **Differences kept**: AssertJ's `extracting` / `map` of a
+    `null` value and `Optional.get` of an empty one collect the failure and then throw
+    another exception (`IllegalArgumentException`, `NullPointerException`,
+    `NoSuchElementException`); `first` / `last` / `element` / `singleElement` are checks on
+    both sides (collected, `null` answered). An assertion a LIBRARY method answers is made
+    soft where it is answered (`Soft.answered`: the collector, and the description of the
+    first one only -- measured: a soft `extracting` or `first` says no `Extracted:` /
+    `check first element`); one a program's method answers is not (measured).
+    `wasSuccess` after an `@Uncollected` method is left as it was (AssertJ sets it after
+    `extracting`, `first`, `cause`; not after `as`, `asInstanceOf`, `isThrownBy`).
+  - **The text**: `\nMultiple Failures (N failure[s])`, then for each `\n-- failure i --`
+    and the message, on a line of its own where it starts with `[` (a description).
+    AssertJ ends each message with `at Class.method(File.java:N)` on a line of its own, in
+    place of a line break the message ends with, never twice; the runner has no line
+    (`.todo/n04`), so `AssertJMultipleFailuresError` drops that line break and writes no
+    line -- AssertJ's text minus those lines, which `JavaTestOracle.message` and
+    `SoftTest.said` take out. `errorsCollected()` answers the errors themselves (AssertJ:
+    copies, their messages with the line).
+  - **`proxy`** is reflection (`getDeclaredConstructor(actualClass)`, `setAccessible`:
+    the assertion class may be package-private); a test of it 493,283 B wasm against
+    429,259.
+  - **The extension** (`JavaTests`: `@ExtendWith(SoftAssertionsExtension.class)` on a
+    class, found as `inherited` finds it and on the class around; the library's class is
+    a name, the generated code does the work): one `DefaultAssertionErrorCollector` a
+    test; a provider for each parameter (`Soft.delegating(new T(), soft)`) and ONE
+    provider a type for all the `@InjectSoftAssertions` fields of the test's instances
+    (measured: two fields, a class above's and the class around's are one object, a
+    parameter another); `assertAll(soft)` right after the test's call, so a test that
+    throws keeps its exception and `@AfterEach` sees what was collected; under
+    `PER_CLASS` the field keeps its provider and the collector is new each test.
+    **A compile error here, a `ParameterResolutionException` of every test under JUnit**:
+    soft assertions given to what runs around tests ("Only test methods are supported").
+    Refused: the extension on a method (JUnit: that test, fields too), any other
+    extension, a static or final field, `BDDSoftAssertions` and
+    `SoftAssertionsProvider.assertSoftly(Class, ..)` (`.todo/n09`).
+  - **Why a case of its own**: a program that makes a soft assertion lowers every check
+    another way, so the main case keeps the plain lowering; and that case with these two
+    files (1,456 class objects) overflowed the stack of the E2E's in-process wasm compile
+    (`.todo/n11`).
+  - **Traps**: `Soft.running` is one flag for every thread; a session that holds an
+    assertion made before its first soft one has no slot for it.
+  - Seen, not this item's: `asInstanceOf` beside a property read by name prints `warning:
+    the function java.io.FileDescriptor? is undefined` on a compiled leg (`.todo/n10`).
 
 ## Declarations and statements past the first slice (2026-11-17)
 

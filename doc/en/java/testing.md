@@ -129,7 +129,7 @@ names, and fails the build with the name of a failed test.
 
 | Annotation | What runs |
 | --- | --- |
-| `@Test` | A method of no parameter but a `@TempDir` and the `TestInfo` |
+| `@Test` | A method of no parameter but a `@TempDir`, the `TestInfo` and, under AssertJ's extension, [soft assertions](#soft-assertions) |
 | `@RepeatedTest` | The method `value` times, each run given its `RepetitionInfo` and named by `name` (`{displayName}`, `{currentRepetition}`, `{totalRepetitions}`); once `failureThreshold` runs failed, the rest are skipped, an instance still made for each as JUnit does. A `value` that is not positive, a threshold out of range or a blank name is an error of the test |
 | `@ParameterizedTest` | The method once for each row of its sources, then each argument that is `AutoCloseable` closed, the last first (not with `autoCloseArguments = false`): `@ValueSource` (every element but `classes`), `@CsvSource` (`value`, `textBlock`, `delimiter`, `delimiterString`, `quoteCharacter`, `emptyValue`, `nullValues`, `ignoreLeadingAndTrailingWhitespace`), `@MethodSource` (static methods of the class named by string literals, or methods of its shared instance under `@TestInstance(PER_CLASS)`, or the one named as the test: a `Stream`, an `Iterable`, an array, an `IntStream`, a `LongStream` or a `DoubleStream`, of `Arguments`, of arrays or of single arguments), `@FieldSource` (fields of the class named by string literals, or the one named as the test, static or of its shared instance under `@TestInstance(PER_CLASS)`: an `Iterable`, an array, or a `Supplier` of a stream or of either), `@EnumSource` (`value`, `names`, `mode`, `from`, `to`), `@NullSource`, `@EmptySource`, `@NullAndEmptySource`. An argument is converted as JUnit converts it: a text to a primitive type or its box (a number's underscores dropped), an enum, a type of the JDK's JUnit converts (`File`, `Path`, `URI`, `URL`, `UUID`, `BigDecimal`, `BigInteger`, `Charset`, `Locale` by its language tag, the `java.time` types), or a class with a static factory method or a constructor taking a `String`; a number widens to a primitive type, not to a box. What JUnit cannot convert is an error of the run, in JUnit's words |
 | `@TestFactory` | The tests a method makes: a `DynamicNode`, an array of them, or a `Stream`, an `Iterable` or an `Iterator` declared of them. Each `DynamicTest` is a test, counted, named by its place (`prices[2]`; in a `DynamicContainer`, `prices[2][1]`) and reported with its display name; `@BeforeEach` and `@AfterEach` run once around the factory, not around each of its tests, and a stream is closed after them. What the factory or a container throws while its tests are made is an error of its own, the tests made before it having run |
@@ -144,6 +144,7 @@ names, and fails the build with the name of a failed test.
 | `@Disabled` | A test counted as skipped, or a class: each of its tests and `@Nested` classes |
 | `@TempDir` | A field or a parameter of type `Path` or `File`: a directory of its own in `/tmp` for each, a static field's around the tests of its class, the others' around each test, deleted with what it holds after it |
 | `@DisplayName` | Of a test: written after the test's name where it fails; of a test or a class: the `TestInfo`'s display name |
+| `@ExtendWith` | On a class, of AssertJ's `SoftAssertionsExtension` alone: [soft assertions](#soft-assertions) for each test of the class, of the classes under it and of its `@Nested` classes |
 
 A source written more than once gives its rows as JUnit gives them: the sources of one kind
 together, where the first of them is written. A `Named` argument is its payload.
@@ -176,7 +177,7 @@ run has a configuration parameter, so a random order has no seed to repeat it wi
 
 | `assertThat` of | Checks |
 | --- | --- |
-| any value | `isEqualTo` (two arrays by their elements), `isNotEqualTo`, `isNull`, `isNotNull`, `isSameAs`, `isNotSameAs`, `isInstanceOf`, `isNotInstanceOf`, `isExactlyInstanceOf`, `isInstanceOfSatisfying`, `isIn`, `isNotIn` (of values or an `Iterable`), `hasToString`, `doesNotHaveToString`, `matches`, `satisfies`, `asInstanceOf`, and `as`, `describedAs`, `withFailMessage`, `overridingErrorMessage` |
+| any value | `isEqualTo` (two arrays by their elements), `isNotEqualTo`, `isNull`, `isNotNull`, `isSameAs`, `isNotSameAs`, `isInstanceOf`, `isNotInstanceOf`, `isExactlyInstanceOf`, `isInstanceOfSatisfying`, `isIn`, `isNotIn` (of values or an `Iterable`), `hasToString`, `doesNotHaveToString`, `matches`, `satisfies` (every group of requirements is run and their failures are thrown together), `asInstanceOf`, and `as`, `describedAs`, `withFailMessage`, `overridingErrorMessage` |
 | an object | `extracting` with a function or by the names of properties or fields (several make a list), `hasFieldOrProperty`, `hasFieldOrPropertyWithValue`, `usingRecursiveComparison` (also of a `Map`, an `Iterable`, an array of objects, an `Optional`) and on it `isEqualTo`, `isNotEqualTo`, `ignoringFields`, `comparingOnlyFields`, `ignoringActualNullFields`, `ignoringExpectedNullFields`, `ignoringCollectionOrder`, `withStrictTypeChecking` |
 | a `Comparable` of the program's (an enum too) | `isGreaterThan`, `isGreaterThanOrEqualTo`, `isLessThan`, `isLessThanOrEqualTo`, `isBetween`, `isStrictlyBetween`, `isEqualByComparingTo`, `isNotEqualByComparingTo` |
 | a `String` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `isBlank`, `isNotBlank`, `hasSize` and its four comparisons, `contains`, `doesNotContain`, `containsIgnoringCase`, `containsSubsequence`, `startsWith`, `doesNotStartWith`, `endsWith`, `doesNotEndWith`, `isEqualToIgnoringCase`, `matches`, `doesNotMatch` |
@@ -206,6 +207,93 @@ AssertJ's precisions), a collection, an array, a map and an `Optional` by what t
 class of a library whose members the program does not keep is refused where it is compared
 field by field.
 
+## Soft assertions
+
+`SoftAssertions`, `AutoCloseableSoftAssertions` and `SoftAssertions.assertSoftly` collect
+the failures of their assertions where `Assertions` throws the first:
+
+```console
+$ cat src/test/java/shop/TotalsTest.java
+package shop;
+
+import org.assertj.core.api.SoftAssertions;
+import org.junit.jupiter.api.Test;
+
+class TotalsTest {
+
+    @Test
+    void everyCheckRuns() {
+        SoftAssertions softly = new SoftAssertions();
+        softly.assertThat(1200 + 2 * 450).isEqualTo(2000);
+        softly.assertThat("cup").startsWith("t").endsWith("p").hasSize(4);
+        softly.assertAll();
+    }
+
+}
+$ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 src/test/java/shop/TotalsTest.java
+Running shop.TotalsTest
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! -- in shop.TotalsTest
+shop.TotalsTest.everyCheckRuns <<< FAILURE!
+
+Multiple Failures (3 failures)
+-- failure 1 --
+expected: 2000
+ but was: 2100
+-- failure 2 --
+Expecting actual:
+  "cup"
+to start with:
+  "t"
+-- failure 3 --
+Expected size: 4 but was: 3 in:
+"cup"
+
+Results:
+
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+```
+
+A provider has `assertThat` of the kinds above, `assertThatThrownBy`, `assertThatCode`,
+`assertThatObject`, `assertThatExceptionOfType` and its named kinds, `fail`,
+`shouldHaveThrown`, `failBecauseExceptionWasNotThrown`, `check`, `assertAlso`,
+`collectAssertionError`, `errorsCollected`, `assertionErrorsCollected`, `wasSuccess`,
+`succeeded`, `setAfterAssertionErrorCollected`, `addAfterAssertionErrorCollected`,
+`setDelegate`, `getDelegate`, `proxy` and `assertAll`, which throws AssertJ's
+`AssertJMultipleFailuresError` (a `MultipleFailuresError`) of what was collected. As under
+AssertJ:
+
+- A check that fails hands its failure to the provider and the chain goes on. A check that
+  another check calls is part of it, whether the assertion class is AssertJ's or the
+  program's.
+- `softly.proxy(PersonAssert.class, Person.class, person)` makes an assertion class of the
+  program's soft, by its constructor taking the value. Its methods that are neither `private`
+  nor `final` are checks; one that fails answers the assertion itself where its return type
+  takes it, else `null`, `0` or `false`.
+- An assertion that another one answers (`extracting`, `asInstanceOf`, `first`, `cause`,
+  `usingRecursiveComparison`, ..) is soft too and described as the first is. One that a
+  method of the program's assertion class answers is not.
+- An exception that is no `AssertionError` is thrown as it is.
+
+`@ExtendWith(SoftAssertionsExtension.class)` on a test class gives each of its tests its
+soft assertions: a parameter of a test method whose type is a provider's class
+(`SoftAssertions`, `AutoCloseableSoftAssertions`, a class of the program's under one) and
+the instance fields of `@InjectSoftAssertions`, all handing their failures to one collector
+of the test. What was collected is thrown where the test ends without throwing, before
+`@AfterEach`.
+
+Where it differs from AssertJ:
+
+- AssertJ ends the message of each failure collected with the test's file and line
+  (`at CartTest.aLine(CartTest.java:19)`). The subset knows no line of a failure, and the
+  message has none.
+- A method answering another assertion that fails (`asInstanceOf` of a value of another
+  type, `cause` of a throwable with none, `extracting` of `null`) throws its failure. So
+  does AssertJ's for most; its `extracting`, `map` and `Optional`'s `get` collect the
+  failure and then throw another exception. `first`, `last`, `element` and `singleElement`
+  collect it and answer `null`, as AssertJ's do.
+- A soft assertion made by one thread is checked by that thread: the checks of two threads
+  at once are not told apart.
+
 ## What is not there
 
 An annotation of JUnit's that a run does not run, an element of one that it does not read,
@@ -218,16 +306,21 @@ $ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 \
 error: src/test/java/shop/PrinterTest.java:13:5: the annotation org.junit.jupiter.api.condition.EnabledOnOs is not supported by the experimental Java subset yet
 ```
 
-Among them: the conditions (`@EnabledOnOs`, `@EnabledIf`), `@TestTemplate`, extensions, a
+Among them: the conditions (`@EnabledOnOs`, `@EnabledIf`), `@TestTemplate`, every extension
+but AssertJ's `SoftAssertionsExtension` and that one on a method, soft assertions given to
+what runs around tests or to a constructor, a
+`static` or `final` field of `@InjectSoftAssertions`, a
 `@Timeout` in a thread of its own (`threadMode = SEPARATE_THREAD`), an annotation of JUnit's
 on an annotation type (a composed annotation), the elements the table above does not name (`classes` of
 `@ValueSource`, `cleanup` and `factory` of `@TempDir`), a text given to a `Class` parameter, a
-parameter of a `@Test` or a `@TestFactory` method that is no `@TempDir` or `TestInfo`, a
+parameter of a `@Test` or a `@TestFactory` method that is no `@TempDir`, `TestInfo` or soft
+assertions of the extension's, a
 `@TestFactory` method declared to return what names no `DynamicNode` (`Object`, a raw
 `Stream`), a parameter of a
 parameterized test whose type is JUnit's (`ArgumentsAccessor`, `TestInfo`, whose display
 name would show the arguments), a `RepetitionInfo` given around a test that is not repeated;
-of AssertJ, soft assertions and the checks the table above does not name (`hasParent` of a
+of AssertJ, the BDD soft assertions (`BDDSoftAssertions`), `SoftAssertionsProvider.assertSoftly`
+of a class, and the checks the table above does not name (`hasParent` of a
 `Path`, the recursive comparison's own comparators and introspection strategy, the checks
 of its own of a `ZonedDateTime`, a `URI` or a `BigDecimal`, which are a `Comparable`'s). A
 test class has one constructor, whose parameters may be the `TestInfo` and `@TempDir`

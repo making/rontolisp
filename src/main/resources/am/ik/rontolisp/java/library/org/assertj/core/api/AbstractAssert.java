@@ -4,12 +4,15 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
+import org.assertj.core.error.AssertJMultipleFailuresError;
 import org.opentest4j.AssertionFailedError;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // What every assertion has: the value, what the assertion is described as, and the
 // checks any value takes.
@@ -58,7 +61,7 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
         throw failure(arguments.length == 0 ? errorMessage : String.format(errorMessage, arguments));
     }
 
-    protected String descriptionText() {
+    public String descriptionText() {
         return description;
     }
 
@@ -78,20 +81,24 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
         return extracted;
     }
 
+    @Uncollected
     public SELF as(String description, Object... args) {
         this.description = args.length == 0 ? description : String.format(description, args);
         return myself;
     }
 
+    @Uncollected
     public SELF describedAs(String description, Object... args) {
         return as(description, args);
     }
 
+    @Uncollected
     public SELF withFailMessage(String newErrorMessage, Object... args) {
         this.overriding = args.length == 0 ? newErrorMessage : String.format(newErrorMessage, args);
         return myself;
     }
 
+    @Uncollected
     public SELF overridingErrorMessage(String newErrorMessage, Object... args) {
         return withFailMessage(newErrorMessage, args);
     }
@@ -231,8 +238,26 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
         return myself;
     }
 
-    public SELF satisfies(Consumer<? super ACTUAL> requirements) {
-        requirements.accept(actual);
+    @SafeVarargs
+    public final SELF satisfies(Consumer<? super ACTUAL>... requirements) {
+        return satisfiesForProxy(requirements);
+    }
+
+    // Every group of requirements is run, and the failures of those that failed are
+    // thrown together.
+    protected SELF satisfiesForProxy(Consumer<? super ACTUAL>[] requirements) throws AssertionError {
+        List<AssertionError> failures = new ArrayList<>();
+        for (Consumer<? super ACTUAL> each : requirements) {
+            try {
+                each.accept(actual);
+            }
+            catch (AssertionError failure) {
+                failures.add(failure);
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new AssertJMultipleFailuresError(null, failures);
+        }
         return myself;
     }
 
@@ -241,6 +266,7 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
         return carried(new RecursiveComparisonAssert(actual));
     }
 
+    @Uncollected
     public <ASSERT extends AbstractAssert<?, ?>> ASSERT asInstanceOf(InstanceOfAssertFactory<?, ASSERT> instanceOfAssertFactory) {
         java.util.Objects.requireNonNull(instanceOfAssertFactory, "instanceOfAssertFactory should not be null");
         isInstanceOf(instanceOfAssertFactory.getRawClass());

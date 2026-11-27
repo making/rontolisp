@@ -6,6 +6,7 @@ package org.assertj.core.api;
 
 import org.opentest4j.AssertionFailedError;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of a throwable: its class, its message, its causes.
 public abstract class AbstractThrowableAssert<SELF extends AbstractThrowableAssert<SELF, ACTUAL>, ACTUAL extends Throwable>
@@ -159,14 +160,16 @@ public abstract class AbstractThrowableAssert<SELF extends AbstractThrowableAsse
         return myself;
     }
 
+    @Uncollected
     public AbstractThrowableAssert<?, ?> cause() {
         isNotNull();
         if (actual.getCause() == null) {
             throw failure("Expecting actual throwable to have a cause but it did not, actual was:\n" + Shown.thrown(actual) + "\n");
         }
-        return new ThrowableAssert<>(actual.getCause());
+        return carried(new ThrowableAssert<>(actual.getCause()));
     }
 
+    @Uncollected
     public AbstractThrowableAssert<?, ?> rootCause() {
         isNotNull();
         Throwable root = root();
@@ -174,7 +177,15 @@ public abstract class AbstractThrowableAssert<SELF extends AbstractThrowableAsse
             throw failure("Expecting actual throwable to have a root cause but it did not, actual was:\n" + Shown.thrown(actual)
                     + "\n");
         }
-        return new ThrowableAssert<>(root);
+        return carried(new ThrowableAssert<>(root));
+    }
+
+    // The check of what a piece of code threw: it threw something.
+    protected SELF hasBeenThrown() {
+        if (actual == null) {
+            throw failure("\nExpecting code to raise a throwable.");
+        }
+        return myself;
     }
 
     // The check of a piece of code that must throw nothing: the throwable is what it threw.

@@ -302,6 +302,14 @@ final class JavaClasses {
 	boolean everyRegion;
 
 	/**
+	 * Whether the program makes soft assertions of AssertJ's: it reaches
+	 * {@code rontolisp.internal.Soft}, which gives an assertion its collector. Until a
+	 * pass finds it does, an assertion has no place for a collector and a check of one is
+	 * its body, throwing what fails in it.
+	 */
+	boolean softAssertions;
+
+	/**
 	 * Whether the program reaches {@code TemporalQueries.chronology()}, so that a date or
 	 * a time may be asked its calendar. Until a pass finds it does, no class of
 	 * {@code java.time} compares a query with that question.

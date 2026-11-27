@@ -12,6 +12,7 @@ import java.nio.file.Files;
 
 import rontolisp.internal.Delta;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of a file: whether it is there and what it is, its name and its parent,
 // what it holds. A failure shows the file by its absolute path.
@@ -175,11 +176,13 @@ public abstract class AbstractFileAssert<SELF extends AbstractFileAssert<SELF>> 
         return said(actual.canRead(), "\nExpecting actual:\n" + Shown.under(actual) + "\nto be readable.");
     }
 
+    @Uncollected
     public AbstractStringAssert<?> content() {
         canRead();
         return carried(new StringAssert(new String(bytes(), StandardCharsets.UTF_8)));
     }
 
+    @Uncollected
     public AbstractByteArrayAssert<?> binaryContent() {
         isFile();
         return carried(new ByteArrayAssert(bytes()));

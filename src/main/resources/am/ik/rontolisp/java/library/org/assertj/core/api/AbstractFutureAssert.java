@@ -12,6 +12,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of a future: its state, and its result once it has one within a time.
 public abstract class AbstractFutureAssert<SELF extends AbstractFutureAssert<SELF, ACTUAL, RESULT>, ACTUAL extends Future<RESULT>, RESULT>
@@ -102,11 +103,13 @@ public abstract class AbstractFutureAssert<SELF extends AbstractFutureAssert<SEL
         };
     }
 
+    @Uncollected
     public ObjectAssert<RESULT> succeedsWithin(Duration timeout) {
         isNotNull();
         return carried(new ObjectAssert<>(within(this, actual, timeout.toNanos(), TimeUnit.NANOSECONDS, Shown.of(timeout))));
     }
 
+    @Uncollected
     public ObjectAssert<RESULT> succeedsWithin(long timeout, TimeUnit unit) {
         isNotNull();
         return carried(new ObjectAssert<>(within(this, actual, timeout, unit, Shown.of(timeout) + " " + unit(unit))));

@@ -13,6 +13,7 @@ import java.util.function.Predicate;
 import org.assertj.core.groups.Tuple;
 import rontolisp.internal.Introspected;
 import rontolisp.internal.Shown;
+import rontolisp.internal.Uncollected;
 
 // The checks of the elements of a collection, in the order it gives them.
 public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert<SELF, ACTUAL, ELEMENT>, ACTUAL extends Iterable<? extends ELEMENT>, ELEMENT>
@@ -330,15 +331,17 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
 
     // ---- the elements, asserted on in their turn
 
+    @Uncollected
     @SuppressWarnings("unchecked")
     public <V> ListAssert<V> extracting(Function<? super ELEMENT, V> extractor) {
         List<V> extracted = new ArrayList<>();
         for (Object element : elements()) {
             extracted.add(extractor.apply((ELEMENT) element));
         }
-        return new ListAssert<>(extracted);
+        return carried(new ListAssert<>(extracted));
     }
 
+    @Uncollected
     public ListAssert<Object> extracting(String propertyOrField) {
         List<Object> extracted = new ArrayList<>();
         for (Object element : elements()) {
@@ -347,6 +350,7 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
         return extracted(new ListAssert<>(extracted), propertyOrField);
     }
 
+    @Uncollected
     public ListAssert<Tuple> extracting(String... propertiesOrFields) {
         List<Tuple> extracted = new ArrayList<>();
         for (Object element : elements()) {
@@ -359,10 +363,12 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
         return extracted(new ListAssert<>(extracted), String.join(", ", propertiesOrFields));
     }
 
+    @Uncollected
     public <V> ListAssert<V> map(Function<? super ELEMENT, V> mapper) {
         return extracting(mapper);
     }
 
+    @Uncollected
     @SuppressWarnings("unchecked")
     public ListAssert<ELEMENT> filteredOn(Predicate<? super ELEMENT> predicate) {
         List<ELEMENT> kept = new ArrayList<>();
@@ -371,9 +377,10 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
                 kept.add((ELEMENT) element);
             }
         }
-        return new ListAssert<>(kept);
+        return carried(new ListAssert<>(kept));
     }
 
+    @Uncollected
     public ListAssert<ELEMENT> filteredOn(String propertyOrFieldName, Object expectedValue) {
         return filteredOn(element -> Shown.same(Introspected.value(element, propertyOrFieldName), expectedValue));
     }
@@ -384,7 +391,7 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
     }
 
     @SuppressWarnings("unchecked")
-    private ObjectAssert<ELEMENT> element(int index, String described) {
+    private ObjectAssert<ELEMENT> element(int index, String taken) {
         List<Object> held = elements();
         if (held.isEmpty()) {
             throw failure("\nExpecting actual not to be empty");
@@ -392,25 +399,26 @@ public abstract class AbstractIterableAssert<SELF extends AbstractIterableAssert
         if (index < 0 || index >= held.size()) {
             throw failure("Index " + index + " out of bounds for length " + held.size());
         }
-        return new ObjectAssert<>((ELEMENT) held.get(index)).as(described);
+        return carried(new ObjectAssert<>((ELEMENT) held.get(index)))
+            .as((descriptionText() == null ? navigated() : descriptionText()) + taken);
     }
 
     public ObjectAssert<ELEMENT> first() {
-        return element(0, navigated() + " check first element");
+        return element(0, " check first element");
     }
 
     public ObjectAssert<ELEMENT> last() {
         int size = elements().size();
-        return element(size == 0 ? 0 : size - 1, navigated() + " check last element");
+        return element(size == 0 ? 0 : size - 1, " check last element");
     }
 
     public ObjectAssert<ELEMENT> element(int index) {
-        return element(index, navigated() + " element at index " + index);
+        return element(index, " element at index " + index);
     }
 
     public ObjectAssert<ELEMENT> singleElement() {
         hasSize(1);
-        return element(0, navigated() + " check single element");
+        return element(0, " check single element");
     }
 
     // What an element taken from the collection is described as coming from.
