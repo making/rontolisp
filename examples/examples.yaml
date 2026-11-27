@@ -1341,6 +1341,39 @@ examples:
         caption  "a filled bold green dot called origin"
         caption  "a red circle"
         embolden (:DASHED :BOLD)
+  # --- wit/resource: a resource a world exports, Lisp calling Lisp --------------
+  - path: wit/resource/counters.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      implements the world counters of wit/counters.wit (see wit/resource/README.md):
+      an interface that declares a resource -- its constructor, methods and static
+      function the defuns counter-new, counter-add, ..., the value the constructor
+      answers the resource -- and a second interface taking that resource through a
+      use clause. wasm-component pins that the world lowers (the component defines
+      the resource type, its built-ins and its destructor); jvm-compile that the
+      same contract check runs on a backend exporting nothing. Called by app.wasm
+      once composed, so the harness only compiles
+  - path: wit/resource/app.lisp
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      the command that uses the counters counters.lisp exports, holding handles. On
+      the interpreter and the JVM it loads counters.lisp and binds its functions as
+      the provider, so those legs RUN and their output is checked; wasm-component
+      pins that the import lowers. RUNNING that leg needs counters.wasm
+      plug-composed in (build.sh), off the test path -- it prints the same lines
+      (WitOracleE2eTest composes and compares where wasm-tools is)
+    expect:
+      equals: |
+        add      7
+        read     (:NAME "apples" :VALUE 7)
+        total    17
+        summary  "pears is at 10"
+        live     2
+        merged   (:NAME "apples+pears" :VALUE 17)
+        leader   "apples+pears is at 17"
+        live     1
+        live     0
+        leader   "no counter to lead"
   - path: wit/pipeline/app.lisp
     backends: [wasm-component]
     note: >-

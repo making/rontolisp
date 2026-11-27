@@ -1,0 +1,39 @@
+package example:counters@0.1.0;
+
+/// Counters a component hands out as handles: each is a value of the program
+/// that implements the interface, which no other component sees inside.
+interface registry {
+  record reading {
+    name: string,
+    value: u32,
+  }
+
+  resource counter {
+    /// A counter called `name`, starting at `start`.
+    constructor(name: string, start: u32);
+    /// Adds `by` and answers the new value.
+    add: func(by: u32) -> u32;
+    read: func() -> reading;
+    /// A counter of the two values together. It takes `a` over and reads `b`.
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  /// The sum of the counters' values.
+  total: func(counters: list<borrow<counter>>) -> u32;
+  /// The counter that leads, handed back; an error when there is none.
+  leader: func(counters: list<counter>) -> result<counter, string>;
+  /// How many counters the registry has made and not yet seen released.
+  live: func() -> u32;
+}
+
+/// What a second interface says about the first one's resource.
+interface report {
+  use registry.{counter};
+
+  summary: func(c: borrow<counter>) -> string;
+}
+
+world counters {
+  export registry;
+  export report;
+}

@@ -196,11 +196,18 @@ function whose WIT result is a `result` returns the ok value and signals
 `rontolisp:wit-error` for the error arm — what a
 [provider](#importing-a-wit-interface-wit-import) does, so the functions of
 `shapes.lisp` also answer a `wit-import` of the interface on the interpreter
-and the JVM. The full table, and what is not carried (handles, streams), is in
+and the JVM. The full table, and what is not carried (streams, futures), is in
 the
 [reference](../reference/functions/rontolisp-wit-export.md#compound-types);
 [`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes)
 is this world with a second component calling it.
+
+A `resource` an exported interface declares is exported too: its constructor,
+methods and static functions are the `defun`s `counter-new`, `counter-add`, ...,
+and the value the constructor answers is the resource -- the host holds a handle
+of it, and a function that takes a `counter` receives that value
+([Resources](../reference/functions/rontolisp-wit-export.md#resources),
+[`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)).
 
 A WASI module (`-o out.wasm` alone) and `--no-gc` export the flat types alone:
 its host calls a function of core values, which have no type to state a record

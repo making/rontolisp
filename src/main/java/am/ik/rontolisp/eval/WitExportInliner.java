@@ -84,11 +84,19 @@ public final class WitExportInliner {
 		}
 		Map<String, List<String>> defuns = collectDefuns(program);
 		List<LispVal> result = new ArrayList<>(program.size());
+		boolean resources = false;
 		for (LispVal form : program) {
 			if (WitExportDirective.isDirective(form)) {
 				WitExportDirective.Directive directive = WitExportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
-				result.addAll(WitExportDirective.lower(directive, read(loader, path), defuns::get, backend));
+				List<LispVal> lowered = WitExportDirective.lower(directive, read(loader, path), defuns::get, backend);
+				// A world that exports a resource keeps each handle's value in the slot
+				// store, which the export wrappers call: spliced once, ahead of them.
+				if (WitExportDirective.exportsResource(lowered) && !resources) {
+					resources = true;
+					result.addAll(0, WitLibrary.resourceForms());
+				}
+				result.addAll(lowered);
 			}
 			else if (isWasmExport(form)) {
 				throw new UnsupportedOperationException(

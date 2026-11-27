@@ -421,8 +421,16 @@ is s32, which is int in Java, not long
 
 ### エクスポートの型
 
-型は[上の表](#the-types)のとおりです。ただし、world のエクスポートが受け渡せない型は、
-WIT の行で拒否されます。リソース、`stream`、`future` です。名前の付いた型は、インポートする
+型は[上の表](#the-types)のとおりです。ただし、`@WitExport` のクラスが受け渡せない型は、
+WIT の行で拒否されます。リソース、`stream`、`future` です。リソースは、world がその
+インタフェースをエクスポートする時点で拒否されます。エクスポートするインタフェースが
+リソースを宣言する場合と、`use` 句でほかのインタフェースのリソースを取り込む場合は、
+関数がその型を使うかどうかにかかわらず、インタプリタでも、どの出力（コンポーネント、
+`--no-wasi`、Preview 1 のモジュール、`--no-gc`、`--no-gc --component`）でも拒否されます。Common Lisp の
+プログラムはコンポーネントからリソースをエクスポートでき
+（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)）、Java の
+プログラムはそのコンポーネントのリソースを、ほかのリソースと同じく `@WitImport` で
+インポートできます。名前の付いた型は、インポートする
 インタフェースの場合と同じくメンバー型です。
 world が定義する型はアノテーションを付けたクラスのメンバー型で、エクスポートするインタフェースが
 定義する型は、そのインタフェースのメンバークラスのメンバー型です。world やインタフェースが
@@ -566,7 +574,11 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 - プログラムが書く stream をホストがいつ読むかは、ホストが決めます。ホストが後の呼び出しの中で
   しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため wasmtime の下では、
   `wasi:http` のリクエストはボディを持てません（wasmtime はボディを `client.send` の中で読みます）。
-- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は
+- `@WitExport` の world のエクスポートは、リソース、`stream`、`future` を受け渡せません。
+  エクスポートするインタフェースが `resource` を宣言する場合と、その `use` 句がリソースまたは
+  ハンドルを含む型を取り込む場合は、関数がその型を使うかどうかにかかわらず、world の
+  `export` の行で拒否されます。world 自身の `use` で取り込んだリソースは宣言されず、
+  それを使う world の関数は拒否されます。`async func` のエクスポートで使える型は
   ほかのエクスポートと同じです。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、
   使える型が `bool`、整数、`f64`、`string` だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。

@@ -589,9 +589,12 @@ public final class WasmComponentBuilder {
 	 * @param nextComponentInstance the first free component instance index (after the
 	 * {@code wasi:cli/run} instance and the user-import instances); each exported WIT
 	 * interface consumes one
+	 * @param resourceTypes the component type index of each resource the world exports
+	 * ({@link ExportedResources.Defined#typeOf}); empty for a world that exports none
 	 */
 	private static void appendFuncExports(ComponentWriter c, List<WasmExportCompiler.Decl> decls, int nextCoreFunc,
-			int nextType, int nextComponentFunc, int rontolispInstance, int nextComponentInstance) {
+			int nextType, int nextComponentFunc, int rontolispInstance, int nextComponentInstance,
+			java.util.Map<String, Integer> resourceTypes) {
 		if (decls.isEmpty()) {
 			return;
 		}
@@ -628,8 +631,8 @@ public final class WasmComponentBuilder {
 					: -1));
 		}
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
-		ComponentExportWiring.append(c, exported, 0, realloc, nextType, nextComponentFunc, nextComponentInstance,
-				false);
+		ComponentExportWiring.append(c, exported, 0, realloc, nextType, nextComponentFunc, nextComponentInstance, false,
+				resourceTypes);
 	}
 
 	/**
@@ -1462,19 +1465,29 @@ public final class WasmComponentBuilder {
 		// arguments (it has no imports). The engine runs its start section here, so the
 		// top-level initializers are in place before any lifted export can be called.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
+		// The resources the world exports: their types and built-ins ahead of the core
+		// (which imports the built-ins, and nothing else), its destructors after it.
+		// Nothing for a world that exports none, where the core is instance 0.
+		final ExportedResources.Defined resources = ExportedResources.define(c, ExportedResources.of(funcExports),
+				coreModule, 1, 0, 0, 0);
+		final int rontolisp = resources.coreInstances();
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0,
+						List.copyOf(resources.builtins().keySet()), List.copyOf(resources.builtins().values())))));
+		ExportedResources.fix(c, resources, rontolisp, rontolisp + 1, resources.coreFuncs(), 0);
 		// The canonical string options name core memory 0: on this shape that is the
 		// core's own exported memory (there is no shared memory module), aliased before
 		// the export wiring so it takes index 0. A scalar-only reactor aliases nothing.
 		if (funcExports.stream().anyMatch(WasmExportCompiler::usesMemory)) {
 			c.rawSection(ComponentWriter.SEC_ALIAS,
-					ComponentWriter.vec(List.of(ComponentWriter.aliasCoreMemory(0, "memory"))));
+					ComponentWriter.vec(List.of(ComponentWriter.aliasCoreMemory(rontolisp, "memory"))));
 		}
-		// Every index space starts from zero: no run wiring, no fixed surface, no user
-		// imports precede the export wiring (the +1/+1/+2 cursor shifts of the base
-		// build are the run alias/lift/instance-pair, none of which exist here).
-		appendFuncExports(c, funcExports, 0, 0, 0, 0, 0);
+		// Every index space starts from zero, or behind the resources: no run wiring, no
+		// fixed surface, no user imports precede the export wiring (the +1/+1/+2 cursor
+		// shifts of the base build are the run alias/lift/instance-pair, none of which
+		// exist here).
+		appendFuncExports(c, funcExports, resources.coreFuncs() + resources.fixedCoreFuncs(), resources.types(), 0,
+				rontolisp, 0, resources.typeOf());
 		return c.toByteArray();
 	}
 
@@ -1783,15 +1796,31 @@ public final class WasmComponentBuilder {
 			coreNames.add(ifaceId);
 			coreInstances.add(instance);
 		});
+		// The resources the world exports: their types and built-ins continue every
+		// index space behind the user imports, and their destructors follow the core's
+		// instantiation. A world that exports none adds nothing, and shifts nothing.
+		final ExportedResources.Defined resources = ExportedResources.define(c, ExportedResources.of(funcExports),
+				coreModule, 3, io.nextCoreInstance() + userIfaces, io.nextCoreFunc() + user.coreFuncs(),
+				io.nextType() + user.types());
+		resources.builtins().forEach((module, instance) -> {
+			coreNames.add(module);
+			coreInstances.add(instance);
+		});
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
-		final int rontolisp = io.nextCoreInstance() + userIfaces;
+		final int rontolisp = io.nextCoreInstance() + userIfaces + resources.coreInstances();
+		ExportedResources.fix(c, resources, rontolisp, rontolisp + 1,
+				io.nextCoreFunc() + user.coreFuncs() + resources.coreFuncs(), 0);
+		final int exportCoreFunc = io.nextCoreFunc() + user.coreFuncs() + resources.coreFuncs()
+				+ resources.fixedCoreFuncs();
+		final int nextExportType = io.nextType() + user.types() + resources.types();
 		if (!run) {
 			// A reactor: the world's exports alone, at the indices the run wiring below
 			// would have pushed one (core func, component func) and two (component
 			// instance) further on.
-			appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs(), io.nextType() + user.types(),
-					io.nextComponentFunc() + user.componentFuncs(), rontolisp, blockInstances + userIfaces);
+			appendFuncExports(c, funcExports, exportCoreFunc, nextExportType,
+					io.nextComponentFunc() + user.componentFuncs(), rontolisp, blockInstances + userIfaces,
+					resources.typeOf());
 			return c.toByteArray();
 		}
 		final int runFuncType = at(typeIndex, T_RUN_FUNC);
@@ -1800,8 +1829,8 @@ public final class WasmComponentBuilder {
 		// sync-ABI lift: the task may block, no gated feature involved).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
-			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), runFuncType))));
+		c.rawSection(ComponentWriter.SEC_CANON,
+				ComponentWriter.vec(List.of(ComponentWriter.canonLift(exportCoreFunc, runFuncType))));
 		// A component instance (after the block's import instances and the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
@@ -1814,8 +1843,9 @@ public final class WasmComponentBuilder {
 		// `export wasi:cli/run` statement itself introduces -- an instance export
 		// consumes
 		// an index -- so the next free instance is two past the import instances.
-		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
-				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, blockInstances + 2 + userIfaces);
+		appendFuncExports(c, funcExports, exportCoreFunc + 1, nextExportType,
+				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, blockInstances + 2 + userIfaces,
+				resources.typeOf());
 		return c.toByteArray();
 	}
 

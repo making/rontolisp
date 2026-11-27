@@ -9355,6 +9355,40 @@ public final class LispNames {
 	public static final String WIT_RESULT = "%WIT-RESULT";
 
 	/**
+	 * The slot store of the resources a world exports ({@link #WIT_EXPORT} on a
+	 * component): {@code (rontolisp::%wit-rep-new value)} answers the representation --
+	 * an integer -- a handle of the value is made over. Defined in
+	 * {@code wit-resource.lisp} with the three below.
+	 */
+	public static final String WIT_REP_NEW = "%WIT-REP-NEW";
+
+	/**
+	 * {@code (rontolisp::%wit-rep-value rep)}: the value a representation stands for,
+	 * what a borrowed handle of an exported resource arrives as.
+	 */
+	public static final String WIT_REP_VALUE = "%WIT-REP-VALUE";
+
+	/**
+	 * {@code (rontolisp::%wit-rep-take rep)}: the value of an owned handle a host passed
+	 * in, its representation marked as taken so that releasing the handle runs no
+	 * destructor.
+	 */
+	public static final String WIT_REP_TAKE = "%WIT-REP-TAKE";
+
+	/**
+	 * {@code (rontolisp::%wit-rep-free rep)}: frees a representation and answers what it
+	 * held -- the value, or {@link #WIT_REP_TAKEN}. The destructor of an exported
+	 * resource.
+	 */
+	public static final String WIT_REP_FREE = "%WIT-REP-FREE";
+
+	/**
+	 * The symbol a taken representation holds until its handle is released
+	 * ({@link #WIT_REP_TAKE}).
+	 */
+	public static final String WIT_REP_TAKEN = "%WIT-REP-TAKEN";
+
+	/**
 	 * The {@code java} package name (interpreter-only Java interop by reflection). It
 	 * does not use {@code cl}; its functions wrap arbitrary host objects as
 	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and

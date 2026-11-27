@@ -37,7 +37,8 @@ root`**.
 The ONE vocabulary the binders consult, pinned by `WitTypeMapperTest` (the decision record;
 reversing a cell is a breaking change). `record`=keyword plist, `enum`=keyword, `variant`=tagged
 list, `flags`=keyword list (the labels set), `option<T>`=value-or-nil, `tuple`=list,
-`resource`/`borrow`/`own`=opaque integer handle (`.kb/read-load-streams.md`), `s64`/`u64`
+`resource`/`borrow`/`own`=opaque integer handle (`.kb/read-load-streams.md`; the value itself
+in the program that EXPORTS the resource, "A resource the world exports"), `s64`/`u64`
 bignum-safe.
 
 **`result<T, E>` = a condition on EVERY backend.** Ok arm = the return value (payload-less ok ->
@@ -187,10 +188,10 @@ Each names the WIT file and line: world selection; an export not defined; **arit
 exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is not a lower-kebab
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
-types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); an exported
-interface that declares a `resource` (its functions
-were skipped without a word until 2026-11-26, a component that was not the world's); a `use`
-clause whose type cannot be named in the scope ("A type of another interface").
+types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); a resource's
+function or destructor that the program gets wrong, and a resource where the output is no
+component of the default backend ("A resource the world exports"); a `use` clause whose type
+cannot be named in the scope ("A type of another interface").
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
 ### Compound types across an export — the canonical form
@@ -256,9 +257,9 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   `bindgen!` host under a 48 MiB store limit, 35 MB peak RSS; a `--no-wasi` module's glue calls
   it as any export (`:async` is a component's). `flip: async func(point) -> point` 1,938 B /
   1,126 gzip against the sync 1,881 / 1,098 (the held mark, wasi-component.md).
-- **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, an
-  interface declaring a resource
-  (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons). In the compiler,
+- **Refused at the WIT line** (`requireCanonical`): a stream, a future, a handle of a
+  resource the world does not export; `--no-gc`, which has no value a record could be (no
+  cons). In the compiler,
   which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
   export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
   A `--no-wasi` module exports them through `--emit-js-glue` ([wasm-import.md](wasm-import.md),
@@ -356,8 +357,8 @@ the marshalling, `WitExportTypes` and `WitEmitter` needed no change.
 
 - **Rejected: the tool's shape.** `wasm-tools component new` makes the other interface an
   instance IMPORT (types only) and aliases the type out, or aliases it out of the exported
-  instance when the world exports that interface (the probe's shapes: `.todo/m91`, which needs
-  them for a resource). A value type is structural: `targets` accepts the structural copy
+  instance when the world exports that interface (the shape a resource takes: "A resource the
+  world exports"). A value type is structural: `targets` accepts the structural copy
   against the world that says `use` (measured, both cases), a `bindgen!` host generated from
   the source WIT type-checks it, and the import side has always inlined a used record. The
   import would break `--component --no-wasi`'s zero-import contract and collide with a
@@ -370,13 +371,87 @@ the marshalling, `WitExportTypes` and `WitEmitter` needed no change.
   "missing import named `coord`") -- the message says to name it in the clause. A name taken
   by another type is refused at the clause's line, with `as`.
 - **A resource is nominal**: a name whose definition is one, or holds a handle, stays a `use`
-  clause (path rewritten to the full id, since the scope answered is in no package) and the
-  export refuses it as a handle.
+  clause (path rewritten to the full id, since the scope answered is in no package). What the
+  clause then is: "A resource the world exports".
 - `--emit-wit` prints the scope with the copies (the tool's reading of the component), not the
   `use`.
 - Pins: `WitResolverTest.writesAUseClauseOutAsTheDefinitionsItNames`,
   `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...`, `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`.
+
+### A resource the world exports
+**Invariant: the value a constructor answers IS the resource. A component keeps each value a
+handle stands for in a slot (`wit-resource.lisp`), the slot's index is the handle's `rep`, and
+the canonical marshaller (`Gen`, export mode) converts where a handle crosses -- so a handle
+nests anywhere a value does, and the program's functions never see an integer.**
+Interpreter / JVM: the directive checks the functions and exports nothing; bound as a
+`wit-provide` provider they take the value as the import side's handle.
+
+- **Names** are the import side's (`WitNamingHook.memberName`): `counter-new`,
+  `counter-add` (self first), `counter-merge`; optional `counter-drop` (one parameter). Export
+  labels are the canonical ABI's (`[constructor]r`, `[method]r.m`, `[static]r.f`:
+  `WitExportDirective.resourceLabel`); a `:names` table keys a resource's function by its
+  member name. Two exports one defun would implement are refused.
+- **What crosses** (the canonical ABI, for a resource the component itself defines): a
+  `borrow` arrives as the `rep`; an `own` as an index in the instance's handle table. So:
+  own answered = `%wit-rep-new` + `canon resource.new` (a new handle each time, also of a
+  value that has one); borrow received = `%wit-rep-value`; own received = `resource.rep`,
+  `%wit-rep-take` (the slot holds the symbol `%wit-rep-taken`), `resource.drop`. That drop
+  calls the destructor at once, in the middle of the receiving wrapper: it finds the marker,
+  frees the slot and calls no `<r>-drop`. A borrow in a result is refused (wasm-tools: "returns
+  a type which contains a `borrow<T>`").
+- **The destructor** is a core export `<iface>#[dtor]<r>` the resource type names, lowered as
+  a flat `wasm-export` (`:as "[dtor]r" :params '(:s32)`): `rontolisp::%wit-rep-free` itself, or
+  a defun `<r>%wit-dtor` calling `<r>-drop` unless the slot was taken. `Decl.destructorOf`
+  keeps it out of the lifted exports, and its wrapper skips the reactor's first-call top
+  level, the task reset and the future poll (`emitBody`): it runs nested in another export's
+  call.
+- **The store needs no top level**: a command component's exports run without `run`, where a
+  `defvar`'s init form never ran (measured: an uninitialized global reads nil; a valueless
+  `defvar` after `_start` is unbound). Both variables are `(defvar x nil)` and nil means empty.
+  The free list is threaded through the freed slots; the store doubles.
+- **Component shape** (`ExportedResources`, the tool's, read off a probe): shim module
+  (`WasmShimModules`, one `(i32)` trampoline a resource) -> `(type (resource (rep i32) (dtor
+  trampoline)))` -> the built-ins the CORE IMPORTS (module `[export]<iface>`, fields
+  `[resource-new|rep|drop]<r>`; read off the shaken core, so an unused one is not defined) ->
+  core instance -> the core module -> fixup writing the destructors into the shim's table. All
+  behind the user imports; `Defined` is what every later index shifts by. Types: the space is
+  told the resource's index (`Space.define`); a shim imports each resource first (`(sub
+  resource)`) and exports that import; a resource name in a value position is `own`.
+- **A resource of another EXPORTED interface** (`use registry.{counter}`): the same resource.
+  The declaring interface is exported first whatever the world's order (`providersFirst`), and
+  the using shim's type import is given `alias export <declaring instance> "counter"`, so the
+  instances and exports interleave (`ComponentExportWiring`, only then). Measured: given the
+  component's own definition instead, the component validates, `targets` accepts it and it
+  runs, but `wasm-tools component wit` reads `resource counter;` in the using interface -- a
+  second type to any binding generator. One import is enough (the tool also imports the local
+  name as `eq`).
+- An `async func` of a resource is the sync form with `:async t`, like any export's. Measured
+  2026-11-27 with a `:blocking t` Lisp importer, both component shapes: async methods and a
+  static async function taking an owned handle and a borrowed one of another interface.
+- **Refused**: a `use` of a resource of an interface the world does not export, at the
+  interface (function or not: the component would lack the type; the tool imports the
+  instance, `.todo/m95`); a used type holding a handle; a world's own `use` of a resource or
+  `resource` (imports of the component; a clause alone is left out); a core module and
+  `--no-gc` (`.todo/m96`); `describe`, so the Java and Clojure front ends (`.todo/m97`).
+- `--emit-wit` prints the resource with its functions (no docs) and the residual `use`, bare
+  inside its own package: byte-identical to the tool.
+- Measured (2026-11-26, wasmtime 51, wasm-tools 1.263.0): composed with a Lisp importer,
+  200,000 rounds of 3 constructors, an own handed over and answered, a list of 3 owned in and
+  out, 3 drops -- 600,000 destructor calls, the store at 8 slots, 2.4 s under
+  `-W max-memory-size=48MiB`. Sizes (default `--optimize`, raw / gzip): `resource cell {
+  constructor(v: u32); get: func() -> u32; }` 9,006 / 4,166 B (`--no-wasi` 8,831 / 4,064)
+  against 912 / 526 (715 / 410) for the same two functions over `type cell = u32` -- the store's
+  generic vector and integer runtime (`%wit-rep-new` 1,687 B, then `length` / `svref` / `+`
+  fallbacks; fixnum declarations change nothing); `examples/wit/resource` 58,921 / 21,959.
+  Byte-identical before and after, 24 outputs (hello, shapes, analyzer, count-vowels, keyvalue,
+  pipeline, the Java shapes, a Clojure world, each on the shapes it compiles to).
+- Not measured: a host other than wasmtime (jco, `bindgen!`), and handles in a spilled
+  parameter tuple (a Lisp importer cannot call past 16 flats; the lift is the list element's).
+- Pins: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`,
+  `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...` (emitted WIT = the tool's, `targets`,
+  both world orders) / `.aComponentCallsWhatAnotherExportsOverCompoundTypes`
+  (`examples/wit/resource` composed, both component shapes), `examples.yaml`'s `wit/resource`.
 
 ### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
 **The vocabulary IS the WIT spelling**: `:s8`..`:u64`, plus `:float` (f64 -- no internal f32,

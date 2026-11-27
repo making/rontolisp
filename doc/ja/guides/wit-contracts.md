@@ -132,7 +132,9 @@ wasmtime run --invoke 'area(dot)' shapes.wasm
 # err("a dot has no area")
 ```
 
-レコードはキーワードの plist、バリアントはケース名のキーワード(ペイロードがあればドット対)、リストはリスト、option は値か `nil` です。WIT の結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を通知します。これは[プロバイダ](#importing-a-wit-interface-wit-import)の書き方と同じなので、`shapes.lisp` の関数は、インタプリタと JVM ではこのインターフェースの `wit-import` に応えるプロバイダにもなります。対応の全体と、受け渡せないもの(ハンドル、ストリーム)は[リファレンス](../reference/functions/rontolisp-wit-export.md#compound-types)にあります。[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) は、この world と、それを呼び出す 2 つ目のコンポーネントの例です。
+レコードはキーワードの plist、バリアントはケース名のキーワード(ペイロードがあればドット対)、リストはリスト、option は値か `nil` です。WIT の結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を通知します。これは[プロバイダ](#importing-a-wit-interface-wit-import)の書き方と同じなので、`shapes.lisp` の関数は、インタプリタと JVM ではこのインターフェースの `wit-import` に応えるプロバイダにもなります。対応の全体と、受け渡せないもの(ストリーム、フューチャー)は[リファレンス](../reference/functions/rontolisp-wit-export.md#compound-types)にあります。[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) は、この world と、それを呼び出す 2 つ目のコンポーネントの例です。
+
+エクスポートするインターフェースが宣言する `resource` もエクスポートできます。コンストラクタ、メソッド、static 関数は `counter-new`、`counter-add` などの `defun` で実装し、コンストラクタが返した値がリソースになります。ホストが持つのはその値のハンドルで、`counter` を取る関数はその値を受け取ります([リソース](../reference/functions/rontolisp-wit-export.md#resources)、[`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource))。
 
 WASI モジュール(`-o out.wasm` だけ)と `--no-gc` がエクスポートできるのは、フラットな型だけです。ホストが呼ぶのはコアの値を受け渡す関数で、コアの値にはレコードを表す型がなく、スカラバックエンドにはレコードを保持する値がないためです。`--no-wasi` のモジュールは、canonical ABI の値を JavaScript で下ろし、持ち上げる [`--emit-js-glue`](wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set) のファイルを通して複合型もエクスポートします。
 

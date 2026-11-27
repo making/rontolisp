@@ -44,9 +44,16 @@ import org.jspecify.annotations.Nullable;
  * declares the copy and imports no instance for it -- {@code wasm-tools component new}
  * imports the other interface's instance and aliases the type out of it, which
  * {@code wasm-tools component targets} does not ask for. A type this boundary does not
- * carry (a resource, or what holds its handle) is left out, with every type that mentions
- * it; a function naming one was refused when the world was lowered
- * ({@code WitExportDirective}).
+ * carry (a stream, a future, a handle of a resource the scope does not declare) is left
+ * out, with every type that mentions it; a function naming one was refused when the world
+ * was lowered ({@code WitExportDirective}).
+ *
+ * <p>
+ * <strong>A resource of an exported interface</strong> is a type the component defined
+ * before its core module was instantiated ({@link ExportedResources}), so the space is
+ * told its index ({@link Space#define}); a shim imports it ({@code (sub resource)}) ahead
+ * of everything else and exports that import under the resource's name. A named type in a
+ * value position that is a resource is an owned handle of it.
  */
 final class WitExportTypes {
 
@@ -87,6 +94,10 @@ final class WitExportTypes {
 
 		private final List<String> imported = new ArrayList<>();
 
+		// The first half of the shim this space is the second half of, whose import
+		// of a resource the second half exports.
+		private @Nullable Space importing;
+
 		/**
 		 * Creates a space.
 		 * @param sink takes each entry with the id of the section it belongs to, in order
@@ -112,6 +123,15 @@ final class WitExportTypes {
 		int type(byte[] defined) {
 			this.sink.accept(ComponentWriter.SEC_TYPE, defined);
 			return this.next++;
+		}
+
+		/**
+		 * Names a type the component already holds: a resource it defined.
+		 * @param key the scope's name and the type's, as {@code <scope>#<name>}
+		 * @param index the type's index
+		 */
+		void define(String key, int index) {
+			this.named.put(key, index);
 		}
 
 		/**
@@ -150,9 +170,23 @@ final class WitExportTypes {
 	 * @param scope the scope
 	 */
 	static void declareScope(Space space, Naming naming, Scope scope) {
-		for (WitItem definition : declared(scope.abi())) {
-			named(space, naming, scope, WitComponentTypeEncoder.definedNameOf(definition));
+		for (WitItem definition : declared(scope.abi(), naming != Naming.WORLD_IMPORT)) {
+			for (String name : namesOf(definition)) {
+				named(space, naming, scope, name);
+			}
 		}
+	}
+
+	/**
+	 * {@return the names a declared item gives the scope}: a definition's own, or the
+	 * local names of a {@code use} clause
+	 * @param declared an item {@link #declared} answered
+	 */
+	static List<String> namesOf(WitItem declared) {
+		if (declared instanceof WitItem.Use use) {
+			return use.names().stream().map(name -> name.alias() == null ? name.name() : name.alias()).toList();
+		}
+		return List.of(WitComponentTypeEncoder.definedNameOf(declared));
 	}
 
 	/**
@@ -182,19 +216,26 @@ final class WitExportTypes {
 	/**
 	 * The type definitions of a scope a component declares, in wasm-tools' order:
 	 * definition order, except that a type waits until every type it mentions has been
-	 * declared (the earliest-defined type that can go, goes).
+	 * declared (the earliest-defined type that can go, goes). A {@code use} clause an
+	 * exported interface still holds names resources of another exported interface: it is
+	 * declared where it stands, once, and gives the scope each of its names. A world's
+	 * own clause, and a resource the world declares, are imports of the component, which
+	 * declares none.
 	 * @param abi the calculator scoped to the scope
-	 * @return the definitions
+	 * @param exported whether the scope is an exported interface's, not the world's
+	 * @return the definitions, and the clauses
 	 */
-	static List<WitItem> declared(WitCanonicalAbi abi) {
+	static List<WitItem> declared(WitCanonicalAbi abi, boolean exported) {
 		LinkedHashMap<String, WitItem> candidates = new LinkedHashMap<>();
 		for (WitItem item : abi.scope().items()) {
 			switch (item) {
+				case WitItem.Use use when exported -> namesOf(use).forEach(name -> candidates.put(name, use));
 				case WitItem.TypeAlias alias -> candidates.put(alias.name(), item);
 				case WitItem.RecordDef record when !record.fields().isEmpty() -> candidates.put(record.name(), item);
 				case WitItem.VariantDef variant -> candidates.put(variant.name(), item);
 				case WitItem.EnumDef en -> candidates.put(en.name(), item);
 				case WitItem.FlagsDef flags -> candidates.put(flags.name(), item);
+				case WitItem.ResourceDef resource when exported -> candidates.put(resource.name(), item);
 				default -> {
 				}
 			}
@@ -229,14 +270,17 @@ final class WitExportTypes {
 				// types that mention each other: no WIT, and nothing declares them
 				break;
 			}
-			ordered.add(candidates.remove(ready));
+			WitItem item = candidates.remove(ready);
+			if (!(item instanceof WitItem.Use) || ordered.stream().noneMatch(other -> other == item)) {
+				ordered.add(item);
+			}
 			done.add(ready);
 		}
 		return ordered;
 	}
 
 	// Collects the type names a definition mentions; false when it mentions a type no
-	// component export declares (a handle, a stream, a future).
+	// component export declares (a stream, a future).
 	private static boolean mentioned(WitItem definition, List<String> names) {
 		return switch (definition) {
 			case WitItem.TypeAlias alias -> mentioned(alias.target(), names);
@@ -256,6 +300,8 @@ final class WitExportTypes {
 			case WitType.ResultOf res ->
 				(res.ok() == null || mentioned(res.ok(), names)) && (res.err() == null || mentioned(res.err(), names));
 			case WitType.TupleOf tuple -> tuple.elements().stream().allMatch(element -> mentioned(element, names));
+			case WitType.OwnOf own -> names.add(own.resource());
+			case WitType.BorrowOf borrow -> names.add(borrow.resource());
 			default -> false;
 		};
 	}
@@ -269,6 +315,11 @@ final class WitExportTypes {
 			return existing;
 		}
 		WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
+		if (owned.item() instanceof WitItem.ResourceDef) {
+			int index = resource(space, naming, scope, name);
+			space.named.put(key, index);
+			return index;
+		}
 		byte @Nullable [] defined = switch (owned.item()) {
 			case WitItem.RecordDef record -> {
 				List<String> names = new ArrayList<>();
@@ -324,13 +375,55 @@ final class WitExportTypes {
 		return index;
 	}
 
+	// A resource of the scope where the space does not hold it yet: a shim's first half
+	// imports it, its second half exports that import. The component itself defined
+	// the type ahead of its core module (Space.define) -- under the interface that
+	// declares it, which another's use clause names --, and a world has none.
+	private static int resource(Space space, Naming naming, Scope scope, String name) {
+		return switch (naming) {
+			case BARE -> {
+				WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
+				String owner = scope.abi().resolver().canonicalId(owned.owner());
+				Integer defined = owner == null ? null
+						: space.named.get(owner + "#" + WitComponentTypeEncoder.definedNameOf(owned.item()));
+				if (defined == null) {
+					throw new IllegalStateException(
+							"the resource '" + name + "' of " + scope.name() + " is defined by no component");
+				}
+				yield defined;
+			}
+			case SHIM_IMPORT -> {
+				space.sink.accept(ComponentWriter.SEC_IMPORT,
+						ComponentWriter.importTypeSubResource("import-type-" + name));
+				space.imported.add(name);
+				yield space.next++;
+			}
+			case SHIM_EXPORT -> {
+				space.sink.accept(ComponentWriter.SEC_EXPORT, ComponentWriter.exportType(name,
+						Objects.requireNonNull(space.importing).named(scope.name(), name)));
+				yield space.next++;
+			}
+			default -> throw new IllegalStateException(
+					"the resource '" + name + "' of " + scope.name() + " is defined by no component");
+		};
+	}
+
+	// Whether a name of the scope is a resource's, by whatever alias: in a value
+	// position it is then an owned handle.
+	private static boolean isResource(Scope scope, String name) {
+		WitCanonicalAbi.Scoped resolved = scope.abi().resolveAliases(new WitType.Named(name));
+		return resolved.type() instanceof WitType.Named named
+				&& resolved.abi().resolveNamed(named) instanceof WitItem.ResourceDef;
+	}
+
 	// The valtype operand of a type use: a primitive inline, a named type by the index
-	// its scope's declaration gave it, a list / option / result / tuple by the index of
-	// its definition, declared once per shape.
+	// its scope's declaration gave it, a list / option / result / tuple / handle by the
+	// index of its definition, declared once per shape.
 	private static byte[] valType(Space space, Naming naming, Scope scope, WitType type) {
 		return switch (type) {
 			case WitType.Prim prim -> ComponentWriter.valTypePrim(WitComponentTypeEncoder.primCode(prim.name()));
-			case WitType.Named named -> ComponentWriter.valTypeIndex(named(space, naming, scope, named.name()));
+			case WitType.Named named when !isResource(scope, named.name()) ->
+				ComponentWriter.valTypeIndex(named(space, naming, scope, named.name()));
 			default -> {
 				byte[] defined = defined(space, naming, scope, type);
 				String shape = java.util.HexFormat.of().formatHex(defined);
@@ -344,9 +437,14 @@ final class WitExportTypes {
 		};
 	}
 
-	// The defined type of a list / option / result / tuple, its operands declared first.
+	// The defined type of a list / option / result / tuple / handle, its operands
+	// declared first.
 	private static byte[] defined(Space space, Naming naming, Scope scope, WitType type) {
 		return switch (type) {
+			case WitType.Named named -> ComponentWriter.definedOwn(named(space, naming, scope, named.name()));
+			case WitType.OwnOf own -> ComponentWriter.definedOwn(named(space, naming, scope, own.resource()));
+			case WitType.BorrowOf borrow ->
+				ComponentWriter.definedBorrow(named(space, naming, scope, borrow.resource()));
 			case WitType.ListOf list -> ComponentWriter.definedListOf(valType(space, naming, scope, list.element()));
 			case WitType.OptionOf option ->
 				ComponentWriter.definedOptionOf(valType(space, naming, scope, option.element()));
@@ -403,15 +501,24 @@ final class WitExportTypes {
 		BiConsumer<Integer, byte[]> sink = (section, entry) -> nested.rawSection(section,
 				ComponentWriter.vec(List.of(entry)));
 		Space imports = new Space(sink, 0);
+		// the interface's resources first: every function over one names its import
+		for (WitItem definition : declared(scope.abi(), true)) {
+			if (definition instanceof WitItem.ResourceDef || definition instanceof WitItem.Use) {
+				for (String name : namesOf(definition)) {
+					named(imports, Naming.SHIM_IMPORT, scope, name);
+				}
+			}
+		}
 		for (Member member : members) {
 			WitExportSignature signature = member.signature();
 			int type = signature == null ? imports.type(Objects.requireNonNull(member.flatType()))
 					: funcType(imports, Naming.SHIM_IMPORT, signature, forceAsync);
-			sink.accept(ComponentWriter.SEC_IMPORT, ComponentWriter.importFunc("import-func-" + member.name(), type));
+			sink.accept(ComponentWriter.SEC_IMPORT, ComponentWriter.importFunc(importName(member.name()), type));
 		}
 		// The second half names nothing of the first: its types are declared again and
 		// exported, in a fresh view of the same index space.
 		Space exports = new Space(sink, imports.next());
+		exports.importing = imports;
 		declareScope(exports, Naming.SHIM_EXPORT, scope);
 		for (int i = 0; i < members.size(); i++) {
 			Member member = members.get(i);
@@ -421,6 +528,58 @@ final class WitExportTypes {
 			sink.accept(ComponentWriter.SEC_EXPORT, ComponentWriter.exportFuncAs(member.name(), i, type));
 		}
 		return new Shim(nested.toByteArray(), List.copyOf(imports.imported()));
+	}
+
+	/**
+	 * A resource an interface names in a {@code use} clause: the exported interface that
+	 * declares it, and its name there.
+	 *
+	 * @param ifaceId the declaring interface's id
+	 * @param name the resource's name in that interface
+	 */
+	record Foreign(String ifaceId, String name) {
+	}
+
+	/**
+	 * {@return the resource of another interface a name of the scope stands for}, or
+	 * {@code null} for a type the scope defines itself
+	 * @param scope the scope
+	 * @param name a type's name in it
+	 */
+	static @Nullable Foreign foreign(Scope scope, String name) {
+		WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
+		if (!(owned.item() instanceof WitItem.ResourceDef resource) || owned.owner() == scope.abi().scope()) {
+			return null;
+		}
+		return new Foreign(Objects.requireNonNull(scope.abi().resolver().canonicalId(owned.owner())), resource.name());
+	}
+
+	/**
+	 * The index the component refers to a scope's named type by, declaring it when the
+	 * space does not hold it: what a shim's type import is instantiated with.
+	 * @param space the component's type index space
+	 * @param scope the scope
+	 * @param name the type's name
+	 * @return the index
+	 */
+	static int bare(Space space, Scope scope, String name) {
+		return named(space, Naming.BARE, scope, name);
+	}
+
+	/**
+	 * The name a shim imports a function of its interface under, as wasm-tools spells it:
+	 * {@code import-func-<name>}, and for a resource's function
+	 * {@code import-constructor-<r>}, {@code import-method-<r>-<m>} or
+	 * {@code import-static-<r>-<f>}.
+	 * @param label the function's export name ({@code [method]r.m} for a method)
+	 * @return the import name
+	 */
+	static String importName(String label) {
+		if (label.startsWith("[")) {
+			int close = label.indexOf(']');
+			return "import-" + label.substring(1, close) + "-" + label.substring(close + 1).replace('.', '-');
+		}
+		return "import-func-" + label;
 	}
 
 }

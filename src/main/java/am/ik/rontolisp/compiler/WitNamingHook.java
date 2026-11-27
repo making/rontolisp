@@ -57,4 +57,25 @@ final class WitNamingHook {
 		return Collections.unmodifiableMap(names);
 	}
 
+	/**
+	 * The Lisp name a WIT function has before any table renames it, without a package
+	 * qualifier: a freestanding function keeps its WIT label; a {@code resource} member
+	 * is prefixed with the resource ({@code bucket.get} -> {@code bucket-get},
+	 * {@code constructor(bucket)} -> {@code bucket-new}). One spelling for both
+	 * directions: what an import of the interface binds is what a program exporting it
+	 * defines.
+	 * @param func the WIT function and its owning resource
+	 * @return the bare Lisp function name
+	 */
+	static String memberName(am.ik.wit.WitResolver.Func func) {
+		String resource = func.resource();
+		if (resource == null) {
+			return func.def().name();
+		}
+		return switch (func.def().kind()) {
+			case CONSTRUCTOR -> resource + "-new";
+			case PLAIN, STATIC -> resource + "-" + func.def().name();
+		};
+	}
+
 }

@@ -49,15 +49,19 @@ final class ComponentExportWiring {
 	 * @param nextComponentInstance the first free component instance index; each exported
 	 * interface consumes one
 	 * @param forceAsync whether every export is lifted against an async function type
+	 * @param resourceTypes the component type index of each resource the world exports,
+	 * by {@code <interface id>#<resource>} ({@link ExportedResources}); empty for a world
+	 * that exports none
 	 */
 	static void append(ComponentWriter c, List<Lifted> exported, int memory, int realloc, int nextType,
-			int nextComponentFunc, int nextComponentInstance, boolean forceAsync) {
+			int nextComponentFunc, int nextComponentInstance, boolean forceAsync, Map<String, Integer> resourceTypes) {
 		// The type declarations, each with its section: an export of a world's own
 		// function that is typed from its WIT declares the world's named types as type
 		// IMPORTS between them (WitExportTypes); any other declares one function type.
 		final List<Map.Entry<Integer, byte[]>> typeEntries = new ArrayList<>();
 		final WitExportTypes.Space space = new WitExportTypes.Space(
 				(section, entry) -> typeEntries.add(Map.entry(section, entry)), nextType);
+		resourceTypes.forEach(space::define);
 		final List<byte[]> lifts = new ArrayList<>();
 		final List<byte[]> shims = new ArrayList<>();
 		final List<byte[]> instances = new ArrayList<>();
@@ -121,7 +125,7 @@ final class ComponentExportWiring {
 		// fully-qualified id (`export docs:adder/add@0.1.0`). An interface with a member
 		// typed from its WIT, or of types alone, is instantiated from its shim, the
 		// nested component that gives the interface's types their names.
-		int componentInstance = nextComponentInstance;
+		final List<Instance> groups = new ArrayList<>();
 		for (Map.Entry<String, List<IfaceMember>> group : ifaceGroups.entrySet()) {
 			List<IfaceMember> members = group.getValue();
 			WitExportTypes.Scope scope = members.stream()
@@ -133,30 +137,35 @@ final class ComponentExportWiring {
 			if (scope == null) {
 				instances.add(ComponentWriter.componentInstanceFromFuncs(
 						members.stream().map(member -> Map.entry(member.name(), member.func())).toList()));
+				groups.add(new Instance(group.getKey(), -1, List.of(), List.of(), List.of(), List.of()));
+				continue;
 			}
-			else {
-				WitExportTypes.Shim shim = WitExportTypes.shim(scope,
-						members.stream()
-							.map(member -> new WitExportTypes.Member(member.name(), member.wit(), member.flatType()))
-							.toList(),
-						forceAsync);
-				List<String> argNames = new ArrayList<>();
-				List<Integer> argSorts = new ArrayList<>();
-				List<Integer> argIndices = new ArrayList<>();
-				for (IfaceMember member : members) {
-					argNames.add("import-func-" + member.name());
-					argSorts.add(ComponentWriter.SORT_FUNC);
-					argIndices.add(member.func());
-				}
-				for (String type : shim.importedTypes()) {
-					argNames.add("import-type-" + type);
-					argSorts.add(ComponentWriter.SORT_TYPE);
-					argIndices.add(space.named(scope.name(), type));
-				}
-				instances.add(ComponentWriter.componentInstantiateWith(shims.size(), argNames, argSorts, argIndices));
-				shims.add(shim.component());
+			WitExportTypes.Shim shim = WitExportTypes.shim(scope,
+					members.stream()
+						.map(member -> new WitExportTypes.Member(member.name(), member.wit(), member.flatType()))
+						.toList(),
+					forceAsync);
+			List<String> argNames = new ArrayList<>();
+			List<Integer> argSorts = new ArrayList<>();
+			List<Integer> argIndices = new ArrayList<>();
+			List<Used> used = new ArrayList<>();
+			for (IfaceMember member : members) {
+				argNames.add(WitExportTypes.importName(member.name()));
+				argSorts.add(ComponentWriter.SORT_FUNC);
+				argIndices.add(member.func());
 			}
-			exports.add(ComponentWriter.exportInstance(group.getKey(), componentInstance++));
+			for (String type : shim.importedTypes()) {
+				argNames.add("import-type-" + type);
+				argSorts.add(ComponentWriter.SORT_TYPE);
+				WitExportTypes.Foreign foreign = WitExportTypes.foreign(scope, type);
+				if (foreign != null) {
+					used.add(new Used(argIndices.size(), foreign));
+				}
+				argIndices.add(WitExportTypes.bare(space, scope, type));
+			}
+			instances.add(ComponentWriter.componentInstantiateWith(shims.size(), argNames, argSorts, argIndices));
+			groups.add(new Instance(group.getKey(), shims.size(), argNames, argSorts, argIndices, used));
+			shims.add(shim.component());
 		}
 		for (Map.Entry<Integer, byte[]> entry : typeEntries) {
 			c.rawSection(entry.getKey(), ComponentWriter.vec(List.of(entry.getValue())));
@@ -165,10 +174,66 @@ final class ComponentExportWiring {
 		for (byte[] shim : shims) {
 			c.rawSection(ComponentWriter.SEC_COMPONENT, shim);
 		}
-		if (!instances.isEmpty()) {
-			c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(instances));
+		if (groups.stream().allMatch(group -> group.used().isEmpty())) {
+			// every instance, then every export: an instance's index is its place
+			int componentInstance = nextComponentInstance;
+			for (Instance group : groups) {
+				exports.add(ComponentWriter.exportInstance(group.id(), componentInstance++));
+			}
+			if (!instances.isEmpty()) {
+				c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(instances));
+			}
+			c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
+			return;
 		}
+		// An interface that names another's resource in a use clause exports THAT
+		// resource: its shim takes the type as the other interface's instance exports
+		// it, so each instance is exported before the next is made (wasm-tools' shape;
+		// handed the component's own definition instead, the instance would export a
+		// resource of its own name, which a reader of the component takes for a second
+		// type). The world's own functions first; an export consumes an instance index.
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
+		int componentInstance = nextComponentInstance;
+		int nextAliasedType = space.next();
+		final Map<String, Integer> exportedAs = new java.util.HashMap<>();
+		final Map<String, Integer> aliasedTypes = new java.util.HashMap<>();
+		for (int i = 0; i < groups.size(); i++) {
+			Instance group = groups.get(i);
+			List<Integer> argIndices = new ArrayList<>(group.argIndices());
+			List<byte[]> aliases = new ArrayList<>();
+			for (Used use : group.used()) {
+				WitExportTypes.Foreign foreign = use.foreign();
+				String key = foreign.ifaceId() + "#" + foreign.name();
+				Integer aliased = aliasedTypes.get(key);
+				if (aliased == null) {
+					aliases.add(ComponentWriter.aliasInstanceType(
+							Objects.requireNonNull(exportedAs.get(foreign.ifaceId()), foreign.ifaceId()),
+							foreign.name()));
+					aliased = nextAliasedType++;
+					aliasedTypes.put(key, aliased);
+				}
+				argIndices.set(use.argument(), aliased);
+			}
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+			c.rawSection(ComponentWriter.SEC_INSTANCE,
+					ComponentWriter.vec(List.of(group.shim() < 0 ? instances.get(i) : ComponentWriter
+						.componentInstantiateWith(group.shim(), group.argNames(), group.argSorts(), argIndices))));
+			c.rawSection(ComponentWriter.SEC_EXPORT,
+					ComponentWriter.vec(List.of(ComponentWriter.exportInstance(group.id(), componentInstance))));
+			exportedAs.put(group.id(), componentInstance + 1);
+			componentInstance += 2;
+		}
+	}
+
+	// A type argument of a shim's instantiation that is a resource of another exported
+	// interface: its position among the arguments.
+	private record Used(int argument, WitExportTypes.Foreign foreign) {
+	}
+
+	// One exported interface's instance: its id, and the instantiation of its shim (-1
+	// for an instance made of its functions alone).
+	private record Instance(String id, int shim, List<String> argNames, List<Integer> argSorts,
+			List<Integer> argIndices, List<Used> used) {
 	}
 
 }

@@ -86,7 +86,7 @@ record WitExportSignature(WitCanonicalAbi abi, WitFunc func, boolean ofWorld, St
 				WitExportTypes.Scope scope = new WitExportTypes.Scope(typing.abi().scopedTo(exported.scope()),
 						exported.id());
 				if (decls.stream().anyMatch(member -> exported.id().equals(member.iface()))
-						|| !WitExportTypes.declared(scope.abi()).isEmpty()) {
+						|| !WitExportTypes.declared(scope.abi(), true).isEmpty()) {
 					interfaces.put(exported.id(), scope);
 				}
 			}

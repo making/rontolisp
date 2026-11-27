@@ -549,6 +549,52 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a {@code canon resource.new} for the given resource type, producing a core
+	 * function that makes an owned handle over a representation. Only the component that
+	 * defines the resource type may name it here.
+	 * @param typeIndex the component type index of the resource
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonResourceNew(int typeIndex) {
+		return enc(w -> w.write(0x02).writeUnsignedLeb128(typeIndex));
+	}
+
+	/**
+	 * Encode a {@code canon resource.rep} for the given resource type, producing a core
+	 * function that answers the representation of a handle.
+	 * @param typeIndex the component type index of the resource
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonResourceRep(int typeIndex) {
+		return enc(w -> w.write(0x04).writeUnsignedLeb128(typeIndex));
+	}
+
+	/**
+	 * Encode a resource type a component defines, {@code (resource (rep i32) (dtor f))}:
+	 * its handles carry an {@code i32}, and the host calls the destructor with it when a
+	 * handle is released.
+	 * @param destructorCoreFunc the core function index of the destructor
+	 * @return the encoded type entry
+	 */
+	public static byte[] definedResource(int destructorCoreFunc) {
+		return enc(w -> w.write(0x3f).write(0x7f).write(0x01).writeUnsignedLeb128(destructorCoreFunc));
+	}
+
+	/**
+	 * Encode a component import of a resource type (externdesc {@code type} with a
+	 * {@code sub resource} bound): how a nested component takes a resource of the
+	 * component around it. The import appends one entry to the type index space.
+	 * @param importName the import's name
+	 * @return the encoded import entry
+	 */
+	public static byte[] importTypeSubResource(String importName) {
+		return enc(w -> {
+			declName(w, importName);
+			w.write(0x03).write(0x01);
+		});
+	}
+
+	/**
 	 * Encode a {@code canon lift} of a core function into a component function, with no
 	 * canonical options.
 	 * @param coreFuncIndex the core function index to lift

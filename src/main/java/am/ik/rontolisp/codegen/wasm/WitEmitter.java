@@ -216,7 +216,7 @@ final class WitEmitter {
 			for (WasmExportCompiler.Decl decl : flat) {
 				WitExportSignature wit = decl.typing();
 				if (wit != null) {
-					items.addAll(firstExport + importItems.size(), WitExportTypes.declared(wit.abi()));
+					items.addAll(firstExport + importItems.size(), WitExportTypes.declared(wit.abi(), false));
 					break;
 				}
 			}
@@ -481,11 +481,21 @@ final class WitEmitter {
 				.findFirst()
 				.orElse(decls.isEmpty() ? worldInterfaces.get(ifaceId) : null);
 			if (scope != null) {
-				members.addAll(WitExportTypes.declared(scope.abi()));
+				WitPackageName pkg = WitImportWorldEmitter.packageOf(ifaceId);
+				for (WitItem declared : WitExportTypes.declared(scope.abi(), true)) {
+					// a clause naming an interface of the block's own package names it
+					// bare, as the tool prints it
+					members.add(declared instanceof WitItem.Use use ? new WitItem.Use(WitMeta.none(),
+							pkg.equals(use.path().pkg()) ? WitRef.local(use.path().name()) : use.path(), use.names())
+							: declared instanceof WitItem.ResourceDef resource ? undocumented(resource) : declared);
+				}
 			}
 			for (WasmExportCompiler.Decl decl : decls) {
-				members.add(new WitItem.FuncDef(WitMeta.none(), decl.exportName(), WitItem.FuncKind.PLAIN,
-						witFunc(decl, forceAsync)));
+				// a resource's function is printed in its resource, with the types
+				if (!WasmExportCompiler.isResourceExportName(decl)) {
+					members.add(new WitItem.FuncDef(WitMeta.none(), decl.exportName(), WitItem.FuncKind.PLAIN,
+							witFunc(decl, forceAsync)));
+				}
 			}
 			WitItem.InterfaceDef iface = new WitItem.InterfaceDef(WitMeta.none(),
 					WitImportWorldEmitter.interfaceNameOf(ifaceId), List.copyOf(members));
@@ -495,6 +505,21 @@ final class WitEmitter {
 		byPackage
 			.forEach((pkg, ifaces) -> blocks.add(new WitItem.PackageBlock(WitMeta.none(), pkg, List.copyOf(ifaces))));
 		return blocks;
+	}
+
+	// A resource as a component says it: its functions, and no word of the WIT's docs.
+	private static WitItem.ResourceDef undocumented(WitItem.ResourceDef resource) {
+		List<WitItem> body = resource.body();
+		if (body == null) {
+			return new WitItem.ResourceDef(WitMeta.none(), resource.name(), null);
+		}
+		List<WitItem> functions = new ArrayList<>();
+		for (WitItem member : body) {
+			if (member instanceof WitItem.FuncDef func) {
+				functions.add(new WitItem.FuncDef(WitMeta.none(), func.name(), func.kind(), func.func()));
+			}
+		}
+		return new WitItem.ResourceDef(WitMeta.none(), resource.name(), List.copyOf(functions));
 	}
 
 	// Builds one typed world export the way wasm-tools prints it, e.g.

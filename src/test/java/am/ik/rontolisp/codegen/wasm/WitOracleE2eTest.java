@@ -320,6 +320,44 @@ class WitOracleE2eTest {
 				}
 			}
 		}
+		// A resource of an exported interface is a type the component defines: its
+		// functions are the instance's exports under the canonical ABI's names, and a
+		// second interface that names it in a use clause exports that same type (its
+		// shim takes it as the first instance exports it, so the tool reads a use
+		// clause back, not a second resource). The interface that declares the
+		// resource is exported first, whatever the world's order. The world emitted
+		// is the tool's reading, and the component is the world's.
+		Path example = Path.of("examples/wit/resource");
+		Files.createDirectories(this.tempDir.resolve("wit"));
+		Files.writeString(this.tempDir.resolve("wit/counters.wit"),
+				Files.readString(example.resolve("wit/counters.wit"))
+					.replace("  export registry;\n  export report;", "  export report;\n  export registry;"));
+		Path reversed = this.tempDir.resolve("reversed.lisp");
+		Files.copy(example.resolve("counters.lisp"), reversed);
+		for (Path source : List.of(example.resolve("counters.lisp"), reversed)) {
+			for (List<String> shape : List.of(List.of("--component"), List.of("--component", "--no-wasi"))) {
+				byte[] counters = compileFileViaCli(source, "counters", shape);
+				String emitted = Files.readString(this.tempDir.resolve("counters.wit"));
+				assertThat(emitted).as(source + " " + shape)
+					.isEqualTo(oracle(counters))
+					.contains("  export example:counters/registry@0.1.0;\n  export example:counters/report@0.1.0;")
+					.contains("    resource counter {\n      constructor(name: string, start: u32);\n"
+							+ "      add: func(by: u32) -> u32;\n      read: func() -> reading;\n"
+							+ "      merge: static func(a: counter, b: borrow<counter>) -> counter;\n    }")
+					.contains("    leader: func(counters: list<counter>) -> result<counter, string>;")
+					.contains("  interface report {\n    use registry.{counter};\n\n"
+							+ "    summary: func(c: borrow<counter>) -> string;\n  }");
+				if (shape.contains("--no-wasi")) {
+					Process targets = new ProcessBuilder("wasm-tools", "component", "targets",
+							source.resolveSibling("wit/counters.wit").toString(), "--world", "counters",
+							this.tempDir.resolve("counters.wasm").toString())
+						.redirectErrorStream(true)
+						.start();
+					String said = new String(targets.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+					assertThat(targets.waitFor()).as(source + said).isZero();
+				}
+			}
+		}
 	}
 
 	@Test
@@ -331,33 +369,47 @@ class WitOracleE2eTest {
 		// file's functions answer in process -- whichever language implements the
 		// world: the Lisp file, or the Java class beside it, whose records, sealed
 		// interface and lists the same values are.
-		Path shapes = Path.of("examples/wit/shapes");
-		java.io.ByteArrayOutputStream interpreted = new java.io.ByteArrayOutputStream();
-		new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
-				new java.io.PrintStream(interpreted, true, StandardCharsets.UTF_8))
-			.run(new String[] { shapes.resolve("app.lisp").toString() });
-		compileFileViaCli(shapes.resolve("app.lisp"), "app", List.of("--component"));
-		Map<String, List<String>> exporting = new java.util.LinkedHashMap<>();
-		exporting.put("shapes.lisp", List.of("--component"));
-		exporting.put("Shapes.java", List.of("--component", "--java-source-path", "rontolisp-java-api/src/main/java"));
-		for (Map.Entry<String, List<String>> exporter : exporting.entrySet()) {
-			compileFileViaCli(shapes.resolve(exporter.getKey()), "shapes", exporter.getValue());
-			Path composed = this.tempDir.resolve("composed.wasm");
-			Process compose = new ProcessBuilder("wasm-tools", "compose", this.tempDir.resolve("app.wasm").toString(),
-					"-d", this.tempDir.resolve("shapes.wasm").toString(), "-o", composed.toString())
-				.redirectErrorStream(true)
-				.start();
-			String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-			assertThat(compose.waitFor()).as(composing).isZero();
-			Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true).start();
-			String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-			assertThat(run.waitFor()).as(printed).isZero();
-			assertThat(printed).as(exporter.getKey())
-				.isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
-				.contains("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))")
-				.contains("area     \"a dot has no area\"")
-				.contains("caption  \"a filled bold green dot called origin\"")
-				.contains("embolden (:DASHED :BOLD)");
+		// A resource crosses the same way: the exporting component's handles stand for
+		// the values its functions made, lent or handed over as the WIT says, alone and
+		// inside a list or a result, and a second interface's function takes the first
+		// one's resource.
+		Map<Path, List<Map.Entry<String, List<String>>>> examples = new java.util.LinkedHashMap<>();
+		examples.put(Path.of("examples/wit/shapes"), List.of(Map.entry("shapes.lisp", List.of("--component")), Map
+			.entry("Shapes.java", List.of("--component", "--java-source-path", "rontolisp-java-api/src/main/java"))));
+		examples.put(Path.of("examples/wit/resource"), List.of(Map.entry("counters.lisp", List.of("--component")),
+				Map.entry("counters.lisp", List.of("--component", "--no-wasi"))));
+		Map<Path, List<String>> lines = Map.of(Path.of("examples/wit/shapes"),
+				List.of("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))", "area     \"a dot has no area\"",
+						"caption  \"a filled bold green dot called origin\"", "embolden (:DASHED :BOLD)"),
+				Path.of("examples/wit/resource"),
+				List.of("read     (:NAME \"apples\" :VALUE 7)", "summary  \"pears is at 10\"",
+						"merged   (:NAME \"apples+pears\" :VALUE 17)", "leader   \"apples+pears is at 17\"",
+						"live     1\nlive     0\nleader   \"no counter to lead\""));
+		for (Map.Entry<Path, List<Map.Entry<String, List<String>>>> example : examples.entrySet()) {
+			Path dir = example.getKey();
+			java.io.ByteArrayOutputStream interpreted = new java.io.ByteArrayOutputStream();
+			new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+					new java.io.PrintStream(interpreted, true, StandardCharsets.UTF_8))
+				.run(new String[] { dir.resolve("app.lisp").toString() });
+			compileFileViaCli(dir.resolve("app.lisp"), "app", List.of("--component"));
+			for (Map.Entry<String, List<String>> exporter : example.getValue()) {
+				compileFileViaCli(dir.resolve(exporter.getKey()), "exporting", exporter.getValue());
+				Path composed = this.tempDir.resolve("composed.wasm");
+				Process compose = new ProcessBuilder("wasm-tools", "compose",
+						this.tempDir.resolve("app.wasm").toString(), "-d",
+						this.tempDir.resolve("exporting.wasm").toString(), "-o", composed.toString())
+					.redirectErrorStream(true)
+					.start();
+				String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+				assertThat(compose.waitFor()).as(composing).isZero();
+				Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true)
+					.start();
+				String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+				assertThat(run.waitFor()).as(printed).isZero();
+				assertThat(printed).as(exporter.getKey() + exporter.getValue())
+					.isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
+					.contains(lines.get(dir));
+			}
 		}
 		// A call made while another waits: an async func's call is a task that waits
 		// inside the component, and the host runs a plain func of the same instance
