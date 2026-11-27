@@ -479,6 +479,7 @@ and answers JavaScript values:
 | `record` | an object, its keys the field names in camelCase |
 | `variant`, a `result` inside another type | `{ tag, val }`: the case name (`ok` or `err` for a result) and its payload |
 | `enum` | the case name |
+| `flags` | an object of booleans keyed by the labels in camelCase: every label in a value handed over, a label left out of an answer `false` |
 | a resource | the host's own value |
 
 A function whose result is a `result` answers its ok value, and its error arm by
@@ -488,7 +489,7 @@ throwing the glue's `WitError` carrying the error's value
 throws or the `WitResult.Err` it answers, as the method declares it. Anything else a host function throws traps the call. A resource's value
 stays on this side, in a table of the glue's; the module holds an index, which the
 resource's release (`[resource-drop]bucket`, implemented by the glue) takes out,
-calling a host entry of that name with the value if the host has one. `flags`, a
+calling a host entry of that name with the value if the host has one. A
 `stream`, a `future` and an `async func` are refused, and so is `--reentrant`.
 
 Such a host may answer with a promise, so each of these imports but what the glue

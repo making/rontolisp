@@ -508,23 +508,32 @@ ok 側の型（値がなければ `void`）を宣言します。ok 側の型を�
 `u32` の 4294967295 は `int` の -1 になり、`u32` を返すエクスポートが `int` の -1 を返すと
 4294967295 になります。
 
-`async func` のエクスポートも、ほかと同じく値を返す static メソッドです。コンポーネントはこれを
-async で lift するので、`Thread.sleep` や、インポートした `async func` の呼び出しのように
-メソッドがブロックする箇所で、呼び出しは待てます。同期のエクスポートがブロックするとトラップに
-なります（`cannot block a synchronous task`）。使える型は `bool`、整数、`f64`、`string` だけです
-（`async func` にそれ以外の型があると WIT の行で拒否されます）。`--no-gc --component` も
-これを async で lift しますが、スカラーのサブセットには待つ手段がありません。スリープする
-スレッドも（`Thread.sleep` はそこで拒否されます）、`@WitImport` のバインディングを持つ
-オブジェクトもないためです。
+`async func` のエクスポートも、ほかと同じく値を返す static メソッドです。使える型もほかの
+エクスポートと同じで、レコード、リスト、variant、`result` は `func` と同じように `async func` を
+通ります。出力ごとの扱いは次のとおりです。
+
+| 出力 | `async func` のエクスポート |
+| --- | --- |
+| `--component` | async で lift します。`Thread.sleep` や、インポートした `async func` の呼び出しのようにメソッドがブロックする箇所で、呼び出しは待てます。ブロックする通常の `func` はトラップになります（`cannot block a synchronous task`） |
+| `--component --no-wasi` | これも async で lift しますが、コンポーネントは時計をインポートしないので、sleep するメソッドはトラップになります |
+| `--no-gc --component` | これも async で lift します。使える型は、そこでのほかのエクスポートと同じく `bool`、整数、`f64`、`string` だけです。スカラーのサブセットには待つ手段がありません。スリープするスレッドも（`Thread.sleep` はそこで拒否されます）、`@WitImport` のバインディングを持つオブジェクトもないためです |
+| モジュール（`-o out.wasm` だけ、`--no-wasi`）、`--native` | ほかのエクスポートと同じく、どこにもエクスポートされません。world をエクスポートするのはコンポーネントです |
+| JDK、インタプリタ、JVM | ほかと同じように呼ばれる、ただのメソッドです |
 
 ```console
 export pause: async func(ms: u32) -> u32;
+export summarize: async func(areas: list<f64>) -> summary;
 ```
 
 ```console
 public static int pause(int ms) throws InterruptedException {
     Thread.sleep(ms);
     return ms;
+}
+
+public static Summary summarize(List<Double> areas) throws InterruptedException {
+    Thread.sleep(1);
+    ...
 }
 ```
 
@@ -533,7 +542,8 @@ public static int pause(int ms) throws InterruptedException {
 - WASM のモジュールで使える型は、そのモジュールで `rontolisp:wit-import` が使える型と
   同じです。Preview 1 のコアモジュールでは平坦な型（32 ビットまでの整数、浮動小数点数、
   `bool`、`string`、`list<u8>`、ハンドル）だけです。コンポーネントではすべての型、`--no-wasi` の
-  モジュールでは `flags` 以外のすべての型です。
+  モジュールでは `async func`、`stream`、`future` 以外のすべての型です（`flags` も通り、
+  JavaScript のホストからは真偽値のオブジェクトに見えます）。
   それ以外の型を持つメンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を
   示して拒否されます。`--no-gc` では、モジュールでもコンポーネントでも `@WitImport` の
   インタフェースは束縛されません。スカラーのバックエンドにはオブジェクトがなく、バインディングを
@@ -556,9 +566,9 @@ public static int pause(int ms) throws InterruptedException {
 - プログラムが書く stream をホストがいつ読むかは、ホストが決めます。ホストが後の呼び出しの中で
   しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため wasmtime の下では、
   `wasi:http` のリクエストはボディを持てません（wasmtime はボディを `client.send` の中で読みます）。
-- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけ
-  です。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、使える型が
-  この 4 種類だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
+- world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は
+  ほかのエクスポートと同じです。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、
+  使える型が `bool`、整数、`f64`、`string` だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
   java.lang.IllegalStateException: ...`）を標準エラー出力に書いてからトラップになります。

@@ -6564,7 +6564,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// before emission; the (ref null eq) temps allocTemp hands out follow,
 				// then what a report compiled into the wrapper asks for.
 				List<Type> scratch = pools == null ? WasmExportCompiler.scratchTypes(decl) : pools.types();
-				wrapperCtx.nextLocal = paramSlots + scratch.size();
+				// An async func's call may wait with its mark taken, and the host runs a
+				// plain func of the instance meanwhile: the wrapper holds its call's
+				// mark in three locals behind the scratch (WasmExportCompiler.emitBody).
+				int heldMark = -1;
+				if (this.component && !this.serve && WasmExportCompiler.waitsOverMemory(decl)) {
+					heldMark = paramSlots + scratch.size();
+					scratch = new ArrayList<>(scratch);
+					scratch.addAll(List.of(Type.I32, Type.I32, Type.I32));
+				}
 				// What a canonical result stages is released by the post-return of the
 				// core's own cabi_realloc, the first function behind the wrappers; a
 				// core module's glue pops it with the call's bracket.
@@ -6572,8 +6580,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						: WasmComponentImportCompiler.exportMarshal(wrapperCtx, decl, pools, allocFuncIndex,
 								strFromMemFuncIndex, bytesFromMemFuncIndex,
 								this.component ? exportHelperBase + helperFuncCount + exportDecls.size() : -1);
+				// (the marshalling counts its pools alone)
+				wrapperCtx.nextLocal = paramSlots + scratch.size();
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,
-						bytesFromMemFuncIndex, bytesCopyFuncIndex, marshal);
+						bytesFromMemFuncIndex, bytesCopyFuncIndex, marshal, heldMark);
 				exportBodies.add(assembleEntry(wrapperCtx, scratch, wrapperCtx.nextLocal - paramSlots - scratch.size(),
 						new byte[0], bodyStream.toByteArray()));
 				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));

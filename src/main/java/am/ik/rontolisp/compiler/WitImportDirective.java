@@ -61,8 +61,8 @@ import org.jspecify.annotations.Nullable;
  * side of a {@code canon lower}ed component import), plus the same envelope-unwrapping
  * wrapper split as Preview 1 for {@code result}-returning functions. The canonical ABI
  * marshals the rich types, so this is the only WASM boundary a {@code record} /
- * {@code variant} / {@code enum} / {@code option} / {@code tuple} / {@code result}
- * crosses -- as an argument as well as a result; only {@code flags} does not.</li>
+ * {@code variant} / {@code enum} / {@code flags} / {@code option} / {@code tuple} /
+ * {@code result} crosses -- as an argument as well as a result.</li>
  * <li><strong>A {@code --no-wasi} core module</strong>, whose host is the JavaScript glue
  * ({@link HostGlueEmitter}): an interface whose bound members all cross the flat set
  * takes the Preview 1 lowering above, byte for byte; one binding a member outside it (or
@@ -1677,7 +1677,7 @@ public final class WitImportDirective {
 
 	// What the canonical-ABI wrapper codegen supports today: results lift recursively
 	// from the return area and parameters lower to flat values (a list<T> as a staged
-	// canonical array), so everything but flags crosses both ways.
+	// canonical array), so every type here crosses both ways.
 	private static void validateComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
 		for (var param : func.def().func().params()) {

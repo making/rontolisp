@@ -1000,6 +1000,10 @@ class WasmLispCompilerIntegrationTest {
 		// names them) beside the world's own (type imports), types another interface
 		// defines (a use clause, in the interface and in the world), a flat member
 		// among them, a string in and an s64 out (whose post-return takes an i64).
+		// An async func crosses the same way -- its lift is the synchronous one over an
+		// async function type, so its parameters are flat up to sixteen and its answer
+		// stays in memory until the post-return --, and its call waits where its
+		// function does.
 		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-export-canonical");
 		java.nio.file.Files.writeString(dir.resolve("world.wit"), """
 				package example:crossing@0.1.0;
@@ -1021,8 +1025,8 @@ class WasmLispCompilerIntegrationTest {
 				  swap: func(s: shift, others: list<days>) -> shift;
 				  len: func(l: line) -> id;
 				  next: func(c: color) -> color;
-				  area: func(s: shape) -> result<f64, string>;
-				  top: func(ps: list<point>) -> option<point>;
+				  area: async func(s: shape) -> result<f64, string>;
+				  top: async func(ps: list<point>) -> option<point>;
 				  twice: func(x: s32) -> s32;
 				}
 
@@ -1034,9 +1038,9 @@ class WasmLispCompilerIntegrationTest {
 				  record big { a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: u64 }
 				  record wide { p: big, q: big }
 				  export geo;
-				  export older: func(p: person, by: age) -> person;
+				  export older: async func(p: person, by: age) -> person;
 				  export echo-num: func(n: num) -> num;
-				  export sum-wide: func(w: wide) -> u64;
+				  export sum-wide: async func(w: wide) -> u64;
 				  export nested: func(xs: list<list<u32>>) -> list<tuple<u32, bool>>;
 				  export chars: func(c: char, f: f32) -> tuple<char, f32>;
 				  export verdict: func(r: result<u32, string>) -> result<string, num>;
@@ -1061,6 +1065,7 @@ class WasmLispCompilerIntegrationTest {
 				  (list :who (getf s :who) :on (apply #'append others) :may (getf s :may)))
 				(defun twice (x) (* 2 x))
 				(defun older (p by)
+				  (when (> by 1) (sleep (/ by 1000.0)))
 				  (list :name (string-upcase (getf p :name)) :age (+ (getf p :age) by)
 				        :tags (reverse (getf p :tags)) :nick (getf p :nick)))
 				(defun echo-num (n) n)
@@ -1105,6 +1110,10 @@ class WasmLispCompilerIntegrationTest {
 		answers.put("older({name: \"ann\", age: 41, tags: [\"a\", \"bb\"], nick: some(\"an\")}, 1)",
 				"{name: \"ANN\", age: 42, tags: [\"bb\", \"a\"], nick: some(\"an\")}");
 		answers.put("older({name: \"bob\", age: 250, tags: [], nick: none}, 10)", "trap");
+		// the call of an async func waits where its function sleeps; the component
+		// that imports nothing has no clock to wait on
+		String waiting = "older({name: \"cy\", age: 30, tags: [], nick: some(\"c\")}, 5)";
+		answers.put(waiting, "{name: \"CY\", age: 35, tags: [], nick: some(\"c\")}");
 		answers.put("echo-num(i(9007199254740993))", "i(9007199254740993)");
 		answers.put("echo-num(f(1.5))", "f(1.5)");
 		answers.put("echo-num(small(0.25))", "small(0.25)");
@@ -1143,7 +1152,11 @@ class WasmLispCompilerIntegrationTest {
 				answered.put(invocation, result.getExitCode() == 0 ? result.getStdout().trim()
 						: result.getStderr().contains("`unreachable` instruction") ? "trap" : result.getStderr());
 			}
-			assertThat(answered).as(shape.toString()).isEqualTo(answers);
+			java.util.Map<String, String> expected = new java.util.LinkedHashMap<>(answers);
+			if (shape.contains("--no-wasi")) {
+				expected.put(waiting, "trap");
+			}
+			assertThat(answered).as(shape.toString()).isEqualTo(expected);
 		}
 	}
 
