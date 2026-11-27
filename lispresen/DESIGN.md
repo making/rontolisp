@@ -60,6 +60,7 @@ A deck file is a sequence of top-level forms: one `deck` header, then `slide` an
       :callouts :shown         ; :shown | :step, below
       :kicker :section         ; each titled slide's kicker is its section's title
       :agenda t                ; a list of the sections, repeated at each section
+      :subtitle "副題"         ; a line under the title, a step below its size
       :logo (image "logo.png" :alt "rontolisp")   ; on the title slide
       :url "https://example.com/talk"             ; a QR code of it on the title slide
       :description "S式で書くプレゼンテーション"     ; the page's description
@@ -470,8 +471,12 @@ phrases (文節), not between arbitrary characters.
 | Anything else | `standard` (title on top, blocks stacked) |
 
 The title slide centers the deck's `:logo` (160 px high, the image's own width), its
-title at the statement scale (at most 2 lines) and the author and date in the safe area,
-the title stepping down when the logo and those lines leave it too little height. A
+title at the statement scale (at most 2 lines), the deck's `:subtitle` under it and the
+author and date in the safe area, the title stepping down when the logo, the subtitle and
+those lines leave it too little height. The subtitle is set in the next statement step
+below the title (104 px under a 120 px title, down to 40 px under the smallest title),
+regular weight and one gap of a quarter of its size under the title, so it is read as
+secondary without leaving the scale. A
 deck's `:url` adds a QR code of the URL with the URL under it in a corner, so the slide's
 address can be scanned or typed. The corner never moves the text: the text is laid out as
 without the URL, and the QR code takes the largest of 320, 280, 240 and 200 px and the

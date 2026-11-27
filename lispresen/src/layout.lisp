@@ -57,6 +57,15 @@ HTML emitter leaves it nil; the PPTX emitter binds it for a slide's final geomet
   "Width, height and inset of the Run and Reset buttons in a runnable code block's
 top right corner.")
 
+(defun subtitle-size (s)
+  "The subtitle's size under a title at statement size S: the next statement step down,
+40 px at the smallest title."
+  (or (find-if (lambda (n) (< n s)) *statement-steps*) *meta-size*))
+
+(defun subtitle-gap (s)
+  "Between a title and the subtitle under it at size S."
+  (floor s 4))
+
 (defun title-lh (s) (ceiling (* s 13) 10))
 (defun body-lh (s) (ceiling (* s 15) 10))
 (defun code-lh (s) (ceiling (* s 14) 10))
@@ -201,6 +210,8 @@ image, where it would be text on a picture."
 (defun prepare-runs (deck slide)
   (when (and (deck-footer deck) (null (deck-footer-run deck)))
     (setf (deck-footer-run deck) (make-text-run (deck-footer deck))))
+  (when (and (deck-subtitle deck) (null (deck-subtitle-run deck)))
+    (setf (deck-subtitle-run deck) (make-text-run (list (deck-subtitle deck)))))
   (when (slide-title slide)
     (setf (slide-title-run slide)
           (make-text-run (list (slide-title slide)) :bold t)))
@@ -730,6 +741,30 @@ fits HEIGHT px, the safe area by default. The second value is true on overflow."
                                    lines s))
           (values s nil)))))
 
+(defun fit-title-slide (deck slide width)
+  "The statement size of the title slide's title: the largest step whose title takes at
+most 2 lines and whose logo, subtitle and lines under it leave it the safe area. The
+second value is true on overflow."
+  (flet ((height (s lines)
+           (+ (* lines (statement-lh s))
+              (title-extras-height deck slide width s))))
+    (dolist (s *statement-steps*)
+      (let ((lines (run-lines (slide-title-run slide) s width)))
+        (when (and (<= lines 2) (<= (height s lines) (safe-height)))
+          (return-from fit-title-slide (values s nil)))))
+    (let* ((s (car (last *statement-steps*)))
+           (lines (run-lines (slide-title-run slide) s width)))
+      (if (> (height s lines) (safe-height))
+          (progn
+            (report
+             :error "the text does not fit the slide even at the smallest size")
+            (values s t))
+          (progn
+            (report :warning (format nil
+                                     "the title takes ~d lines at ~dpx; shorten it"
+                                     lines s))
+            (values s nil))))))
+
 (defun regions (blocks k c width)
   "The regions of a body of BLOCKS WIDTH px wide at body step K and code size C, as
 (BLOCKS WIDTH) lists: the body itself, then each column of its rows."
@@ -883,9 +918,16 @@ columns' minimum widths when nothing fits."
                   (multiple-value-bind (mins) (column-bounds tb s)
                     (coerce mins 'list)))))))
 
-(defun title-extras-height (deck slide width)
-  "The height the title slide's logo and the lines under its title take in WIDTH px."
+(defun title-extras-height (deck slide width s)
+  "The height the title slide's logo, subtitle and the lines under its title take in
+WIDTH px with its title at statement size S."
   (+ (if (deck-logo deck) (+ *logo-height* *title-block-gap*) 0)
+     (if (deck-subtitle-run deck)
+         (let ((ss (subtitle-size s)))
+           (+ (subtitle-gap ss)
+              (* (run-lines (deck-subtitle-run deck) ss width)
+                 (statement-lh ss))))
+         0)
      (if (slide-meta slide)
          (+ *title-block-gap*
             (loop for (nil run) in (slide-meta slide)
@@ -896,8 +938,9 @@ columns' minimum widths when nothing fits."
 
 (defun title-rows (deck slide s)
   "The rows of the title slide at statement size S, top to bottom, as the centered column
-sets them: (KIND TOP HEIGHT WIDTH RUN START END), KIND :logo, :title or :meta, a line
-being characters START below END of RUN. The logo counts as the full width, its own
+sets them: (KIND TOP HEIGHT WIDTH RUN START END), KIND :logo, :title, :subtitle or
+:meta, a line being characters START below END of RUN. The logo counts as the full
+width, its own
 being unknown, and each title line as wide as the widest, which text-wrap: balance may
 even the others up to."
   (let* ((width (content-width deck))
@@ -917,6 +960,20 @@ even the others up to."
           do (push (list :title (statement-lh s) widest run a
                          (or b (length (run-text run))))
                    rows))
+    (when (deck-subtitle-run deck)
+      (let* ((ss (subtitle-size s))
+             (srun (deck-subtitle-run deck))
+             (sstarts (wrap-run srun ss width))
+             (swidest
+              (loop for (a b) on sstarts
+                    maximize
+                      (milli-px->px
+                       (run-span-width srun a (or b (length (run-text srun))) ss)))))
+        (push (list nil (subtitle-gap ss)) rows)
+        (loop for (a b) on sstarts
+              do (push (list :subtitle (statement-lh ss) swidest srun a
+                             (or b (length (run-text srun))))
+                       rows))))
     (when (slide-meta slide)
       (push (list nil *title-block-gap*) rows)
       (loop for (nil mrun) in (slide-meta slide)
@@ -1060,11 +1117,7 @@ rest less the side margins."
          (source (source-height slide width)))
     (cond ((equal layout "full"))
           ((equal layout "title")
-           (multiple-value-bind (s overflow) (fit-centered
-                                              (slide-title-run slide) width 2
-                                              (- (safe-height)
-                                                 (title-extras-height deck slide
-                                                                      width)))
+           (multiple-value-bind (s overflow) (fit-title-slide deck slide width)
              (setf (fit-stmt-size fit) s (fit-overflow fit) overflow)
              (when (deck-url deck)
                (if (qr-version (utf-8-octets (deck-url deck)))

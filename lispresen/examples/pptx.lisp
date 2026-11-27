@@ -2,6 +2,7 @@
 ;;;; lispresen exports. Its images and code are this directory's.
 
 (deck :title "PPTX"
+      :subtitle "a slide of every kind"
       :author "lispresen"
       :date "2026-11-18"
       :logo (image "logo.svg" :alt "lispresen")

@@ -110,6 +110,9 @@ it; nil, reported, when it cannot be drawn."
                  (line bold (trimmed (subseq (run-text run) start end)) top lh
                        (canvas-sub s) (color "fg") :center 0
                        (if midnight (- (floor (font-units bold) 100)) 0)))
+                (:subtitle
+                 (line regular (trimmed (subseq (run-text run) start end)) top lh
+                       (canvas-sub (subtitle-size s)) (color "fg") :center 0 0))
                 (:meta
                  (line regular (trimmed (subseq (run-text run) start end)) top lh
                        (canvas-sub *meta-size*) (color "muted") :center 0 0))))))

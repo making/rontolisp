@@ -220,7 +220,8 @@ presenter window (notes, timer), `Ctrl+F` searches the whole deck and jumps to a
 - The browser check reports `no corrections`.
 - Every `image` and `video` file exists beside the deck (or the deck was rendered with
   `--embed`), and every one has `:alt`.
-- The title slide (`:title`, `:author`, `:date`) and the agenda read as intended.
+- The title slide (`:title`, `:subtitle`, `:author`, `:date`) and the agenda read as
+  intended.
 - Runnable code (`:lang "lisp"`, `"scheme"`, `"clojure"`, `"starlark"`, `"python"`,
   `"java"`) loads a
   35 MB runtime from the

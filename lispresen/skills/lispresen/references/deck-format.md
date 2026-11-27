@@ -36,6 +36,7 @@ keyword starts the content.
 | Option | Meaning |
 |---|---|
 | `:title "t"` | adds a title slide (title, `:author`, `:date`) |
+| `:subtitle "t"` | a line under the title, a step smaller than it (the title steps down to leave it room) |
 | `:author`, `:date` | lines under the title |
 | `:logo (image "logo.svg" :alt "...")` | image above the title |
 | `:url "https://..."` | QR code of the URL, with the URL, in a free corner of the title slide |

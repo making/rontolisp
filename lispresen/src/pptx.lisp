@@ -930,6 +930,12 @@ PowerPoint, not a box with a separate text box over it."
                             '(:scheme "bg2")))))
             (:title
              (unless title-top (setf title-top top)))
+            (:subtitle
+             (let* ((ss (subtitle-size s))
+                    (lw (milli-px->px (run-span-width run start end ss))))
+               (emit-line-box out run start end ss h
+                              (- center (floor lw 2)) top :body
+                              (+ *margin-x* cw))))
             (:meta
              (let ((lw (milli-px->px (run-span-width run start end *meta-size*))))
                (emit-line-box out run start end *meta-size* h

@@ -237,7 +237,8 @@ if(ts){notes.push('table '+px(tb.style,'--table')+'px -> '+ts+'px');setVars(tb.s
 if(!moved)break;}
 if(regions.some(over)){sl.classList.add('overflow');notes.push('overflows at the smallest sizes');}}
 if(c){while(over(c)&&(s=next(cfg.steps.stmt,px(st,'--stmt')))){notes.push('text '+px(st,'--stmt')+'px -> '+s+'px');
-setVars(st,{'stmt':s,'stmt-lh':Math.ceil(s*135/100)});}}
+setVars(st,{'stmt':s,'stmt-lh':Math.ceil(s*135/100)});
+if(px(st,'--sub')){var ss=next(cfg.steps.stmt,s)||40;setVars(st,{'sub':ss,'sub-lh':Math.ceil(ss*135/100),'sub-gap':Math.floor(ss/4)});}}}
 hooks.place.forEach(function(f){f(sl,notes);});sl.classList.remove('measure');if(notes.length){sl.classList.add('corrected');
 notes.forEach(function(n){var line='slide '+(i+1)+': '+n;console.warn('lispresen: '+line);log.push(line);});}});
 if(params.has('check')&&!presenter){de.classList.add('check');var o=d.createElement('div');o.id='chk';
