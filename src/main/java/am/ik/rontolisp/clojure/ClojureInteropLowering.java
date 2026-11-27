@@ -3268,10 +3268,21 @@ final class ClojureInteropLowering {
 	 * entry. A native image without a JDK's class files answers these from its own
 	 * reflection, so its build registers every one ({@code .kb/clojure-frontend.md},
 	 * "Host classes").
+	 * <p>
+	 * {@code java.lang.Class}'s other members are the walk of a class object
+	 * ({@code clojure.lisp}, "Host classes"), which the interpreter runs there as it does
+	 * on the jar: {@code isInstance} ({@code class?}, {@code instance?}),
+	 * {@code isAssignableFrom} and {@code isPrimitive} ({@code isa?}),
+	 * {@code getSuperclass} and {@code getInterfaces} ({@code parents},
+	 * {@code ancestors}, {@code bases}), {@code getSimpleName} and {@code toString}
+	 * ({@code .getSimpleName}, {@code str}). An image without them refused the call
+	 * ({@code MissingReflectionRegistrationError}), since a reflective invoke needs the
+	 * member registered however many classes the image holds.
 	 */
 	static final Map<String, List<String>> HOST_STATIC_CLASSES = Map.of("java.lang.Class",
-			List.of("forName", "getName"), "java.lang.System", List.of("getProperty"), "java.util.regex.Pattern",
-			List.of());
+			List.of("forName", "getName", "getSuperclass", "getInterfaces", "isAssignableFrom", "isInstance",
+					"isPrimitive", "getSimpleName", "toString"),
+			"java.lang.System", List.of("getProperty"), "java.util.regex.Pattern", List.of());
 
 	/**
 	 * An instance call's host arm for a receiver of no known class where the host is not

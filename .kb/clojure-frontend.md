@@ -2167,11 +2167,19 @@ real `Class` objects, so a class value of another shape would be unequal to them
   answers (`PersistentArrayMap/createAsIfByAssoc` ...), so reflection -- tools.analyzer.jvm's
   `validate` above all -- sees what a call can reach. `PersistentQueue` stays out: it is a
   deftype of the shipped `clojure.lang` namespace, whose class value is its tag.
-- Traps: a native image defines no class (`org.graalvm.nativeimage.imagecode`) and registers no
-  reflection a class value's readers ask, so there every class value is a designator
-  (`%clojure-host-classes-p`, probed by defining the `IFn` stub): a host class in the binary's
-  REPL crashed on `Class.getInterfaces` (`MissingReflectionRegistrationError`, an `Error` no
-  `handler-case` takes) before the probe. The rows are literal strings
+- Traps: a native image defines no class (`org.graalvm.nativeimage.imagecode`) and answers a
+  reflectively invoked member only where its build registered it, so a class value the host
+  makes none of is a designator (`%clojure-host-classes-p`, probed by defining the `IFn` stub).
+  `java.lang.Class`'s walk members are registered (`HOST_STATIC_CLASSES`: `getSuperclass`,
+  `getInterfaces`, `isAssignableFrom`, `isInstance`, `isPrimitive`, `getSimpleName`, `toString`
+  beside `forName`/`getName`): without them the binary's interpreter stopped on each of
+  `(isa? (class "a") ...)`, `parents`, `ancestors`, `class?` and `str` of a class literal
+  (`MissingReflectionRegistrationError`, an `Error` no `handler-case` takes; measured
+  2026-11-27). A `java:` program holds designators beside the host's class objects there (a
+  `class` call of a kind's value, a `clojure.lang` name, a fn's class), so the host walk reads
+  a designator by the designator tables (`%clojure-designator-class-bases`), the way `supers`
+  and `bases` already did: `isa?`, `parents` and `ancestors` answer it as the JVM's interpreter
+  answers the class. The rows are literal strings
   (an interface list is one space-separated string), since on the JVM a string `format` builds
   is no `java.lang.String` and the runtime class reads quoted strings only.
 - **Readers**: a `Class/forName` of a `clojure.lang` row name answers the stub, one or three
@@ -2249,7 +2257,9 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `ClojureSessionTest#aSessionReadsAClassKeywordsSupersInALaterBuffer`,
   `JvmRuntimeClassFilesTest` (the stub classes travel); `supers`/`bases` and a fn's class:
   clojure-spec `parents-and-ancestors-of-a-class-add-its-java-supers` (all four,
-  oracle-identical), `ClojureClassBasesTest`.
+  oracle-identical), `ClojureClassBasesTest`; the native binary's walk of a class literal, a
+  fn's class and a designator beside the host's class objects:
+  `ClojureNativeLoweringE2eTest#theBinaryWalksAHostClassAsTheJvmInterpreterDoes`.
 
 ## Record and deftype class values
 
@@ -3500,7 +3510,8 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
   reads class files, but a macro body runs in the interpreter. A bare `{"type"}` entry answers
   the queries but refuses the call (`MissingReflectionRegistrationError`), so the members
   macro-time evaluation invokes are registered too
-  (`ClojureInteropLowering.HOST_STATIC_CLASSES`). Recorded over the whole corpus, only those
+  (`ClojureInteropLowering.HOST_STATIC_CLASSES`), `java.lang.Class`'s walk members with them
+  ("Host classes", the traps). Recorded over the whole corpus, only those
   run, and no macro body builds a proxy or asks a class outside a lowering. The run members
   left the binary byte-identical (measured 2026-10-14, GraalVM 25.0.4, Linux x86-64).
 - `parseInterface` keeps declaration order: `Map.copyOf`'s iteration order is unspecified and

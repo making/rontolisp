@@ -14,9 +14,15 @@ import java.util.StringJoiner;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.testsupport.CliStack;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -116,6 +122,60 @@ class ClojureNativeLoweringE2eTest {
 		}
 		assertThat(tests).as("the " + ClojureLoweringCorpus.NO_JDK_PROGRAM + " program").isNotEmpty();
 		return tests.stream();
+	}
+
+	/**
+	 * The binary's interpreter answers a Clojure program's host class walk as this JVM's
+	 * interpreter does (the {@code clojure-spec.yaml} runs reach no native leg). The
+	 * image makes no class value for a class of its own and answers no reflectively
+	 * invoked member of one it does not register, so a class literal and {@code class}
+	 * answer designators there beside the host's class objects: {@code isa?},
+	 * {@code parents}, {@code ancestors}, {@code class?} and {@code str} read both
+	 * (2026-11-27: the walk stopped on {@code Class.isAssignableFrom}).
+	 */
+	@Test
+	void theBinaryWalksAHostClassAsTheJvmInterpreterDoes() throws Exception {
+		String binary = System.getProperty("rontolisp.binary");
+		assumeTrue(binary != null, "rontolisp.binary not set; skipping native-binary E2E");
+		Path bin = Path.of(binary).toAbsolutePath();
+		assumeTrue(Files.isExecutable(bin), () -> "not an executable binary: " + bin);
+		String program = """
+				(def s String)
+				(println (.getName String) (isa? (class "a") CharSequence))
+				(println (isa? s CharSequence) (isa? s java.lang.Object))
+				(println (sort (map str (parents s))))
+				(println (sort (map str (ancestors s))))
+				(defn f [x] x)
+				(println (isa? (class f) clojure.lang.IFn))
+				(println (sort (map str (parents (class f)))))
+				(println (instance? String "a") (class? String) (.getSimpleName String) (str String))
+				""";
+		Path file = workDir.resolve("host-class-walk.clj");
+		Files.writeString(file, program);
+		assertThat(runWithBinary(bin, file)).as("the binary's answer to a host class walk")
+			.isEqualTo(interpretOnThisJvm(program));
+	}
+
+	private static String interpretOnThisJvm(String program) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		CliStack.call("clojure-native", () -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			for (LispVal form : evaluator
+				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "host-class-walk.clj"))) {
+				evaluator.eval(form);
+			}
+			return null;
+		});
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	private static String runWithBinary(Path bin, Path file) throws IOException, InterruptedException {
+		Process process = new ProcessBuilder(bin.toString(), file.toString()).directory(PROJECT_DIR.toFile()).start();
+		process.getOutputStream().close();
+		byte[] out = process.getInputStream().readAllBytes();
+		assertThat(process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)).as("the binary's run finished").isTrue();
+		assertThat(process.exitValue()).as("the binary's run exited").isZero();
+		return new String(out, StandardCharsets.UTF_8);
 	}
 
 	/** A dump by the binary seeing no JDK: its standard output and error. */

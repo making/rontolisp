@@ -141,7 +141,17 @@
     { "type": "java.lang.Character" },
     {
       "type": "java.lang.Class",
-      "methods": [{ "name": "forName" }, { "name": "getName" }]
+      "methods": [
+        { "name": "forName" },
+        { "name": "getName" },
+        { "name": "getSuperclass" },
+        { "name": "getInterfaces" },
+        { "name": "isAssignableFrom" },
+        { "name": "isInstance" },
+        { "name": "isPrimitive" },
+        { "name": "getSimpleName" },
+        { "name": "toString" }
+      ]
     },
     { "type": "java.lang.ClassCastException" },
     { "type": "java.lang.ClassCircularityError" },
