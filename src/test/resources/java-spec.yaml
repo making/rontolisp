@@ -15441,16 +15441,20 @@ cases:
                   return a.clone();
               }
 
-              void fin() {
+              int fin() {
                   try {
                       finalize();
+                      return n;
                   } catch (Throwable e) {
                       throw new AssertionError(e);
                   }
               }
 
+              // Nothing is printed here: the collector runs a finalizer whenever it
+              // pleases, and the corpus is ONE program, so a line printed from one lands
+              // in whichever case is running then.
               protected void finalize() throws Throwable {
-                  System.out.println("A finalized " + n);
+                  n = n * 10;
               }
           }
 
@@ -15466,8 +15470,10 @@ cases:
           }
 
           static class E extends A {
+              // 100, then A's 10: the line it prints shows this override ran and that
+              // the super call did too
               protected void finalize() throws Throwable {
-                  System.out.println("E finalized");
+                  n = n * 100;
                   super.finalize();
               }
           }
@@ -15538,8 +15544,7 @@ cases:
               } catch (CloneNotSupportedException e) {
                   System.out.println(e);
               }
-              new E().fin();
-              new A().fin();
+              System.out.println("E " + new E().fin() + " A " + new A().fin());
               CloneCopies outer = new CloneCopies();
               Inner i = outer.new Inner();
               System.out.println((i.copy().outer() == outer) + " " + (i.copy() != i));
@@ -15586,9 +15591,7 @@ cases:
       CloneCopies$E
       Pt[x=1, y=2]
       java.lang.CloneNotSupportedException
-      E finalized
-      A finalized 1
-      A finalized 1
+      E 1000 A 10
       true true
       false true
       true true true false 45

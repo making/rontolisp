@@ -61,7 +61,9 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * oracle: a case's expectation is what {@code java File.java} prints, and the first leg
  * checks that it still is. The {@code ci-spec.yaml} idea: the cases are concatenated into
  * ONE file per leg, behind a class whose {@code main} calls each case's in order, and the
- * output is sliced back per case, so a failure names its case and its leg. A
+ * output is sliced back per case, so a failure names its case and its leg. A case
+ * therefore writes nothing from a finalizer or from any other thread of its own: a line
+ * written when its own code is not running lands in whichever case runs then. A
  * {@code standalone:} case is a file of its own, per leg: one that starts another way, or
  * one that ENDS with an uncaught exception -- it prints {@code stdout}, then reports
  * {@code error} after {@code Exception in thread "main"} on standard error and exits with
