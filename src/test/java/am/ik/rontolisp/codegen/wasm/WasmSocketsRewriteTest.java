@@ -119,7 +119,7 @@ class WasmSocketsRewriteTest {
 			.doesNotContain(":START");
 		// peek-char's skipping loop: its look at the next character, every argument
 		// filled in, and the read-char that skips.
-		assertThat(rewriteInDefun("(peek-char t s)")).contains("(RONTOLISP::%IO-PEEK-CHAR __PC_STREAM __PC_ERRP",
+		assertThat(rewriteInDefun("(peek-char t s)")).contains("(RONTOLISP::%IO-PEEK-CHAR |__pc_stream| |__pc_errp|",
 				"RONTOLISP::%IO-READ-CHAR-EOF");
 		assertThat(rewriteInDefun("(peek-char)")).contains("(RONTOLISP::%IO-PEEK-CHAR NIL T NIL)");
 		assertThat(rewriteTopLevel("(peek-char nil s nil :eof)"))
