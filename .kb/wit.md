@@ -397,6 +397,9 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
   runs, but `wasm-tools component wit` reads `resource counter;` in the using interface -- a
   second type to any binding generator. One import is enough (the tool also imports the local
   name as `eq`).
+- An `async func` of a resource is the sync form with `:async t`, like any export's. Measured
+  2026-11-27 with a `:blocking t` Lisp importer, both component shapes: async methods and a
+  static async function taking an owned handle and a borrowed one of another interface.
 - **Refused**: a `use` of a resource of an interface the world does not export, at the
   interface (function or not: the component would lack the type; the tool imports the
   instance, `.todo/m95`); a used type holding a handle; a world's own `use` of a resource or
