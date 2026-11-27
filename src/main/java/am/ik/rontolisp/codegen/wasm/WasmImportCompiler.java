@@ -130,9 +130,13 @@ final class WasmImportCompiler {
 	 * answers a future that {@code rontolisp:await} resolves. Preview 1 has nothing that
 	 * can observe a pending state -- the host call blocks the wasm stack (synchronously,
 	 * or suspended through JSPI), so started == settled is the option's contract here
+	 * @param blocking whether the host function is an {@code async func} the call waits
+	 * for ({@code :blocking t}): read only by the {@code --no-gc --component} wrap, whose
+	 * imported instance type declares it {@code async} and whose lowering is the
+	 * synchronous one
 	 */
 	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, List<String> paramNames,
-			BoundaryType returnType, boolean async) {
+			BoundaryType returnType, boolean async, boolean blocking) {
 	}
 
 	/**
@@ -176,7 +180,7 @@ final class WasmImportCompiler {
 		BoundaryType returns = directive.returnType() == null ? BoundaryType.VOID
 				: knownType(directive.returnType(), form, true, accepted, backend);
 		Decl decl = new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params),
-				directive.paramNames(), returns, directive.async());
+				directive.paramNames(), returns, directive.async(), directive.blocking());
 		if (WasmMemoryIntrinsic.isIntrinsic(decl)) {
 			WasmMemoryIntrinsic.of(decl);
 		}

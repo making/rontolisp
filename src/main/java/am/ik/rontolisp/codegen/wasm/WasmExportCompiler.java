@@ -102,9 +102,10 @@ final class WasmExportCompiler {
 	 * @param async whether the {@code --component} lift uses an <strong>async</strong>
 	 * function type ({@code :async t}): the export runs as a stackful async task, so I/O
 	 * inside it (print, fetch, ...) blocks cooperatively instead of trapping. Only
-	 * meaningful on the GC {@code --component} (non-serve) path; ignored on Preview 1 /
-	 * {@code --no-wasi} (core exports whose I/O the host provides directly) and rejected
-	 * under {@code --no-gc --component} (the adapter-free reactor has no async machinery)
+	 * meaningful on a {@code --component} (non-serve) path, the scalar backend's
+	 * included, where it is what lets the export reach an import whose call waits;
+	 * ignored on Preview 1 / {@code --no-wasi} (core exports whose I/O the host provides
+	 * directly)
 	 * @param iface the fully-qualified id of the WIT interface this export belongs to
 	 * ({@code :interface "docs:adder/add@0.1.0"}, or {@code null} for a freestanding
 	 * world-level function export). {@code rontolisp:wit-export} fills this in when a

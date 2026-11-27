@@ -506,11 +506,16 @@ class WitOracleE2eTest {
 		NoGcWasmCompiler byLabel = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] labelComponent = byLabel.compile(LispReader.readAllFromString("""
 				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
-				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64)
+				(rontolisp:wasm-import 'measure :from "env" :as "measure" :params '(:s32) :returns :s64 :blocking t)
 				(defun run (n) (host-log "hello") (measure n))
-				(rontolisp:wasm-export 'run :params '(:s32) :returns :s64)
+				(defun size (n) (* n 2))
+				(rontolisp:wasm-export 'run :params '(:s32) :returns :s64 :async t)
+				(rontolisp:wasm-export 'size :params '(:s32) :returns :s32)
 				"""));
-		assertThat(byLabel.componentWit()).isEqualTo(oracle(labelComponent));
+		// an import the call waits for and the export whose task waits are `async func`s
+		assertThat(byLabel.componentWit()).isEqualTo(oracle(labelComponent))
+			.contains("measure: async func(p0: s32) -> s64;", "export run: async func(p0: s32) -> s64;",
+					"export size: func(p0: s32) -> s32;");
 		// The print micro-adapter's fixed stdout import precedes the user import.
 		NoGcWasmCompiler print = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
 		byte[] printComponent = print.compile(LispReader.readAllFromString("""

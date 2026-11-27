@@ -218,7 +218,8 @@ wrapper body is this backend's own.
 - **The boundary carries the value exactly or traps, both directions**: an argument with a
   narrow/unsigned type is range-guarded (`emitBoundaryRangeGuard`); a result only for `:u64`.
 - **Only REACHED imports are imported**, ordinals in declaration order.
-- **Refusals**: `:async t`; `rontolisp:wit-import` lowers to this, except an `async func`.
+- **Refusals**: `:async t` (a future); `rontolisp:wit-import` lowers to this, an `async func`
+  under `:blocking t` only ("An `async func`: a call that waits").
 - Host types are appended after every other type entry; the injector prepends imports ahead of
   `fd_write`. Pins: `NoGcWasmCompilerTest` (`aHostImportBecomesTheModulesOnlyImportEntry`,
   `theHostImportsPrecedeAPrintingModulesFdWrite`, `aDeclaredButUncalledImportCostsTheModuleNothing`,
@@ -437,7 +438,7 @@ byte-identical): per-export alias/type/sync `canonLift`/export, no import block,
   parking on `waitable-set.wait` when BLOCKED.
   - Only an async-typed task may block, so **EVERY export of a printing program lifts as ASYNC**
     (`asyncFuncTypeScalars`). Needs wasmtime 46+; **jco 1.25.2 cannot call these exports** --
-    keep jco/browser programs print-free. User `:async` stays rejected.
+    keep jco/browser programs print-free.
   - The instantiation cycle (bridge reads core memory, core imports fd_write from bridge) is
     broken with the wit-component **shim/fixup** pattern; the core stays byte-identical to plain
     `--no-gc`.
@@ -468,9 +469,61 @@ byte-identical): per-export alias/type/sync `canonLift`/export, no import block,
     `wasm-tools compose` with a provider, e.g. a rontolisp `--no-gc --component` that
     `wit-export`s the interface -- the E2E).
 - Component-mode-only compile errors (in `compile()`): non-kebab export names
-  (`WasmExportCompiler.COMPONENT_EXPORT_NAME`), non-component import names, `:async`. `:s-expr` is
+  (`WasmExportCompiler.COMPONENT_EXPORT_NAME`), non-component import names, a wait no task can
+  make ("An `async func`"). `:s-expr` is
   rejected for all `--no-gc` (`validateScalarTypes`). `--optimize` shakes before the wrap (cabi
   exports are roots). `--emit-wit`: `nogc`/`nogc-print` templates (`.kb/wasi-component.md`).
+
+### An `async func`: a call that waits
+**Invariant: this value model has no future, so an `async func` is here what its call is to the
+caller -- a call that waits and answers the value -- and the one spelling of that on every
+backend is `:blocking t` (`.kb/wit.md`); the binding that answers a future stays refused.**
+- **Import**: `:blocking t` on `rontolisp:wasm-import` (`Decl.blocking`, read by the wrap alone,
+  as `:param-names`; with `:async t` a parse error), which `wit-import :blocking t` writes for an
+  `async func` under `--no-gc --component`. The instance type declares the function `async`
+  (0x43 for 0x40) and the lower is the SYNC one: the caller's task waits in the host.
+- **Export**: `:async t` (a world's `async func`) is the lift's function type; core signature,
+  lift and post-return are a sync export's. A printing program's exports are async whatever the
+  directive says (the world's `func` is then not what the component exports: older than this).
+- **Only the task of an async-typed export may wait**: an export that is none, or the top level
+  (the start function runs in no task), reaching a `:blocking t` import is refused with the path
+  (`refuseWaitsOutsideAnAsyncTask`; exact, the calls being all there is with no first-class
+  function), located at the import's call. Measured 2026-11-26, wasmtime 51: both trap `cannot
+  block a synchronous task before returning` once the function does wait, and answer when it
+  returns at once (`wait-for` of 0) -- refused all the same, a wait being the host's to decide.
+- **A core module** (Preview 1, `--no-wasi`): `:blocking t` and `:async t` change no byte and
+  `wit-import :blocking t` is the GC module's plain import. No async ABI and none needed: a JSPI
+  host suspends the call around the module (`Suspending` import, `promising` export; node 24,
+  a 110 B module waiting on a timer). No re-entry guard: the host makes one call at a time.
+- **Measured 2026-11-26** (wasmtime 51, zero flags): a component sleeping on
+  `wasi:clocks/monotonic-clock@0.3.0`'s `wait-for` and answering the nanoseconds 425 B (gzip
+  269; `nap(20)` 21.3 ms), the same source on the GC component 2,836 B; a Java `@WitExport`
+  world of one async and one sync export 190 B. The types cost no byte. jco 1.42.0 transpiles
+  and calls an async export over a `:blocking t` import its `--map` answers with an `async`
+  function (node 24.22). Byte-identical before and after: the 37 modules the 15 programs of
+  `examples/` and `size-report/` make `--no-gc` (default, `--optimize=off`, `--component`), and
+  every refusal of the trees' 378 sources the same message but
+  `examples/wit/world/analyzer.lisp`'s, which moved from its `async func` export to its `dolist`.
+- **Rejected: a future handle the program awaits** (an async lower, `waitable-set.wait` at the
+  await). It runs -- a hand-written probe overlapped two 20 ms waits in 21.3 ms -- and costs a
+  program that uses none nothing, but one that does pays the waitable-set family, a memory for
+  the event pair and every result (an async lower returns through memory), a subtask to drop,
+  some 390 B over the blocking shape for a result-less call, and the type lattice a future kind
+  per payload; and `:blocking t` already is the binding the front end with no futures (Java)
+  writes. Revisit when a `--no-gc` program needs two waits to overlap.
+- **Element types**: a `stream<T>` / `future<T>` is no scalar and is refused at the WIT line
+  with every other compound type.
+- **Java**: an `async func` export lifts async; nothing of the scalar subset waits (a
+  `Thread.sleep` needs a mutex, a `@WitImport` binding an object: `.todo/m93`).
+- Pins: `NoGcWasmCompilerTest.aComponentTypesWhatWaitsAsAsyncAndRefusesAWaitNoTaskCanMake` /
+  `.anAsyncImportIsRefusedBecauseThereIsNoFutureToAnswerWith`,
+  `WitImportDirectiveTest.theNoGcBackendBindsAnAsyncFuncOnlyAsACallThatWaits`,
+  `WitExportDirectiveTest.lowersAnAsyncFuncIntoAnAsyncExport`,
+  `NoGcWasmComponentImportE2eTest.scalarsStringsAndAWaitCrossBetweenTwoComposedComponents` (two
+  tasks waiting: the consumer's for the provider's, that one for the clock),
+  `NoGcWasmImportE2eTest.aWitImportedInterfaceIsTheHandWrittenImportBlock` (JSPI),
+  `WitOracleE2eTest.noGcComponentImportWitsMatchWasmToolsByteForByte`,
+  `JavaWitImportTest.aClassImplementsTheWorldAComponentExports`.
 
 ## `--no-wasi`
 A printing program's `fd_write` import becomes an internal discarding SINK at function index 0

@@ -102,8 +102,8 @@ since literals skip the wrapper),
 ## Modes, other backends, aliases
 - `--component` on wasm-GC throws `UnsupportedOperationException` (GC components bind through
   `wit-import`'s `%component-import`); `--no-gc --component` TAKES it as instance imports
-  (`.kb/no-gc-scalar-wasm.md`, "Host imports"), hence `:param-names` (default `p0..`, read by that
-  wrap alone). Interpreter and JVM define error-signalling stubs so shared sources load everywhere.
+  (`.kb/no-gc-scalar-wasm.md`, "Host imports"), hence `:param-names` (default `p0..`) and
+  `:blocking t` (the function an `async func`), both read by that wrap alone. Interpreter and JVM define error-signalling stubs so shared sources load everywhere.
 - **`--no-gc` takes the directive** with its own wrappers; shared: `WasmImportDirective`,
   `WasmImportCompiler.parse`/`hostParamTypes`/`hostResultTypes`, `WasmImportInjector`. **The accepted
   TYPE SET is per-backend and follows the house integer** (so `parse` takes it as an argument):
@@ -267,8 +267,8 @@ Worker; `wasi:config`, `wasi:blobstore`, `wasi:logging` take the same path.
   every label present lifted, its key camelCased (`read-only` -> `readOnly`), a label left out,
   `null` or `undefined` lowered false, any truthy value true, an unknown key ignored; jco throws
   `TypeError` on a non-object, so does the glue); a top-level `result` error arm thrown as
-  `WitError`; resources in a table per `<iface id>#<name>`. A `u64` at or past 2^63 lifts as a float (`boxI64`, as on a
-  component). Pinned by
+  `WitError`; resources in a table per `<iface id>#<name>`. A `u64` at or past 2^63 lifts as a
+  float (`boxI64`, as on a component). Pinned by
   `WasmHostGlueE2eTest.anInterfaceTheFlatSetDoesNotCarryCrossesThroughTheCanonicalAbi`.
 - **The export direction** (`HostGlueEmitter.WitExport`, `WitGlueLayouts.of(WitExportSignature)`):
   a canonical `wit-export` on `--no-wasi` is the component's core export (`coreParams` /

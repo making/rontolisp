@@ -212,8 +212,8 @@ jco references `FutureReadableEnd`/`FutureEnd`/`FutureWritableEnd` and defines n
 longer reproduces -- a flat async export of a Lisp `--component` and of a Java `--component
 --no-wasi` component answers under node; (b) not re-measured.
 
-Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` rejects it
-(`NoGcWasmCompiler.validateComponentExport`). Pinned by `componentAsyncExport*` +
+Preview 1 / `--no-wasi` ignore `:async`; `--no-gc --component` lifts it the same way
+(`.kb/no-gc-scalar-wasm.md`, "An `async func`"). Pinned by `componentAsyncExport*` +
 `componentSyncExportWithIoWorksWhenTheHostDoesNotBlock` in `WasmLispCompilerIntegrationTest`,
 `componentFetchInsideAsyncExport` (opt-in `RONTOLISP_HTTP_E2E=1`), ci-spec
 `wasm-export-directive-does-not-disturb-run`.

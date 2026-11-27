@@ -256,8 +256,6 @@ offending export:
 - an exported interface that declares a `resource`, and a `use` clause whose
   type holds one the scope has no name for (a world's) or whose name the scope
   gives another type
-- an `async func` under `--no-gc --component`, whose adapter-free reactor has no
-  async machinery
 - an export name that is not a component-model label (lower-kebab-case words), a
   duplicate export (refused by the WIT reader first, in `wasm-tools component
   wit`'s words: `` export `a` conflicts with prior func of same name ``), or
