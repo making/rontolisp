@@ -238,6 +238,10 @@ class ComponentWriterTest {
 		assertThat(hex(ComponentWriter.definedStream(ComponentWriter.VT_U8))).isEqualTo("66017d");
 		assertThat(hex(ComponentWriter.definedFuture(4))).isEqualTo("650104");
 		assertThat(hex(ComponentWriter.definedFuture(69))).isEqualTo("6501c500");
+		// a future's payload as a valtype: a primitive inlined, an index as above
+		assertThat(hex(ComponentWriter.definedFutureOf(ComponentWriter.valTypePrim(ComponentWriter.VT_U32))))
+			.isEqualTo("650179");
+		assertThat(hex(ComponentWriter.definedFutureOf(ComponentWriter.valTypeIndex(69)))).isEqualTo("6501c500");
 		assertThat(hex(ComponentWriter.definedStreamOfType(69))).isEqualTo("6601c500");
 		assertThat(hex(ComponentWriter.definedResultErr(1))).isEqualTo("6a000101");
 	}

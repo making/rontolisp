@@ -124,9 +124,6 @@ final class WitComponentLevelTypes {
 					throw new UnsupportedOperationException(
 							"a bare future (no payload type) has no component-level type");
 				}
-				if (payload instanceof WitType.Prim prim) {
-					return ComponentWriter.definedFutureOfPrim(WitComponentTypeEncoder.primCode(prim.name()));
-				}
 				return ComponentWriter.definedFuture(indexOf(resolver, abi, payload));
 			});
 			case WitType.BorrowOf borrow -> {

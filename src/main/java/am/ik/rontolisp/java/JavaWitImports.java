@@ -52,7 +52,14 @@ import org.jspecify.annotations.Nullable;
  * {@code WitFuture<T>} ({@code rontolisp-java-api}), each a class of the binding reading
  * through the built-ins of an alias of its type the directive adds ({@code :aliases}). A
  * {@code stream<u8>} the program hands the host is a {@code Consumer<OutputStream>},
- * handed the writable end once the call has returned.
+ * handed the writable end once the call has returned; a {@code future<T>} it hands the
+ * host is a {@code WitFuture<T>} of its own, whose value the binding writes before the
+ * call for whenever the host reads it ({@code <alias>-resolve}).
+ *
+ * <p>
+ * A resource an interface takes from another with {@code use} is the member interface of
+ * the {@code @WitImport} interface standing for that other one, its handle the class that
+ * interface's binding makes.
  */
 
 final class JavaWitImports {
@@ -132,11 +139,14 @@ final class JavaWitImports {
 	 * @param path the WIT as the directive names it
 	 * @param functions its functions, constructors and statics, each by the Java method
 	 * that is it
-	 * @param resources the resources the methods reach, by WIT name, in the order met
+	 * @param resources the resources the methods reach, by WIT name, in the order met,
+	 * then those a member interface alone stands for
 	 * @param members the WIT interface's member names, in its order: the directive's
+	 * @param used the imports standing for the interfaces whose resources this one takes
+	 * with {@code use}, by the resource's WIT name
 	 */
 	record Import(JavaClass declaration, String id, String path, List<Bound> functions, Map<String, Resource> resources,
-			List<String> members) {
+			List<String> members, Map<String, Import> used) {
 	}
 
 	/**
@@ -328,6 +338,14 @@ final class JavaWitImports {
 		/** The resources met, in order. */
 		private final Map<String, Resource> resources = new LinkedHashMap<>();
 
+		/**
+		 * The resources of other interfaces met, by WIT name: the interface standing for
+		 * each, and the import it is a member of.
+		 */
+		private final Map<String, JavaClass> usedClasses = new HashMap<>();
+
+		private final Map<String, Import> usedImports = new LinkedHashMap<>();
+
 		Checker(JavaClass declaration, JavaBoundary.WitInterface wit, Source source) {
 			super(declaration, wit.id(), "the @WitImport interface", source);
 			this.declaration = declaration;
@@ -361,9 +379,73 @@ final class JavaWitImports {
 				}
 				bound.add(bind(method, member));
 			}
+			// a member interface named after a resource stands for it though no method of
+			// this interface reaches it: one of an interface taking it with use may
+			for (String name : this.drops.keySet()) {
+				JavaClass named = this.declaration.members.get(upperCamel(name));
+				if (named != null && named.isInterface && !named.isAnnotation && !this.resources.containsKey(name)) {
+					resource(name, named);
+				}
+			}
 			return new Import(this.declaration, this.wit.id(), this.wit.path(), List.copyOf(bound),
 					java.util.Collections.unmodifiableMap(this.resources),
-					this.wit.members().stream().map(JavaBoundary.Function::name).toList());
+					this.wit.members().stream().map(JavaBoundary.Function::name).toList(),
+					java.util.Collections.unmodifiableMap(this.usedImports));
+		}
+
+		// Whether a handle is of a resource the interface takes from another with use.
+		private boolean taken(JavaBoundary.Type wit) {
+			String definition = wit.definition();
+			return wit.rep() == Rep.HANDLE && definition != null && !this.drops.containsKey(definition)
+					&& this.wit.used().containsKey(definition);
+		}
+
+		/**
+		 * A resource of another interface is the member interface of the
+		 * {@code @WitImport} interface standing for that one, which the type written for
+		 * it names.
+		 */
+		@Override
+		boolean matches(JavaBoundary.Type wit, JavaType declared, boolean boxed, JavaClass.Method method, String what) {
+			if (!taken(wit)) {
+				return super.matches(wit, declared, boxed, method, what);
+			}
+			String name = Objects.requireNonNull(wit.definition());
+			String home = Objects.requireNonNull(this.wit.used().get(name));
+			JavaClass named = declared instanceof ClassType type && type.arguments().isEmpty() ? type.declaration()
+					: null;
+			JavaClass outer = named == null ? null : named.outer;
+			Import imported = outer == null || outer == this.declaration ? null : of(outer);
+			if (named == null || outer == null || imported == null || !imported.id().equals(home)
+					|| outer.members.get(upperCamel(name)) != named || !imported.resources().containsKey(name)) {
+				throw at(method,
+						what + " is " + wit.wit() + ", the resource " + name + " of " + home + ", which "
+								+ this.wit.id() + " takes with use: in Java the member interface " + upperCamel(name)
+								+ " of the @WitImport interface standing for " + home + ", not " + declared);
+			}
+			JavaClass known = this.usedClasses.putIfAbsent(name, named);
+			if (known != null && known != named) {
+				throw at(method, what + " is " + wit.wit() + ", the resource " + name + " of " + home + ", which is "
+						+ known.name + " elsewhere in " + this.declaration.simpleName() + ", not " + declared);
+			}
+			this.usedImports.put(name, imported);
+			return true;
+		}
+
+		@Override
+		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+			if (!taken(wit)) {
+				return null;
+			}
+			JavaClass named = this.usedClasses.get(Objects.requireNonNull(wit.definition()));
+			if (named == null) {
+				// no type is written where it stands (an error arm thrown)
+				throw at(method,
+						what + " is " + wit.wit() + ", a resource of " + this.wit.used().get(wit.definition())
+								+ ", which a type is written for where it is handed "
+								+ "over: the method answers a WitResult of it");
+			}
+			return named;
 		}
 
 		private void named(Map<String, JavaBoundary.Function> names, String name, JavaBoundary.Function member) {
@@ -400,29 +482,33 @@ final class JavaWitImports {
 		}
 
 		/**
-		 * Checks a parameter carrying a stream or a future the program hands the host: a
-		 * {@code stream<u8>} of its own, a {@code Consumer<OutputStream>} the binding
-		 * hands the writable end once the call has handed the host the readable one, as
-		 * the Lisp side writes a byte stream after the call it hands over. The rest is
-		 * refused: no write of a stream of values or of handles is bound; a future would
-		 * be written after the call, and wasmtime's HTTP types read the one a request
-		 * takes only within {@code client.send}, which the program waits on; an
-		 * {@code async func} is waited on while the host reads what the program writes
-		 * only after it.
+		 * Checks a parameter carrying a stream or a future the program hands the host. A
+		 * {@code stream<u8>} of its own, or an option of one, is a
+		 * {@code Consumer<OutputStream>} the binding hands the writable end once the call
+		 * has handed the host the readable one, as the Lisp side writes a byte stream
+		 * after the call it hands over. A {@code future<T>} of its own is a
+		 * {@code WitFuture<T>} the program made, whose value the binding writes before
+		 * the call without waiting for the reader: the host may read it within that call
+		 * or a later one the program waits on. The rest is refused: no write of a stream
+		 * of values or of handles is bound; an {@code async func} is waited on while the
+		 * host reads what the program writes only after it; one held in another type has
+		 * no place the binding makes its ends at.
 		 */
 		private void handed(JavaBoundary.Type wit, JavaType declared, JavaBoundary.Function member,
 				JavaClass.Method method, String what) {
-			String refusal;
 			if (wit.rep() == Rep.FUTURE_HANDLE) {
-				refusal = "a future the program hands the host, which the binding could write only once the call has "
-						+ "returned, where a host may read it only within a later call the program waits on "
-						+ "(wasmtime's HTTP types read the one a request takes within client.send)";
+				handedFuture(wit, declared, method, what);
+				return;
 			}
-			else if (wit.rep() != Rep.STREAM_HANDLE) {
+			boolean optional = wit.rep() == Rep.NIL_OR_VALUE
+					&& Objects.requireNonNull(wit.element()).rep() == Rep.STREAM_HANDLE;
+			JavaBoundary.Type stream = optional ? Objects.requireNonNull(wit.element()) : wit;
+			String refusal;
+			if (stream.rep() != Rep.STREAM_HANDLE) {
 				refusal = "carrying " + Objects.requireNonNull(asyncIn(wit))
 						+ ", which the binding hands the host only as a parameter of its own";
 			}
-			else if (!JavaWitTypes.isU8(wit.element())) {
+			else if (!JavaWitTypes.isU8(stream.element())) {
 				refusal = "a stream the program hands the host, of values the program cannot write: the guest only "
 						+ "reads a stream of other than bytes";
 			}
@@ -436,11 +522,46 @@ final class JavaWitImports {
 			if (refusal != null) {
 				throw at(method, what + " is " + wit.wit() + ", " + refusal);
 			}
-			if (!(declared instanceof ClassType type && type.declaration().name.equals(CONSUMER)
+			JavaType consumer = optional
+					? declared instanceof ClassType type && type.declaration().name.equals("java.util.Optional")
+							&& type.arguments().size() == 1 ? type.arguments().get(0) : null
+					: declared;
+			if (!(consumer instanceof ClassType type && type.declaration().name.equals(CONSUMER)
 					&& type.arguments().size() == 1 && JavaWitTypes.isClass(type.arguments().get(0), OUTPUT_STREAM))) {
-				throw at(method, what + " is " + wit.wit()
-						+ ", which the program writes: Consumer<OutputStream> in Java, handed the writable end, not "
-						+ declared);
+				throw at(method,
+						what + " is " + wit.wit() + ", which the program writes: "
+								+ (optional ? "Optional<Consumer<OutputStream>>" : "Consumer<OutputStream>")
+								+ " in Java, handed the writable end, not " + declared);
+			}
+		}
+
+		// A future of its own: the WitFuture the mapping names, its value and the error
+		// arm get() throws checked as a result's are.
+		private void handedFuture(JavaBoundary.Type wit, JavaType declared, JavaClass.Method method, String what) {
+			JavaBoundary.Type payload = wit.element();
+			if (payload == null) {
+				throw at(method, what + " is " + wit.wit() + ", a bare future, which carries no value");
+			}
+			String carried = asyncIn(payload);
+			if (carried != null) {
+				throw at(method, what + " is " + wit.wit() + ", carrying " + carried
+						+ ", which the binding hands the host only as a parameter of its own");
+			}
+			if (!matches(wit, declared, false, method, what)) {
+				throw at(method,
+						what + " is " + wit.wit() + ", which the program hands the host: "
+								+ JavaWitTypes.javaText(this.declaration, wit, false, declared, true)
+								+ " in Java, whose get() answers the value the host reads, not " + declared);
+			}
+			JavaType argument = JavaWitTypes.argument(declared);
+			JavaBoundary.Type value = payload.rep() == Rep.RESULT ? payload.element() : payload;
+			if (value != null) {
+				expect(value, argument, true, method, what + ": its future's value");
+			}
+			if (payload.rep() == Rep.RESULT && payload.error() != null) {
+				// what get() throws as a WitException's value: the Java type is the
+				// mapping's own
+				expect(payload.error(), null, true, method, what + ": its future's error arm");
 			}
 		}
 
@@ -448,6 +569,10 @@ final class JavaWitImports {
 		@Override
 		void resource(String name, JavaClass named) {
 			JavaBoundary.Function drop = this.drops.get(name);
+			if (drop == null && this.usedClasses.get(name) == named) {
+				// another interface's, which the import standing for that one checked
+				return;
+			}
 			if (drop == null) {
 				throw at(named,
 						this.declaration.simpleName() + "." + named.simpleName() + " is " + name
@@ -623,7 +748,7 @@ final class JavaWitImports {
 			List<LispVal> aliases = new ArrayList<>();
 			for (Map.Entry<String, String> alias : this.aliases.getOrDefault(entry.getKey(), Map.of()).entrySet()) {
 				boolean used = false;
-				for (String op : List.of("new", "read", "write", "drop-readable", "drop-writable")) {
+				for (String op : List.of("new", "read", "write", "drop-readable", "drop-writable", "resolve")) {
 					String bound = reachedMembers.get(alias.getKey() + "-" + op);
 					if (bound != null) {
 						table.add(JavaForms.list(LispString.literal(alias.getKey() + "-" + op),
@@ -771,7 +896,14 @@ final class JavaWitImports {
 
 		@Override
 		String handleClass(String resource) {
-			return Objects.requireNonNull(this.handles.get(resource));
+			String own = this.handles.get(resource);
+			if (own != null) {
+				return own;
+			}
+			// a resource of another interface: the class that interface's binding makes
+			Import home = Objects.requireNonNull(this.imported.used().get(resource));
+			JavaClass binding = Objects.requireNonNull(binding(home.declaration()));
+			return binding.name + ".R" + List.copyOf(home.resources().keySet()).indexOf(resource);
 		}
 
 		/** Where a method is written: the binding's own, or a resource's class. */
@@ -811,24 +943,45 @@ final class JavaWitImports {
 			for (int i = first; i < params.size(); i++) {
 				JavaBoundary.Type type = params.get(i).type();
 				String argument = "p" + (i - first);
-				if (type.rep() != Rep.STREAM_HANDLE) {
+				if (type.rep() == Rep.FUTURE_HANDLE) {
+					arguments.add(resolved(type, method.parameters.get(i - first), argument, i - first, body, out));
+					continue;
+				}
+				boolean optional = type.rep() == Rep.NIL_OR_VALUE
+						&& Objects.requireNonNull(type.element()).rep() == Rep.STREAM_HANDLE;
+				if (type.rep() != Rep.STREAM_HANDLE && !optional) {
 					arguments.add(out(type, method.parameters.get(i - first), argument));
 					continue;
 				}
-				String[] ends = writer(type);
-				out.append(body).append("Object w").append(i - first).append(" = ").append(ends[0]).append("();\n");
-				arguments.add(VALUES + ".first(w" + (i - first) + ")");
-				writers.append(body)
-					.append(argument)
-					.append(".accept(new ")
-					.append(ends[1])
-					.append('(')
-					.append(VALUES)
-					.append(".inHandle(")
-					.append(VALUES)
-					.append(".rest(w")
-					.append(i - first)
-					.append("))));\n");
+				String[] ends = writer(optional ? Objects.requireNonNull(type.element()) : type);
+				String pair = "w" + (i - first);
+				String accept = argument + (optional ? ".get()" : "") + ".accept(new " + ends[1] + "(" + VALUES
+						+ ".inHandle(" + VALUES + ".rest(" + pair + "))));\n";
+				if (optional) {
+					// none is no stream: no pair is made, and nothing is handed over
+					out.append(body)
+						.append("Object ")
+						.append(pair)
+						.append(" = ")
+						.append(argument)
+						.append(".isPresent() ? ")
+						.append(ends[0])
+						.append("() : null;\n");
+					arguments.add("(" + pair + " == null ? null : " + VALUES + ".first(" + pair + "))");
+					writers.append(body)
+						.append("if (")
+						.append(pair)
+						.append(" != null) {\n")
+						.append(body)
+						.append("    ")
+						.append(accept)
+						.append(body)
+						.append("}\n");
+					continue;
+				}
+				out.append(body).append("Object ").append(pair).append(" = ").append(ends[0]).append("();\n");
+				arguments.add(VALUES + ".first(" + pair + ")");
+				writers.append(body).append(accept);
 			}
 			JavaBoundary.Type result = member.result();
 			boolean raw = result != null && result.rep() == Rep.RESULT;
@@ -879,6 +1032,89 @@ final class JavaWitImports {
 				out.append(body).append("return ").append(in(result, method.returnType, call)).append(";\n");
 			}
 			out.append(indent).append("}\n");
+		}
+
+		/**
+		 * A {@code future<T>} the program hands the host: the statements taking its value
+		 * from the program's {@code WitFuture} -- a {@code result}'s arm by what
+		 * {@code get()} answers or throws --, making the pair and writing the value for
+		 * whenever the host reads it, and the expression of the readable end the call
+		 * hands over. The value is taken before the pair is made, so a {@code get()} that
+		 * throws leaves no end behind.
+		 */
+		private String resolved(JavaBoundary.Type wit, JavaType declared, String argument, int index, String body,
+				StringBuilder out) {
+			String alias = alias(wit);
+			String make = this.binding + "." + nativeFor(alias + "-new", 0, false);
+			String resolve = this.binding + "." + nativeFor(alias + "-resolve", 2, false);
+			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+			JavaType written = JavaWitTypes.argument(declared);
+			String v = VALUES;
+			String value = "v" + index;
+			String pair = "f" + index;
+			if (payload.rep() != Rep.RESULT) {
+				out.append(body)
+					.append("Object ")
+					.append(value)
+					.append(" = ")
+					.append(out(payload, written, argument + ".get()"))
+					.append(";\n");
+			}
+			else {
+				JavaBoundary.Type ok = payload.element();
+				JavaBoundary.Type error = payload.error();
+				out.append(body).append("Object ").append(value).append(";\n").append(body).append("try {\n");
+				if (ok == null) {
+					out.append(body).append("    ").append(argument).append(".get();\n");
+				}
+				out.append(body)
+					.append("    ")
+					.append(value)
+					.append(" = ")
+					.append(v)
+					.append(".cons(")
+					.append(v)
+					.append(".label(\"ok\"), ")
+					.append(ok == null ? "null" : out(ok, written, argument + ".get()"))
+					.append(");\n")
+					.append(body)
+					.append("}\n")
+					.append(body)
+					.append("catch (")
+					.append(WIT_EXCEPTION)
+					.append(" e) {\n")
+					.append(body)
+					.append("    ")
+					.append(value)
+					.append(" = ")
+					.append(v)
+					.append(".cons(")
+					.append(v)
+					.append(".label(\"error\"), ")
+					.append(error == null ? "null"
+							: out(error, null,
+									"((" + JavaWitTypes.javaText(this.imported.declaration(), error, true, null, false)
+											+ ") e.error())"))
+					.append(");\n")
+					.append(body)
+					.append("}\n");
+			}
+			out.append(body)
+				.append("Object ")
+				.append(pair)
+				.append(" = ")
+				.append(make)
+				.append("();\n")
+				.append(body)
+				.append(resolve)
+				.append('(')
+				.append(v)
+				.append(".rest(")
+				.append(pair)
+				.append("), ")
+				.append(value)
+				.append(");\n");
+			return v + ".first(" + pair + ")";
 		}
 
 		/**

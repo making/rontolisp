@@ -6483,8 +6483,16 @@ public final class WasmLispCompiler implements LispCompiler {
 							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
 						Objects.requireNonNull(importSlotIndex
 							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
+				// a settling wrapper writes again what its cancel-write withdrew
+				int writeOrdinal = async.op() == WasmComponentImportCompiler.AsyncOp.WRITE_SETTLE
+						? Objects.requireNonNull(
+								importSlotIndex.get(async.module() + "\0"
+										+ WasmComponentImportCompiler
+											.asyncField(WasmComponentImportCompiler.AsyncOp.WRITE, async.alias())))
+						: -1;
 				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, asyncWaitOrdinals,
-						allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex, sched, streamEndedGlobalIndex);
+						allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex, sched, streamEndedGlobalIndex,
+						writeOrdinal);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {

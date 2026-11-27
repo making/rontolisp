@@ -1,6 +1,7 @@
 package am.ik.rontolisp.java;
 
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -226,8 +227,10 @@ public interface JavaBoundary {
 	 * @param path the WIT as the directive the lowering emits names it, which every later
 	 * pass reads it by
 	 * @param members every member a lowering may bind, in the lowering's order
+	 * @param used the resources the interface takes from another with {@code use}: each
+	 * by the name its definition has, with the canonical id of the interface defining it
 	 */
-	record WitInterface(String id, String path, List<Function> members) {
+	record WitInterface(String id, String path, List<Function> members, Map<String, String> used) {
 	}
 
 	/**

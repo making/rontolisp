@@ -1368,13 +1368,14 @@ public final class ComponentWriter {
 	}
 
 	/**
-	 * Encode the defined value type {@code future<T>} where {@code T} is a primitive
-	 * value type, inlined as {@link #definedStream} inlines a stream's element.
-	 * @param payloadValType the payload primitive value type code (e.g. {@link #VT_U32})
+	 * Encode the defined value type {@code future<T>} over the encoded valtype of its
+	 * payload: a primitive inlined ({@link #valTypePrim}), or a defined type by index
+	 * ({@link #valTypeIndex}), which is {@link #definedFuture}'s bytes.
+	 * @param payloadType the encoded valtype of the payload
 	 * @return the encoded defined value type
 	 */
-	public static byte[] definedFutureOfPrim(int payloadValType) {
-		return enc(w -> w.write(0x65).write(0x01).writeSignedLeb128(payloadValType - 0x80));
+	public static byte[] definedFutureOf(byte[] payloadType) {
+		return enc(w -> w.write(0x65).write(0x01).write((Object) payloadType));
 	}
 
 	/**
@@ -1750,6 +1751,17 @@ public final class ComponentWriter {
 	 */
 	public static byte[] canonFutureCancelRead(int futureTypeIndex) {
 		return enc(w -> w.write(0x18).writeUnsignedLeb128(futureTypeIndex).write(0x00));
+	}
+
+	/**
+	 * Encode {@code canon future.cancel-write} (opcode {@code 0x19}, synchronous
+	 * variant): a core function {@code (handle) -> i32} withdrawing a pending write, or
+	 * answering what it completed with. Golden bytes: {@code 19 <ty> 00}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureCancelWrite(int futureTypeIndex) {
+		return enc(w -> w.write(0x19).writeUnsignedLeb128(futureTypeIndex).write(0x00));
 	}
 
 	/**
