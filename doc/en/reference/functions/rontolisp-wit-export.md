@@ -215,8 +215,9 @@ gives another type is refused at the clause; rename it there
 (`point as corner`).
 
 Not carried, each a compile error at the export's WIT line: a resource handle,
-a `stream`, a `future`, and a compound type in an `async func`; an
-exported interface that declares a `resource` is refused as a whole. A WASI
+a `stream` and a `future`; an
+exported interface that declares a `resource` is refused as a whole. An
+`async func` carries the same types as any other. A WASI
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
 refuse a world with any other.
 

@@ -796,7 +796,7 @@ class JavaWitImportTest {
 	 * trap, an {@code async func} lifted async as on the GC one. A world of compound
 	 * types crosses too: a record a member record, a variant a sealed interface, a list a
 	 * {@code List}, a result a {@code WitResult} or its ok arm with a
-	 * {@code WitException} thrown.
+	 * {@code WitException} thrown, in an {@code async func} as in any other.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
@@ -898,7 +898,7 @@ class JavaWitImportTest {
 					+ ":REACTOR T :OCTETS T :ENVELOPE T)");
 		// a named type is the member type of its name, checked against its definition
 		exportRefused("shapes/Shapes.java", SHAPES, "record Point(int x, int y)", "record Point(int x, long y)",
-				"Shapes.java:74:29: Geometry.Point (point of test:shapes/geometry@0.1.0): its field y is s32, which is "
+				"Shapes.java:75:29: Geometry.Point (point of test:shapes/geometry@0.1.0): its field y is s32, which is "
 						+ "int in Java, not long");
 		write("shapes/Shapes.java", SHAPES);
 		write("shapes/shapes.wit", SHAPES_WIT.replace("summary", "totals"));
@@ -1226,7 +1226,7 @@ class JavaWitImportTest {
 			  }
 
 			  export geometry;
-			  export summarize: func(areas: list<f64>) -> summary;
+			  export summarize: async func(areas: list<f64>) -> summary;
 			  export octets: func(bytes: list<u8>) -> list<u8>;
 			  export remember: func(noted: tuple<s64, string>);
 			  export remembered: func() -> string;
@@ -1257,7 +1257,8 @@ class JavaWitImportTest {
 			    public record Noted(long number, String name) {
 			    }
 
-			    public static Summary summarize(List<Double> areas) {
+			    public static Summary summarize(List<Double> areas) throws InterruptedException {
+			        Thread.sleep(1);
 			        double total = 0;
 			        for (double area : areas) {
 			            total += area;
@@ -1385,7 +1386,7 @@ class JavaWitImportTest {
 
 			public class ShapesMain {
 
-			    public static void main(String[] args) {
+			    public static void main(String[] args) throws InterruptedException {
 			        System.out.println(Shapes.Geometry.flip(new Shapes.Geometry.Point(1, 2)));
 			        System.out.println(Shapes.Geometry.squares(3));
 			        System.out.println(Shapes.Geometry.bounds(List.of(new Shapes.Geometry.Point(3, 1), new Shapes.Geometry.Point(1, 9))));

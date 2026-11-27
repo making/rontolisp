@@ -214,8 +214,21 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
   enum) and cross a component with nothing added. A `--no-wasi` core module's glue holds them
   as jco does, an object of booleans ([wasm-import.md](wasm-import.md), "The JS side").
-- **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, a
-  compound type in an `async func` (`.todo/m90`), an interface declaring a resource
+- **An `async func`** is the same form with `:async t`, and nothing else: its lift is the
+  synchronous one over an async function type, so parameters, result area and post-return are
+  a sync export's ([wasi-component.md](wasi-component.md), "`:async t` I/O exports", with what
+  the spec says and which calls of an instance overlap). The refusal it had ("an async export
+  carries the flat types only") rested on a lift with no post-return and four flat parameters,
+  which is an async-OPTION lift's and an async lower's. Measured 2026-11-26: the integration
+  test's world with every function async answers what the sync world answers on both
+  component shapes, a call that sleeps answers on `--component` (the same function as a plain
+  func traps, `cannot block a synchronous task before returning`; the reactor, which imports no
+  clock, traps either way); `wasm-tools component targets` accepts it; 600,000 calls from a
+  `bindgen!` host under a 48 MiB store limit, 35 MB peak RSS; a `--no-wasi` module's glue calls
+  it as any export (`:async` is a component's). `flip: async func(point) -> point` 1,938 B /
+  1,126 gzip against the sync 1,881 / 1,098 (the held mark, wasi-component.md).
+- **Refused at the WIT line** (`requireCanonical`): a resource handle, a stream, a future, an
+  interface declaring a resource
   (`.todo/m91`); `--no-gc`, which has no value a record could be (no cons). In the compiler,
   which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
   export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
@@ -264,8 +277,14 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   proposal not enabled"), which a program naming `rontolisp:wit-error` or `handler-case` is --
   a world for jco answers its `result`s under `:envelope t`; `wasm-tools compose` 1.263.0
   refuses a dependency whose WORLD types name each other ("type not valid to be used as
-  import"), the tool's own component included (`wac` instead).
-- Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
+  import"), the tool's own component included (`wac` instead), and wires the composed
+  component's own imports alone (a dependency's dependency is composed into it first). The
+  same world with its functions async, by hand: the `bindgen!` host (wasmtime's
+  `component-model-async`, WASI p3 in the linker; an async func is `call_concurrent` under
+  `run_concurrent`) and jco (each async export a `Promise`; 1,200,000 calls, RSS level at 279
+  MB) answer what `--invoke` answers.
+- Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`
+  (async funcs among them: in an interface, with a `result`, past sixteen flats, one that waits),
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` /
   `.aComponentCallsWhatAnotherExportsOverCompoundTypes`,
   `WitExportDirectiveTest.lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine`,
