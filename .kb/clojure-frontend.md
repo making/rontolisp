@@ -2179,7 +2179,12 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `class` call of a kind's value, a `clojure.lang` name, a fn's class), so the host walk reads
   a designator by the designator tables (`%clojure-designator-class-bases`), the way `supers`
   and `bases` already did: `isa?`, `parents` and `ancestors` answer it as the JVM's interpreter
-  answers the class. The rows are literal strings
+  answers the class. A designator that crosses to a `java:` member is the host's `Class` of its
+  name where the host has one (`%clojure-designator-class-object`: `Class/forName`), the object
+  the oracle hands Java, so a member taking `java.lang.Class` takes it -- measured 2026-11-27:
+  `(.isAssignableFrom Number (class 1))` was `RontoJavaHandle cannot be cast to
+  java.lang.Class`; a name the host has no class of (a program type, a `clojure.lang` class, a
+  class file the image lacks) keeps the handle. The rows are literal strings
   (an interface list is one space-separated string), since on the JVM a string `format` builds
   is no `java.lang.String` and the runtime class reads quoted strings only.
 - **Readers**: a `Class/forName` of a `clojure.lang` row name answers the stub, one or three
@@ -2258,7 +2263,8 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `JvmRuntimeClassFilesTest` (the stub classes travel); `supers`/`bases` and a fn's class:
   clojure-spec `parents-and-ancestors-of-a-class-add-its-java-supers` (all four,
   oracle-identical), `ClojureClassBasesTest`; the native binary's walk of a class literal, a
-  fn's class and a designator beside the host's class objects:
+  fn's class and a designator beside the host's class objects, and a designator as a
+  `java.lang.Class` argument, as a receiver and as a returned class value:
   `ClojureNativeLoweringE2eTest#theBinaryWalksAHostClassAsTheJvmInterpreterDoes`.
 
 ## Record and deftype class values
@@ -2294,10 +2300,14 @@ real `Class` objects, so a class value of another shape would be unequal to them
   the interfaces; `prefer-method` keeps its keys by class name (`C%H-PREF-KEY`), so a preference
   over a class spelling meets a library's row stored under the class.
 - **Across the `java:` boundary** (interpreter, JVM): where the class value is the host's stub it
-  crosses as itself; a designator (a program naming no `java:`) crosses as one `java:handle` per
-  class name (`%clojure-designator-handles`), class `java.lang.Class`, so a Java map -- schema's
-  `WeakHashMap` registry too -- keys a record's class like the oracle's one `Class` object; Java
-  hands it back as the designator.
+  crosses as itself; a designator crosses as the host's `Class` of its name where the host has
+  one (`%clojure-designator-class-object`), so a member taking `java.lang.Class` takes it and a
+  Java map -- schema's `WeakHashMap` registry too -- keys the class like the oracle's one `Class`
+  object, else as one `java:handle` per class name (`%clojure-designator-handles`, class
+  `java.lang.Class`), which Java hands back as the designator. Two class values of one name are
+  `=` whichever representation they are in (`%clojure-class-value-p`), as the oracle's one
+  `Class` object is, and a designator is a receiver of `java.lang.Class`'s members like a class
+  literal (`ClojureValueMethodLowering`'s class kind).
 - **`R/create`** (schema's `s/record` expansion) is `map->R`, like `R/new` is `->R`
   (`ClojureInteropLowering.qualifiedMember`; a deftype has none).
 - **Kept lenient**: a local or a var of the name wins (the oracle refuses `(def R ...)` beside

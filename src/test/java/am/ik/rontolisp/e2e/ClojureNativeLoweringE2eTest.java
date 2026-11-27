@@ -131,7 +131,10 @@ class ClojureNativeLoweringE2eTest {
 	 * invoked member of one it does not register, so a class literal and {@code class}
 	 * answer designators there beside the host's class objects: {@code isa?},
 	 * {@code parents}, {@code ancestors}, {@code class?} and {@code str} read both
-	 * (2026-11-27: the walk stopped on {@code Class.isAssignableFrom}).
+	 * (2026-11-27: the walk stopped on {@code Class.isAssignableFrom}). A class value
+	 * that crosses to a {@code java:} member is the host's Class of its name on either --
+	 * what Java takes where it takes a {@code java.lang.Class} -- and two of one class
+	 * are =, as the oracle's one Class object is.
 	 */
 	@Test
 	void theBinaryWalksAHostClassAsTheJvmInterpreterDoes() throws Exception {
@@ -149,6 +152,10 @@ class ClojureNativeLoweringE2eTest {
 				(println (isa? (class f) clojure.lang.IFn))
 				(println (sort (map str (parents (class f)))))
 				(println (instance? String "a") (class? String) (.getSimpleName String) (str String))
+				(def c (class 1))
+				(println (.isAssignableFrom Number c) (.isAssignableFrom c Number))
+				(println (.isInstance c 1) (.isInstance c "a"))
+				(println (= c (Class/forName "java.lang.Long")) (= String (class "")))
 				""";
 		Path file = workDir.resolve("host-class-walk.clj");
 		Files.writeString(file, program);
