@@ -66,7 +66,7 @@ public final class BuiltinMacroLowering {
 			// Not a call shape: the operator is itself an expression ((lambda ...) args,
 			// (1 2 3) in a funcall) or the list is dotted -- walk the elements, no head
 			// expansion.
-			return LispCons.rebuilt(cons, walk(cons.car(), shadowed), walk(cons.cdr(), shadowed));
+			return LispCons.rebuilt(cons, walk(cons.car(), shadowed), walkElements(cons.cdr(), shadowed));
 		}
 		return switch (head.name()) {
 			// Quoted data: none of the pass's business, whatever calls it holds.
@@ -115,7 +115,7 @@ public final class BuiltinMacroLowering {
 				return walk(expansion, shadowed);
 			}
 		}
-		return LispCons.rebuilt(cons, walk(cons.car(), shadowed), walk(cons.cdr(), shadowed));
+		return LispCons.rebuilt(cons, walk(cons.car(), shadowed), walkElements(cons.cdr(), shadowed));
 	}
 
 	/**
@@ -170,8 +170,8 @@ public final class BuiltinMacroLowering {
 		if (cons.cdr() instanceof LispCons rest && rest.isProperList()) {
 			// #'(lambda ...): the designator is a lambda form, walked as one; #'fn and a
 			// malformed #' stay as they stand.
-			return LispCons.rebuilt(cons, cons.car(),
-					LispCons.rebuilt(rest, walkFunctionDesignator(rest.car(), shadowed), walk(rest.cdr(), shadowed)));
+			return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(rest,
+					walkFunctionDesignator(rest.car(), shadowed), walkElements(rest.cdr(), shadowed)));
 		}
 		return cons;
 	}
@@ -203,7 +203,7 @@ public final class BuiltinMacroLowering {
 			return cons;
 		}
 		return LispCons.rebuilt(cons, cons.car(),
-				LispCons.rebuilt(rest, walkBindingList(bindings, shadowed), walk(rest.cdr(), shadowed)));
+				LispCons.rebuilt(rest, walkBindingList(bindings, shadowed), walkElements(rest.cdr(), shadowed)));
 	}
 
 	private static LispVal walkDo(LispCons cons, Set<String> shadowed) {
@@ -213,7 +213,7 @@ public final class BuiltinMacroLowering {
 		}
 		// (end result...): the end form and the result forms are code, the pair's parens
 		// are not.
-		LispVal walkedEnd = LispCons.rebuilt(end, walk(end.car(), shadowed), walk(end.cdr(), shadowed));
+		LispVal walkedEnd = LispCons.rebuilt(end, walk(end.car(), shadowed), walkElements(end.cdr(), shadowed));
 		return LispCons.rebuilt(cons, cons.car(),
 				LispCons.rebuilt(rest, walkBindingList(bindings, shadowed), walkedEnd));
 	}
@@ -226,9 +226,10 @@ public final class BuiltinMacroLowering {
 		LispVal car = bindings.car();
 		LispVal walkedCar = car instanceof LispCons binding && binding.isProperList()
 				&& binding.car() instanceof LispSymbol
-						? LispCons.rebuilt(binding, binding.car(), walk(binding.cdr(), shadowed)) : walk(car, shadowed);
+						? LispCons.rebuilt(binding, binding.car(), walkElements(binding.cdr(), shadowed))
+						: walk(car, shadowed);
 		LispVal walkedCdr = bindings.cdr() instanceof LispCons rest && rest.isProperList()
-				? walkBindingList(rest, shadowed) : walk(bindings.cdr(), shadowed);
+				? walkBindingList(rest, shadowed) : walkElements(bindings.cdr(), shadowed);
 		return LispCons.rebuilt(bindings, walkedCar, walkedCdr);
 	}
 
@@ -243,7 +244,7 @@ public final class BuiltinMacroLowering {
 		}
 		LispVal walkedForm = walk(rest.car(), shadowed);
 		LispVal walkedClauses = rest.cdr() instanceof LispCons clauses && clauses.isProperList()
-				? walkNamedClauses(clauses, shadowed) : walk(rest.cdr(), shadowed);
+				? walkNamedClauses(clauses, shadowed) : walkElements(rest.cdr(), shadowed);
 		return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(rest, walkedForm, walkedClauses));
 	}
 
@@ -257,7 +258,7 @@ public final class BuiltinMacroLowering {
 			return cons;
 		}
 		return LispCons.rebuilt(cons, cons.car(),
-				LispCons.rebuilt(rest, walkHandlerPairs(bindings, shadowed), walk(rest.cdr(), shadowed)));
+				LispCons.rebuilt(rest, walkHandlerPairs(bindings, shadowed), walkElements(rest.cdr(), shadowed)));
 	}
 
 	/**
@@ -267,9 +268,9 @@ public final class BuiltinMacroLowering {
 	private static LispVal walkHandlerPairs(LispCons pairs, Set<String> shadowed) {
 		LispVal car = pairs.car();
 		LispVal walkedCar = car instanceof LispCons pair && pair.isProperList()
-				? LispCons.rebuilt(pair, pair.car(), walk(pair.cdr(), shadowed)) : walk(car, shadowed);
+				? LispCons.rebuilt(pair, pair.car(), walkElements(pair.cdr(), shadowed)) : walk(car, shadowed);
 		LispVal walkedCdr = pairs.cdr() instanceof LispCons rest && rest.isProperList()
-				? walkHandlerPairs(rest, shadowed) : walk(pairs.cdr(), shadowed);
+				? walkHandlerPairs(rest, shadowed) : walkElements(pairs.cdr(), shadowed);
 		return LispCons.rebuilt(pairs, walkedCar, walkedCdr);
 	}
 
@@ -279,7 +280,7 @@ public final class BuiltinMacroLowering {
 		}
 		Set<String> inner = new HashSet<>(shadowed);
 		LispVal walkedDefs = walkDefList(defs, operator.equals(LispNames.SYMBOL_MACROLET), inner, shadowed);
-		return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(rest, walkedDefs, walk(rest.cdr(), inner)));
+		return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(rest, walkedDefs, walkElements(rest.cdr(), inner)));
 	}
 
 	/**
@@ -292,7 +293,7 @@ public final class BuiltinMacroLowering {
 		LispVal walkedCar = car instanceof LispCons clause && clause.isProperList() ? walkFrom(clause, 2, shadowed)
 				: walk(car, shadowed);
 		LispVal walkedCdr = clauses.cdr() instanceof LispCons rest && rest.isProperList()
-				? walkNamedClauses(rest, shadowed) : walk(clauses.cdr(), shadowed);
+				? walkNamedClauses(rest, shadowed) : walkElements(clauses.cdr(), shadowed);
 		return LispCons.rebuilt(clauses, walkedCar, walkedCdr);
 	}
 
@@ -309,12 +310,26 @@ public final class BuiltinMacroLowering {
 			inner.add(sym.name());
 			// Past the name: the lambda list (a shape) then the body -- or, for
 			// symbol-macrolet, the expansion straight away.
-			walkedCar = LispCons.rebuilt(def, def.car(), symbolMacros ? walk(def.cdr(), outer)
-					: def.cdr() instanceof LispCons tail ? walkFrom(tail, 1, outer) : walk(def.cdr(), outer));
+			walkedCar = LispCons.rebuilt(def, def.car(), symbolMacros ? walkElements(def.cdr(), outer)
+					: def.cdr() instanceof LispCons tail ? walkFrom(tail, 1, outer) : walkElements(def.cdr(), outer));
 		}
 		LispVal walkedCdr = defs.cdr() instanceof LispCons rest && rest.isProperList()
-				? walkDefList(rest, symbolMacros, inner, outer) : walk(defs.cdr(), outer);
+				? walkDefList(rest, symbolMacros, inner, outer) : walkElements(defs.cdr(), outer);
 		return LispCons.rebuilt(defs, walkedCar, walkedCdr);
+	}
+
+	/**
+	 * Walks a list of FORMS -- an argument list, a body, a result list -- element by
+	 * element. It must never walk the list itself as one form: the list's head position
+	 * would then be its first ELEMENT, and a symbol there (`(f time ...)` where the
+	 * element {@code time} is a variable) is no macro call. A dotted tail is an
+	 * expression like any other.
+	 */
+	private static LispVal walkElements(LispVal list, Set<String> shadowed) {
+		if (list instanceof LispCons cons) {
+			return LispCons.rebuilt(cons, walk(cons.car(), shadowed), walkElements(cons.cdr(), shadowed));
+		}
+		return walk(list, shadowed);
 	}
 
 	/**

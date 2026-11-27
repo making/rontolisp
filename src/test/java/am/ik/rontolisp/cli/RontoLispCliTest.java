@@ -2347,12 +2347,15 @@ class RontoLispCliTest {
 	@Test
 	void dumpIrLeavesShadowedAndUnlowerableFormsAlone() {
 		// A macrolet-local name shadows the built-in of the same name: the dump keeps the
-		// local macro's semantics, here its body evaluated twice. And a call the
+		// local macro's semantics, here its body evaluated twice. A variable that happens
+		// to be named after a built-in macro is not a call either. And a call the
 		// context-free pass does not lower -- stable-sort, expanded by the interpreter
 		// beyond LispMacroExpander's dispatch (the SpecialVarCollector try/catch stance:
-		// never throw, leave the form for the consumer) -- dumps as it stands. Both
+		// never throw, leave the form for the consumer) -- dumps as it stands. All
 		// round-trip.
 		String program = """
+				(defun elapsed (time) (- time 1))
+				(print (elapsed 3))
 				(macrolet ((when (c b) `(progn ,b ,b)))
 				  (when t (print 7)))
 				(print (stable-sort (list 2 1) #'<))
@@ -2361,6 +2364,10 @@ class RontoLispCliTest {
 		String dump = runCli("", "-e", program, "--dump-ir");
 		assertThat(runCli("", "-e", dump)).isEqualTo(ran).endsWith("7\n7\n(1 2)\n");
 		assertThat(dump).contains("(PROGN (PRINT 7) (PRINT 7))").contains("STABLE-SORT");
+		// An argument is an ELEMENT, never a form: the parameter named after the time
+		// macro stays the variable, not a time call in the head position of the argument
+		// list.
+		assertThat(dump).contains("(DEFUN ELAPSED (TIME) (- TIME 1))").contains("(PRINT (ELAPSED 3))");
 	}
 
 	@Test
