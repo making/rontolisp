@@ -418,7 +418,8 @@ class WitOracleE2eTest {
 		// inside the component, and the host runs a plain func of the same instance
 		// meanwhile. What the waiting call holds in memory -- here the place its own
 		// async call answers into -- stays: the call made meanwhile releases what it
-		// staged and no more.
+		// staged and no more. The waiter is the wasm-GC backend's, a record crossing,
+		// and the scalar backend's, a string, whose call waits in a :blocking t import.
 		Files.writeString(this.tempDir.resolve("waiting.wit"), """
 				package example:waiting@0.1.0;
 
@@ -432,6 +433,11 @@ class WitOracleE2eTest {
 				  size: func(n: note) -> u32;
 				}
 
+				interface plain {
+				  later: async func(s: string, ms: u32) -> string;
+				  size: func(s: string) -> u32;
+				}
+
 				world provider {
 				  export host;
 				}
@@ -439,6 +445,11 @@ class WitOracleE2eTest {
 				world waiter {
 				  import host;
 				  export api;
+				}
+
+				world plain-waiter {
+				  import host;
+				  export plain;
 				}
 				""");
 		String repeated = """
@@ -450,42 +461,58 @@ class WitOracleE2eTest {
 				(defun slow-echo (s ms) (sleep (/ ms 1000.0)) %s)
 				(rontolisp:wit-export "waiting.wit" :world provider)
 				""".formatted(repeated));
-		Path waiter = Files.writeString(this.tempDir.resolve("waiter.lisp"), """
+		compileFileViaCli(provider, "provider", List.of("--component"));
+		Map<String, List<String>> waiters = new java.util.LinkedHashMap<>();
+		waiters.put("""
 				(rontolisp:wit-import "waiting.wit" :interface "example:waiting/host@0.1.0" :package host)
 				(rontolisp:async-defun echoed (n ms)
 				  (list :text (rontolisp:await (host:slow-echo (getf n :text) ms))))
 				(defun later (n ms) (echoed n ms))
 				(defun size (n) (length (getf n :text)))
 				(rontolisp:wit-export "waiting.wit" :world waiter)
-				""");
-		Path caller = Files.writeString(this.tempDir.resolve("caller.lisp"), """
-				(rontolisp:wit-import "waiting.wit" :interface "example:waiting/api@0.1.0" :package api)
-				(defun repeated (s) %s)
-				(let ((pending (api:later '(:text "ab") 100)))
-				  (print (api:size '(:text "0123456789")))
-				  (print (mismatch (getf (rontolisp:await pending) :text) (repeated "ab"))))
-				""".formatted(repeated));
-		compileFileViaCli(provider, "provider", List.of("--component"));
-		compileFileViaCli(waiter, "waiter", List.of("--component"));
-		compileFileViaCli(caller, "caller", List.of("--component"));
-		// the tool wires a component's own imports, so the inner pair is composed first
-		for (List<String> step : List.of(List.of("waiter", "provider", "waiting"),
-				List.of("caller", "waiting", "called"))) {
-			Process compose = new ProcessBuilder("wasm-tools", "compose",
-					this.tempDir.resolve(step.get(0) + ".wasm").toString(), "-d",
-					this.tempDir.resolve(step.get(1) + ".wasm").toString(), "-o",
-					this.tempDir.resolve(step.get(2) + ".wasm").toString())
+				""", List.of("api", "'(:text \"ab\")", "'(:text \"0123456789\")",
+				"(getf (rontolisp:await pending) :text)", "--component"));
+		waiters.put("""
+				(rontolisp:wit-import "waiting.wit" :interface "example:waiting/host@0.1.0" :package host
+				  :blocking t)
+				(defun later (s ms) (host:slow-echo s ms))
+				(defun size (s) (length s))
+				(rontolisp:wit-export "waiting.wit" :world plain-waiter)
+				""",
+				List.of("plain", "\"ab\"", "\"0123456789\"", "(rontolisp:await pending)", "--component", "--no-gc"));
+		for (Map.Entry<String, List<String>> waiting : waiters.entrySet()) {
+			List<String> call = waiting.getValue();
+			Path waiter = Files.writeString(this.tempDir.resolve("waiter.lisp"), waiting.getKey());
+			Path caller = Files.writeString(this.tempDir.resolve("caller.lisp"), """
+					(rontolisp:wit-import "waiting.wit" :interface "example:waiting/%1$s@0.1.0" :package api)
+					(defun repeated (s) %5$s)
+					(let ((pending (api:later %2$s 100)))
+					  (print (api:size %3$s))
+					  (print (mismatch %4$s (repeated "ab"))))
+					""".formatted(call.get(0), call.get(1), call.get(2), call.get(3), repeated));
+			compileFileViaCli(waiter, "waiter", call.subList(4, call.size()));
+			compileFileViaCli(caller, "caller", List.of("--component"));
+			// the tool wires a component's own imports, so the inner pair is composed
+			// first
+			for (List<String> step : List.of(List.of("waiter", "provider", "waiting"),
+					List.of("caller", "waiting", "called"))) {
+				Process compose = new ProcessBuilder("wasm-tools", "compose",
+						this.tempDir.resolve(step.get(0) + ".wasm").toString(), "-d",
+						this.tempDir.resolve(step.get(1) + ".wasm").toString(), "-o",
+						this.tempDir.resolve(step.get(2) + ".wasm").toString())
+					.redirectErrorStream(true)
+					.start();
+				String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+				assertThat(compose.waitFor()).as(composing).isZero();
+			}
+			Process run = new ProcessBuilder("wasmtime", "run", this.tempDir.resolve("called.wasm").toString())
 				.redirectErrorStream(true)
 				.start();
-			String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-			assertThat(compose.waitFor()).as(composing).isZero();
+			String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(run.waitFor()).as(call + printed).isZero();
+			assertThat(printed.lines().map(String::strip).filter(line -> !line.isEmpty())).as(call.toString())
+				.containsExactly("10", "NIL");
 		}
-		Process run = new ProcessBuilder("wasmtime", "run", this.tempDir.resolve("called.wasm").toString())
-			.redirectErrorStream(true)
-			.start();
-		String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertThat(run.waitFor()).as(printed).isZero();
-		assertThat(printed.lines().map(String::strip).filter(line -> !line.isEmpty())).containsExactly("10", "NIL");
 	}
 
 	@Test

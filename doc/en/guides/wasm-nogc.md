@@ -676,6 +676,12 @@ two waits take the sum of their times. A program whose waits must overlap
 belongs on the default backend, where the binding of an `async func`
 answers a future.
 
+While a call waits, the host may call an export of the same instance that
+is not `:async t` (the component model lets a plain function run then).
+That call frees what it allocated and nothing of the waiting call's: its
+post-return pops the heap to the top the waiting call waits at, not to
+its base.
+
 A core module (no `--component`) has no async ABI and needs none. There
 `:blocking t` and `:async t` change nothing — the import is a plain import,
 the export a plain export — and a host whose function is asynchronous

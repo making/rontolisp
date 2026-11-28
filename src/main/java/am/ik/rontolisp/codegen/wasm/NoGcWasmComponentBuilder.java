@@ -94,7 +94,8 @@ import java.util.regex.Pattern;
  * {@code cabi_realloc} shim (the host lowers string arguments into the callee's memory
  * through it) and one {@code cabi_post_*} post-return function per flat-result signature
  * (it pops the bump heap back to its base once the host has copied the results out, so a
- * resident instance stays flat), and the string-involving exports are lifted with the
+ * resident instance stays flat; to a floor where a call can be made while another waits,
+ * {@link #heapFloor}), and the string-involving exports are lifted with the
  * {@code (memory 0) (realloc ...) string-encoding=utf8 (post-return ...)} options. A
  * program with no {@code :string} export gets none of this -- its component is
  * byte-identical to the Release 1 scalar-only shape.
@@ -111,6 +112,12 @@ final class NoGcWasmComponentBuilder {
 
 	/** The canonical-ABI reallocation function's core export name. */
 	static final String CABI_REALLOC = "cabi_realloc";
+
+	/**
+	 * The core export name of the reallocation function a waiting call's answer is
+	 * lowered through ({@link #waitRealloc}).
+	 */
+	static final String CABI_REALLOC_WAIT = "cabi_realloc_wait";
 
 	/**
 	 * A fully-qualified WIT interface id as a component import name
@@ -409,9 +416,15 @@ final class NoGcWasmComponentBuilder {
 				aliases.add(ComponentWriter.aliasCoreMemory(coreInstance, "memory"));
 				coreMemory = 0;
 			}
-			if (viaShim.stream().anyMatch(NoGcWasmComponentBuilder::returnsString)) {
+			final boolean floor = heapFloor(decls, imports, printUsed);
+			if (viaShim.stream().anyMatch(d -> returnsString(d) && !waitRealloc(d, floor))) {
 				aliases.add(ComponentWriter.aliasCoreFunc(coreInstance, CABI_REALLOC));
 				realloc = nextCoreFunc++;
+			}
+			int reallocWait = -1;
+			if (viaShim.stream().anyMatch(d -> waitRealloc(d, floor))) {
+				aliases.add(ComponentWriter.aliasCoreFunc(coreInstance, CABI_REALLOC_WAIT));
+				reallocWait = nextCoreFunc++;
 			}
 			final List<byte[]> lowers = new ArrayList<>();
 			final List<Integer> lowered = new ArrayList<>();
@@ -419,7 +432,8 @@ final class NoGcWasmComponentBuilder {
 				aliases.add(ComponentWriter.aliasInstanceFunc(Objects.requireNonNull(instanceOf.get(decl.module())),
 						decl.field()));
 				lowers.add(returnsString(decl)
-						? ComponentWriter.canonLowerMemoryReallocUtf8(nextComponentFunc++, coreMemory, realloc)
+						? ComponentWriter.canonLowerMemoryReallocUtf8(nextComponentFunc++, coreMemory,
+								waitRealloc(decl, floor) ? reallocWait : realloc)
 						: ComponentWriter.canonLowerMemoryUtf8(nextComponentFunc++, coreMemory));
 				lowered.add(nextCoreFunc++);
 			}
@@ -592,6 +606,37 @@ final class NoGcWasmComponentBuilder {
 	 */
 	static boolean returnsString(WasmImportCompiler.Decl decl) {
 		return decl.returnType() == BoundaryType.STRING;
+	}
+
+	/**
+	 * Whether the post-return pops the bump heap to a floor instead of its base: a call
+	 * of a sync-typed export runs while an async-typed export's task waits in a
+	 * {@code :blocking t} import (CanonicalABI.md, {@code Task.needs_exclusive}), and
+	 * what the waiting call holds sits below the heap top it waits at. The wait raises
+	 * the floor to that top and puts it back once the call returns; only a sync-typed
+	 * export with a post-return can pop the heap while it is raised. A printing program's
+	 * exports are all async-typed, and two async-typed calls never overlap.
+	 * @param exportDecls the export directives
+	 * @param imports the reached imports
+	 * @param printAdapter whether the print micro-adapter is wired in
+	 * @return whether the core carries the floor
+	 */
+	static boolean heapFloor(List<WasmExportCompiler.Decl> exportDecls, List<WasmImportCompiler.Decl> imports,
+			boolean printAdapter) {
+		return !printAdapter && imports.stream().anyMatch(WasmImportCompiler.Decl::blocking)
+				&& exportDecls.stream().anyMatch(d -> !d.async() && WasmExportCompiler.usesMemory(d));
+	}
+
+	/**
+	 * Whether the import's answer is lowered through {@code cabi_realloc_wait}, which
+	 * raises the floor over the bytes it hands out: the answer of a call that waits is
+	 * written while a call made meanwhile may pop the heap to the floor.
+	 * @param decl the import
+	 * @param heapFloor whether the core carries the floor ({@link #heapFloor})
+	 * @return whether its lower names the waiting realloc
+	 */
+	static boolean waitRealloc(WasmImportCompiler.Decl decl, boolean heapFloor) {
+		return heapFloor && decl.blocking() && returnsString(decl);
 	}
 
 	/**

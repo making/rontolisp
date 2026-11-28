@@ -237,14 +237,19 @@ note under `Task.enter_implicit_thread`):
 - Not measured (`.todo/178-component-shared-memory-map-collision.md`): whether a waiting call
   holds anything else the call made meanwhile can write over -- bytes staged past the heap
   top, the adapter's page-5 cells.
-- `--no-gc --component` is NOT safe yet: its post-return pops to the heap BASE
-  (`NoGcWasmCompiler.postReturnBody`), so a sync-typed export run while an async-typed one
-  waits in a `:blocking t` import frees what the waiting call holds. Measured 2026-11-27: the
-  same composition with a scalar waiter answers "invalid utf8 encoding"
-  (`.todo/m98-no-gc-a-plain-func-run-while-an-async-func-waits-pops-the-waiting-calls-heap.md`).
-  A printing program's exports are all async-typed, so its calls never overlap.
+- **`--no-gc --component` pops to a floor** (`NoGcWasmComponentBuilder.heapFloor`): where a
+  `:blocking t` import is reached and a sync-typed export has a post-return, a global floor
+  (init: heap base) is what the post-return pops to. The import's wrapper raises it to the heap
+  top around the call and puts it back after (no fold for that import); a `:string` answer is
+  lowered through `cabi_realloc_wait`, which raises the floor past the block, because the answer
+  is written when the callee returns (CanonicalABI.md, sync `canon lower`'s `on_resolve`), and a
+  call made before the waiting one resumes must not pop below it (that ordering not measured).
+  Without the floor, measured 2026-11-27: "invalid utf8 encoding" from the string's 9th byte.
+  +77 B for the pinned waiter (1,269 -> 1,346), +19 for a scalar-answering import; a program
+  lacking either half (all-async exports, a printing program) is byte-identical.
 - Pins: `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (three composed
-  components, the sync call made while the async one waits).
+  components, the sync call made while the async one waits; the waiter on wasm-GC and on
+  `--no-gc`).
 
 **`:async t` is permanent, not a workaround**: WASI 0.3 has no synchronous write BY DESIGN
 (blocking is a property of the task), so on a pure-0.3 import surface an I/O-bearing sync

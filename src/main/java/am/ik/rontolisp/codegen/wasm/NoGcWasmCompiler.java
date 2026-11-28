@@ -879,6 +879,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				this.globalIndex.put(name, (layout.used() ? 1 : 0) + this.globalIndex.size());
 			}
 		}
+		// The heap floor follows them, where a sync-typed export can run while a call
+		// waits in a :blocking t import.
+		this.floorGlobal = -1;
+		if (this.component && NoGcWasmComponentBuilder.heapFloor(exportDecls,
+				importOrdinals.keySet().stream().map(importDecls::get).filter(Objects::nonNull).toList(),
+				layout.printUsed() && !this.noWasi)) {
+			this.floorGlobal = (layout.used() ? 1 : 0) + this.globalIndex.size();
+		}
 
 		// An import every reached call site hands literals to loses its wrapper: those
 		// sites call the host function themselves, and with nothing left that can name
@@ -3242,10 +3250,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			}
 		}
+		// cabi_realloc_wait, behind it, is what a waiting call's :string answer is
+		// lowered through (NoGcWasmComponentBuilder.waitRealloc).
+		boolean reallocWait = hostImports.stream()
+			.anyMatch(decl -> NoGcWasmComponentBuilder.waitRealloc(decl, this.floorGlobal >= 0));
 		int reallocIndex = mem.funcBase() + localFuncCount;
-		int postBase = reallocIndex + (componentRealloc ? 1 : 0);
+		int reallocWaitIndex = reallocIndex + (componentRealloc ? 1 : 0);
+		int postBase = reallocWaitIndex + (reallocWait ? 1 : 0);
 		int shimBase = postBase + postKinds.size();
-		int totalFuncCount = localFuncCount + (componentRealloc ? 1 : 0) + postKinds.size() + stringReturnDecls.size();
+		int totalFuncCount = localFuncCount + (componentRealloc ? 1 : 0) + (reallocWait ? 1 : 0) + postKinds.size()
+				+ stringReturnDecls.size();
 		// The type table: every signature the module needs, each written ONCE. A wasm
 		// function type is structural, so two functions of the same shape share one
 		// entry -- a `func` section holds type INDICES, and nothing else in the module
@@ -3346,6 +3360,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 },
 					new Type[] { Type.I32 });
 		}
+		if (reallocWait) {
+			// cabi_realloc_wait, cabi_realloc's shape.
+			funcTypes[nextFunc++] = typeTable.intern(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 },
+					new Type[] { Type.I32 });
+		}
 		if (componentStringAbi) {
 			// cabi_post_* (flat results) -> (), one per signature.
 			for (Type paramType : postKinds.values()) {
@@ -3412,6 +3431,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					LispVal initial = this.topLevel.initialValues().get(name);
 					gs.addGlobal(wasmType(ty), Mutability.VAR, init -> globalInitializer(init, ty, initial, mem));
 				}
+				if (this.floorGlobal >= 0) {
+					gs.addGlobal(Type.I32, Mutability.VAR,
+							init -> init.write(Instruction.I32_CONST).writeSignedLeb128(mem.heapBase()));
+				}
 			});
 		}
 		w
@@ -3456,6 +3479,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					// The canonical string ABI helper the component wrap aliases for the
 					// host to lower strings into this memory through.
 					exports.addExport(NoGcWasmComponentBuilder.CABI_REALLOC, ExternalKind.FUNCTION, reallocIndex);
+				}
+				if (reallocWait) {
+					exports.addExport(NoGcWasmComponentBuilder.CABI_REALLOC_WAIT, ExternalKind.FUNCTION,
+							reallocWaitIndex);
 				}
 				if (componentStringAbi) {
 					// The post-returns the string-involving exports' lifts name.
@@ -3532,11 +3559,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					code.addFunction(searchBody(mem.strlenIndex(), mem.byteOffsetIndex()));
 				}
 				if (componentRealloc) {
-					code.addFunction(cabiReallocBody(mem.allocIndex()));
+					code.addFunction(cabiReallocBody(mem.allocIndex(), -1));
+				}
+				if (reallocWait) {
+					code.addFunction(cabiReallocBody(mem.allocIndex(), this.floorGlobal));
 				}
 				if (componentStringAbi) {
 					for (int p = 0; p < postKinds.size(); p++) {
-						code.addFunction(postReturnBody(mem.heapBase()));
+						code.addFunction(postReturnBody(mem.heapBase(), this.floorGlobal));
 					}
 					for (int j : stringReturnDecls) {
 						code.addFunction(retptrShimBody(mem.funcIndex(internalCount + wrapperOrdinals[j]),
@@ -4338,8 +4368,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// header at ptr - 4 exactly as for a __ronto_alloc'd buffer. Old is never
 	// a live block to preserve (the host lowers each string with old = 0 and an exact
 	// size), and the returned pointer keeps __alloc's 4-byte alignment, which
-	// satisfies the string encoding's align 1.
-	private static byte[] cabiReallocBody(int allocIndex) {
+	// satisfies the string encoding's align 1. With a floor global (>= 0) it is
+	// cabi_realloc_wait: the floor is raised to the heap top past the block, so a call
+	// made while the call it answers waits pops no lower.
+	private static byte[] cabiReallocBody(int allocIndex, int floorGlobal) {
 		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
@@ -4348,6 +4380,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
+		if (floorGlobal >= 0) {
+			w.write(Instruction.GET_GLOBAL, 0x00);
+			w.write(Instruction.SET_GLOBAL).writeUnsignedLeb128(floorGlobal);
+		}
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
 	}
@@ -4357,12 +4393,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// instance outlives one export call (there are no Lisp globals and the host arena
 	// API is not part of the component ABI), so it pops the bump heap all the way back
 	// to its base -- freeing the host-lowered argument strings, the wrapper's internal
-	// copies and the result string -- and a resident instance stays flat. The flat-result
-	// parameters are ignored.
-	private static byte[] postReturnBody(int heapBase) {
+	// copies and the result string -- and a resident instance stays flat. Where a call
+	// can be made while another waits (a floor global >= 0) it pops to the floor
+	// instead, which is the base unless a call waits. The flat-result parameters are
+	// ignored.
+	private static byte[] postReturnBody(int heapBase, int floorGlobal) {
 		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		w.write(Instruction.I32_CONST).writeSignedLeb128(heapBase);
+		if (floorGlobal >= 0) {
+			w.write(Instruction.GET_GLOBAL).writeUnsignedLeb128(floorGlobal);
+		}
+		else {
+			w.write(Instruction.I32_CONST).writeSignedLeb128(heapBase);
+		}
 		w.write(Instruction.SET_GLOBAL, 0x00);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
@@ -4605,6 +4648,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				|| (decl.returnType() == BoundaryType.VOID && ret.isVoid());
 	}
 
+	// Whether the import's call raises the heap floor for its wait.
+	private boolean raisesFloor(WasmImportCompiler.Decl decl) {
+		return this.floorGlobal >= 0 && decl.blocking();
+	}
+
 	/**
 	 * The body of the synthetic internal function a {@code rontolisp:wasm-import} becomes
 	 * -- the mirror image of {@link #compileWrapperBody}, which is what an EXPORT gets.
@@ -4675,7 +4723,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (retptr) {
 			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(retptrLocal);
 		}
+		// A call that waits holds everything below the heap top: the floor is raised to
+		// it for the wait, so a call made meanwhile pops no lower, and put back after.
+		int floorLocal = -1;
+		if (raisesFloor(decl)) {
+			floorLocal = nextLocal++;
+			locals.add(Ty.STRING);
+			w.write(Instruction.GET_GLOBAL).writeUnsignedLeb128(this.floorGlobal);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(floorLocal);
+			w.write(Instruction.GET_GLOBAL, 0x00);
+			w.write(Instruction.SET_GLOBAL).writeUnsignedLeb128(this.floorGlobal);
+		}
 		w.write(Instruction.CALL).writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal);
+		if (floorLocal >= 0) {
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(floorLocal);
+			w.write(Instruction.SET_GLOBAL).writeUnsignedLeb128(this.floorGlobal);
+		}
 		if (retptr) {
 			// The host filled the record: push (ptr, len) the way the two-value host
 			// ABI below expects them on the stack.
@@ -5030,8 +5093,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// Nothing to fold without a :string parameter (the scalars marshal the same
 			// either way), and a :string RESULT copies the host's bytes into a fresh
 			// block through the allocator -- a wrapper's worth of code that a call site
-			// would only repeat.
-			if (!decl.paramTypes().contains(BoundaryType.STRING) || decl.returnType() == BoundaryType.STRING) {
+			// would only repeat. A call that raises the heap floor keeps its wrapper,
+			// where the floor is raised.
+			if (!decl.paramTypes().contains(BoundaryType.STRING) || decl.returnType() == BoundaryType.STRING
+					|| raisesFloor(decl)) {
 				continue;
 			}
 			List<ImportSite> sites = this.importCallSites.get(name);
@@ -6092,6 +6157,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * memory plan says where they start.
 	 */
 	private Map<String, Integer> globalIndex = new LinkedHashMap<>();
+
+	/**
+	 * The wasm global index of the heap floor the post-return pops to, or -1 where the
+	 * post-return pops to the heap base ({@link NoGcWasmComponentBuilder#heapFloor}).
+	 */
+	private int floorGlobal = -1;
 
 	/** The first call of each callee in the body the reachability walk is in. */
 	private Map<String, LispCons> callSites = new HashMap<>();

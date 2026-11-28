@@ -491,6 +491,8 @@ backend is `:blocking t` (`.kb/wit.md`); the binding that answers a future stays
   function), located at the import's call. Measured 2026-11-26, wasmtime 51: both trap `cannot
   block a synchronous task before returning` once the function does wait, and answer when it
   returns at once (`wait-for` of 0) -- refused all the same, a wait being the host's to decide.
+- **A sync-typed export called while one waits** pops to a heap floor the wait raises
+  (`.kb/wasi-component.md`, "Which calls of one instance overlap").
 - **A core module** (Preview 1, `--no-wasi`): `:blocking t` and `:async t` change no byte and
   `wit-import :blocking t` is the GC module's plain import. No async ABI and none needed: a JSPI
   host suspends the call around the module (`Suspending` import, `promising` export; node 24,
