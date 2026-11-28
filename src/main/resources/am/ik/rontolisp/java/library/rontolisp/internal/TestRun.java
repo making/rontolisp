@@ -54,6 +54,9 @@ public final class TestRun {
 
     private int totalSkipped;
 
+    // How many tests and classes did not succeed: failed, or aborted.
+    private int unsuccessful;
+
     // A class starts: one with tests of its own is said to run, one that only holds
     // classes with tests is reported where something of its own failed.
     public void started(String className, boolean own) {
@@ -88,6 +91,26 @@ public final class TestRun {
             failed(name, displayName, thrown);
             return !(thrown instanceof TestAbortedException);
         }
+    }
+
+    // Stands for a run of a repeated test past its failure threshold, which is skipped:
+    // what makes its instances runs, and one that throws is the run's error. A method of
+    // its own, so that a run with no repeated test holds none of it.
+    public void exceeded(String name, String displayName, Body body) {
+        running.run++;
+        try {
+            body.run();
+            running.skipped++;
+        }
+        catch (Throwable thrown) {
+            failed(name, displayName, thrown);
+        }
+    }
+
+    // How many tests and classes did not succeed so far: a temporary directory kept
+    // where something of its run did not succeed is deleted where this did not change.
+    public int unsuccessful() {
+        return unsuccessful;
     }
 
     // A test of a class whose tests run in an order of its own, or a @Nested class of
@@ -149,6 +172,7 @@ public final class TestRun {
         }
         catch (Throwable thrown) {
             if (thrown instanceof TestAbortedException) {
+                unsuccessful++;
                 skipped(tests);
             }
             else {
@@ -181,6 +205,7 @@ public final class TestRun {
     }
 
     private void failed(String name, String displayName, Throwable thrown) {
+        unsuccessful++;
         if (thrown instanceof TestAbortedException) {
             running.skipped++;
             return;

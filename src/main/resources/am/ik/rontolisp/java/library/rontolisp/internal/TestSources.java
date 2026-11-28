@@ -24,6 +24,8 @@ import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.extension.ParameterResolutionException;
 import org.junit.jupiter.params.converter.ArgumentConversionException;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvFileSource;
+import org.junit.jupiter.params.provider.CsvParsingException;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -47,118 +49,426 @@ public final class TestSources {
 
     // ---- the sources
 
+    // The values of a source: those of the one element written, as JUnit takes no other
+    // (measured: none, or two, is an error).
     public static void values(List<Object[]> rows, ValueSource source) {
-        for (short each : source.shorts()) {
+        values(rows, source, new Class<?>[0]);
+    }
+
+    // The same of a source that may give classes: a method of its own, so that a run
+    // with no class literal in a source reads no array of them.
+    public static void classes(List<Object[]> rows, ValueSource source) {
+        values(rows, source, source.classes());
+    }
+
+    private static void values(List<Object[]> rows, ValueSource source, Class<?>[] classes) {
+        short[] shorts = source.shorts();
+        byte[] bytes = source.bytes();
+        int[] ints = source.ints();
+        long[] longs = source.longs();
+        float[] floats = source.floats();
+        double[] doubles = source.doubles();
+        char[] chars = source.chars();
+        boolean[] booleans = source.booleans();
+        String[] strings = source.strings();
+        int kinds = (shorts.length > 0 ? 1 : 0) + (bytes.length > 0 ? 1 : 0) + (ints.length > 0 ? 1 : 0)
+                + (longs.length > 0 ? 1 : 0) + (floats.length > 0 ? 1 : 0) + (doubles.length > 0 ? 1 : 0)
+                + (chars.length > 0 ? 1 : 0) + (booleans.length > 0 ? 1 : 0) + (strings.length > 0 ? 1 : 0)
+                + (classes.length > 0 ? 1 : 0);
+        if (kinds != 1) {
+            throw new PreconditionViolationException(
+                    "Exactly one type of input must be provided in the @ValueSource annotation, but there were "
+                            + kinds);
+        }
+        for (short each : shorts) {
             rows.add(new Object[] { each });
         }
-        for (byte each : source.bytes()) {
+        for (byte each : bytes) {
             rows.add(new Object[] { each });
         }
-        for (int each : source.ints()) {
+        for (int each : ints) {
             rows.add(new Object[] { each });
         }
-        for (long each : source.longs()) {
+        for (long each : longs) {
             rows.add(new Object[] { each });
         }
-        for (float each : source.floats()) {
+        for (float each : floats) {
             rows.add(new Object[] { each });
         }
-        for (double each : source.doubles()) {
+        for (double each : doubles) {
             rows.add(new Object[] { each });
         }
-        for (char each : source.chars()) {
+        for (char each : chars) {
             rows.add(new Object[] { each });
         }
-        for (boolean each : source.booleans()) {
+        for (boolean each : booleans) {
             rows.add(new Object[] { each });
         }
-        for (String each : source.strings()) {
+        for (String each : strings) {
+            rows.add(new Object[] { each });
+        }
+        for (Class<?> each : classes) {
             rows.add(new Object[] { each });
         }
     }
 
-    // The records of a CSV source: its values one record each, or the lines of its text
-    // block, where a line starting with # is a comment.
+    // The records of a CSV source: those of each of its values, or of its text block,
+    // where a line starting with its comment character is a comment.
     public static void csv(List<Object[]> rows, CsvSource source) {
-        String delimiter = source.delimiterString();
-        if (delimiter.isEmpty()) {
-            delimiter = source.delimiter() == '\0' ? "," : String.valueOf(source.delimiter());
-        }
-        List<String> records = new ArrayList<>();
-        if (!source.textBlock().isEmpty()) {
-            for (String line : source.textBlock().split("\n")) {
-                if (!line.isBlank() && !line.startsWith("#")) {
-                    records.add(line);
-                }
-            }
-        }
-        else {
-            for (String each : source.value()) {
-                records.add(each);
-            }
-        }
-        for (String each : records) {
-            rows.add(record(each, delimiter, source.quoteCharacter(), source.emptyValue(), source.nullValues(),
-                    source.ignoreLeadingAndTrailingWhitespace()));
-        }
+        read(rows, source);
     }
 
-    // One record: a column between quotes is taken as it is, two quotes in it one; a
-    // column with no quote is trimmed, and null where it is empty.
-    private static Object[] record(String text, String delimiter, char quote, String emptyValue, String[] nullValues,
-            boolean trimmed) {
-        List<Object> columns = new ArrayList<>();
-        int at = 0;
-        int n = text.length();
-        while (true) {
-            int start = at;
-            while (trimmed && start < n && text.charAt(start) <= ' ' && !text.startsWith(delimiter, start)) {
-                start++;
-            }
-            String column;
-            boolean quoted = start < n && text.charAt(start) == quote;
-            if (quoted) {
-                StringBuilder inside = new StringBuilder();
-                int i = start + 1;
-                while (i < n) {
-                    char c = text.charAt(i);
-                    if (c == quote) {
-                        if (i + 1 < n && text.charAt(i + 1) == quote) {
-                            inside.append(quote);
-                            i += 2;
-                            continue;
-                        }
-                        break;
-                    }
-                    inside.append(c);
-                    i++;
-                }
-                if (i >= n) {
-                    throw new IllegalArgumentException("a quoted column of the CSV record is not closed: " + text);
-                }
-                column = inside.length() == 0 ? emptyValue : inside.toString();
-                at = text.indexOf(delimiter, i + 1);
+    // The same, the first record the headers each argument is named by, as a run's
+    // display name shows it. A method of its own, so that a run naming none holds none
+    // of it.
+    public static void headed(List<Object[]> rows, CsvSource source) {
+        List<Object[]> records = new ArrayList<>();
+        read(records, source);
+        named(rows, records);
+    }
+
+    private static void read(List<Object[]> into, CsvSource source) {
+        Csv csv = new Csv(source.delimiter(), source.delimiterString(), source.quoteCharacter(), source.emptyValue(),
+                source.nullValues(), source.ignoreLeadingAndTrailingWhitespace(), source.maxCharsPerColumn(),
+                source.commentCharacter());
+        try {
+            if (!source.textBlock().isEmpty()) {
+                csv.records(into, source.textBlock(), 1, true);
             }
             else {
-                at = text.indexOf(delimiter, start);
-                column = text.substring(start, at < 0 ? n : at);
-                if (trimmed) {
-                    column = column.strip();
+                String[] values = source.value();
+                for (int i = 0; i < values.length; i++) {
+                    csv.records(into, values[i], i + 1, false);
                 }
             }
-            Object value = !quoted && column.isEmpty() ? null : column;
-            for (String each : nullValues) {
-                if (each.equals(column)) {
-                    value = null;
-                }
-            }
-            columns.add(value);
-            if (at < 0) {
-                break;
-            }
-            at += delimiter.length();
         }
-        return columns.toArray();
+        catch (Csv.CsvParseException wrong) {
+            throw new CsvParsingException("Failed to parse CSV input configured via " + shown(source), wrong);
+        }
+    }
+
+    // The records of the files and the resources of a @CsvFileSource, the resources
+    // first: found where the program was lowered, each in streams, null where none is.
+    public static void files(List<Object[]> rows, CsvFileSource source, java.io.InputStream[] streams) {
+        files(rows, source, streams, null);
+    }
+
+    // The same, named by their headers (headed).
+    public static void headedFiles(List<Object[]> rows, CsvFileSource source, java.io.InputStream[] streams) {
+        files(rows, source, streams, new ArrayList<>());
+    }
+
+    private static void files(List<Object[]> rows, CsvFileSource source, java.io.InputStream[] streams,
+            List<Object[]> headed) {
+        String[] resources = source.resources();
+        String[] files = source.files();
+        if (resources.length == 0 && files.length == 0) {
+            throw new PreconditionViolationException("Resources or files must not be empty");
+        }
+        java.nio.charset.Charset charset;
+        try {
+            charset = java.nio.charset.Charset.forName(source.encoding());
+        }
+        catch (Exception ex) {
+            throw new PreconditionViolationException("The charset supplied in " + shown(source) + " is invalid", ex);
+        }
+        Csv csv = new Csv(source.delimiter(), source.delimiterString(), source.quoteCharacter(), source.emptyValue(),
+                source.nullValues(), source.ignoreLeadingAndTrailingWhitespace(), source.maxCharsPerColumn(),
+                source.commentCharacter());
+        List<Object[]> read = headed != null ? headed : rows;
+        List<String> texts = new ArrayList<>();
+        for (int i = 0; i < resources.length; i++) {
+            if (streams[i] == null) {
+                throw new PreconditionViolationException(
+                        "Classpath resource [" + resources[i] + "] does not exist");
+            }
+            try (java.io.InputStream in = streams[i]) {
+                texts.add(new String(in.readAllBytes(), charset));
+            }
+            catch (IOException ex) {
+                throw new JUnitException("Classpath resource [" + resources[i] + "] could not be read", ex);
+            }
+        }
+        for (String file : files) {
+            try {
+                texts.add(new String(Files.readAllBytes(Path.of(file)), charset));
+            }
+            catch (IOException ex) {
+                throw new JUnitException("File [" + file + "] could not be read", ex);
+            }
+        }
+        for (String text : texts) {
+            List<Object[]> records = new ArrayList<>();
+            try {
+                csv.records(records, skipped(text, source.numLinesToSkip()), 1 + source.numLinesToSkip(), true);
+            }
+            catch (Csv.CsvParseException wrong) {
+                throw new CsvParsingException("Failed to parse CSV input configured via " + shown(source), wrong);
+            }
+            if (headed != null) {
+                named(rows, records);
+            }
+            else {
+                for (Object[] record : records) {
+                    read.add(record);
+                }
+            }
+        }
+    }
+
+    // A text past its first lines.
+    private static String skipped(String text, int lines) {
+        int at = 0;
+        for (int i = 0; i < lines && at < text.length(); i++) {
+            int end = text.indexOf('\n', at);
+            at = end < 0 ? text.length() : end + 1;
+        }
+        return text.substring(at);
+    }
+
+    // Records of which the first holds the headers: each argument of the others named by
+    // the header of its column.
+    private static void named(List<Object[]> rows, List<Object[]> records) {
+        if (records.isEmpty()) {
+            return;
+        }
+        Object[] headers = records.get(0);
+        for (int r = 1; r < records.size(); r++) {
+            Object[] record = records.get(r);
+            if (record.length > headers.length) {
+                throw new PreconditionViolationException("The number of columns (" + record.length
+                        + ") exceeds the number of supplied headers (" + headers.length + ") in CSV record: "
+                        + java.util.Arrays.toString(record));
+            }
+            Object[] row = new Object[record.length];
+            for (int i = 0; i < record.length; i++) {
+                row[i] = new Headed(String.valueOf(headers[i]), record[i]);
+            }
+            rows.add(row);
+        }
+    }
+
+    // An argument of a CSV record named by its column's header: a run's display name
+    // shows it as `header = value`, the value as any argument is shown.
+    public static final class Headed implements Named<Object> {
+
+        final String header;
+
+        private final Object payload;
+
+        Headed(String header, Object payload) {
+            this.header = header;
+            this.payload = payload;
+        }
+
+        @Override
+        public String getName() {
+            return this.header + " = " + this.payload;
+        }
+
+        @Override
+        public Object getPayload() {
+            return this.payload;
+        }
+    }
+
+    // How JUnit reads CSV (measured, 6.0.3): a record a line, but where a quoted column
+    // goes on past it, two quotes in one a quote, an open quote taking the rest of the
+    // text; an empty line no record, a line of blanks one null column; a line starting
+    // with the comment character a comment, in a text block or a file only. A column is
+    // trimmed where the source says so, an empty one null unless quoted (then the empty
+    // value), one of the null values null; past the column limit, or with anything but
+    // blanks after its closing quote, the text is no CSV.
+    static final class Csv {
+
+        final String delimiter;
+
+        final char quote;
+
+        final String emptyValue;
+
+        final String[] nullValues;
+
+        final boolean trimmed;
+
+        final int max;
+
+        final char comment;
+
+        Csv(char delimiter, String delimiterString, char quote, String emptyValue, String[] nullValues,
+                boolean trimmed, int max, char comment) {
+            this.delimiter = !delimiterString.isEmpty() ? delimiterString
+                    : delimiter == '\0' ? "," : String.valueOf(delimiter);
+            this.quote = quote;
+            this.emptyValue = emptyValue;
+            this.nullValues = nullValues;
+            this.trimmed = trimmed;
+            this.max = max;
+            this.comment = comment;
+        }
+
+        // What the reader of JUnit's throws, by its words.
+        static final class CsvParseException extends RuntimeException {
+
+            CsvParseException(String message, Throwable cause) {
+                super(message, cause);
+            }
+        }
+
+        private int records;
+
+        // The records of a text, its first line numbered line.
+        void records(List<Object[]> into, String text, int line, boolean comments) {
+            int at = 0;
+            int n = text.length();
+            while (at < n) {
+                char c = text.charAt(at);
+                if (c == '\n' || c == '\r') {
+                    at += c == '\r' && at + 1 < n && text.charAt(at + 1) == '\n' ? 2 : 1;
+                    line++;
+                    continue;
+                }
+                if (comments && c == this.comment) {
+                    while (at < n && text.charAt(at) != '\n' && text.charAt(at) != '\r') {
+                        at++;
+                    }
+                    continue;
+                }
+                int started = line;
+                List<Object> columns = new ArrayList<>();
+                while (true) {
+                    int start = at;
+                    while (this.trimmed && start < n && isBlank(text.charAt(start)) && !text.startsWith(this.delimiter, start)) {
+                        start++;
+                    }
+                    boolean quoted = start < n && text.charAt(start) == this.quote;
+                    String column;
+                    if (quoted) {
+                        StringBuilder inside = new StringBuilder();
+                        int i = start + 1;
+                        while (i < n) {
+                            char d = text.charAt(i);
+                            if (d == this.quote) {
+                                if (i + 1 < n && text.charAt(i + 1) == this.quote) {
+                                    inside.append(d);
+                                    i += 2;
+                                    continue;
+                                }
+                                break;
+                            }
+                            if (d == '\n') {
+                                line++;
+                            }
+                            inside.append(d);
+                            i++;
+                        }
+                        at = Math.min(i + 1, n);
+                        while (at < n && isBlank(text.charAt(at)) && !text.startsWith(this.delimiter, at)) {
+                            at++;
+                        }
+                        if (at < n && !text.startsWith(this.delimiter, at) && text.charAt(at) != '\n'
+                                && text.charAt(at) != '\r') {
+                            throw wrong(started, new CsvParseException("Unexpected character after closing quote: '"
+                                    + text.substring(at, at + 1) + "' (0x" + hex(text.charAt(at)) + ")", null));
+                        }
+                        column = inside.toString();
+                    }
+                    else {
+                        at = start;
+                        while (at < n && !text.startsWith(this.delimiter, at) && text.charAt(at) != '\n'
+                                && text.charAt(at) != '\r') {
+                            at++;
+                        }
+                        column = text.substring(start, at);
+                        if (this.trimmed) {
+                            column = column.strip();
+                        }
+                    }
+                    if (column.length() > this.max) {
+                        throw wrong(started, new CsvParseException("Field at index " + columns.size() + " in record starting at line "
+                                + started + " exceeds the max field size of " + this.max + " characters", null));
+                    }
+                    Object value = column.isEmpty() ? quoted ? this.emptyValue : null : column;
+                    for (String each : this.nullValues) {
+                        if (each.equals(column)) {
+                            value = null;
+                        }
+                    }
+                    columns.add(value);
+                    if (at < n && text.startsWith(this.delimiter, at)) {
+                        at += this.delimiter.length();
+                        continue;
+                    }
+                    break;
+                }
+                this.records++;
+                into.add(columns.toArray());
+            }
+        }
+
+        private CsvParseException wrong(int line, CsvParseException cause) {
+            return new CsvParseException(this.records == 0 ? "Exception when reading first record"
+                    : "Exception when reading record that started in line " + line, cause);
+        }
+
+        // a character's code in hexadecimal, as Integer.toHexString writes it
+        static String hex(char c) {
+            String hex = "";
+            int code = c;
+            do {
+                hex = "0123456789abcdef".substring(code & 15, (code & 15) + 1) + hex;
+                code >>>= 4;
+            } while (code != 0);
+            return hex;
+        }
+
+        private static boolean isBlank(char c) {
+            return c == ' ' || c == '\t';
+        }
+    }
+
+    // A CSV source as an annotation writes itself, its elements in the order declared:
+    // a JDK writes them in an order of its own, not the same in every run.
+    private static String shown(CsvSource source) {
+        return "@org.junit.jupiter.params.provider.CsvSource(value=" + texts(source.value()) + ", textBlock="
+                + quoted(source.textBlock()) + ", useHeadersInDisplayName=" + source.useHeadersInDisplayName()
+                + shownCommon(source.quoteCharacter(), source.delimiter(), source.delimiterString(),
+                        source.emptyValue(), source.nullValues(), source.maxCharsPerColumn(),
+                        source.ignoreLeadingAndTrailingWhitespace(), source.commentCharacter())
+                + ")";
+    }
+
+    private static String shown(CsvFileSource source) {
+        return "@org.junit.jupiter.params.provider.CsvFileSource(resources=" + texts(source.resources()) + ", files="
+                + texts(source.files()) + ", encoding=" + quoted(source.encoding()) + ", useHeadersInDisplayName="
+                + source.useHeadersInDisplayName()
+                + shownCommon(source.quoteCharacter(), source.delimiter(), source.delimiterString(),
+                        source.emptyValue(), source.nullValues(), source.maxCharsPerColumn(),
+                        source.ignoreLeadingAndTrailingWhitespace(), source.commentCharacter())
+                + ")";
+    }
+
+    private static String shownCommon(char quote, char delimiter, String delimiterString, String emptyValue,
+            String[] nullValues, int max, boolean trimmed, char comment) {
+        return ", quoteCharacter=" + character(quote) + ", delimiter=" + character(delimiter) + ", delimiterString="
+                + quoted(delimiterString) + ", emptyValue=" + quoted(emptyValue) + ", nullValues=" + texts(nullValues)
+                + ", maxCharsPerColumn=" + max + ", ignoreLeadingAndTrailingWhitespace=" + trimmed
+                + ", commentCharacter=" + character(comment);
+    }
+
+    private static String texts(String[] values) {
+        StringBuilder text = new StringBuilder("{");
+        for (int i = 0; i < values.length; i++) {
+            text.append(i == 0 ? "" : ", ").append(quoted(values[i]));
+        }
+        return text.append('}').toString();
+    }
+
+    private static String character(char c) {
+        if (c == '\'') {
+            return "'\\''";
+        }
+        return c >= ' ' ? new String(new char[] { '\'', c, '\'' }) : "'\\u" + "0000".substring(Csv.hex(c).length()) + Csv.hex(c) + "'";
     }
 
     // The constants of an enum an @EnumSource gives: those from `from` to `to` (each the
@@ -261,7 +571,12 @@ public final class TestSources {
 
     private static void row(List<Object[]> rows, Object provided) {
         if (provided instanceof Arguments arguments) {
-            rows.add(arguments.get());
+            if (rows instanceof TestNames.Rows named) {
+                named.add(arguments);
+            }
+            else {
+                rows.add(arguments.get());
+            }
         }
         else if (provided instanceof Object[] array) {
             rows.add(array);
@@ -806,7 +1121,23 @@ public final class TestSources {
     // directories of a test or of a class, the last first: an overload of its own, so
     // that a program with no temporary directory holds nothing of the files.
     public static Throwable closed(Throwable thrown, Object[] row, Path[] directories) {
+        return failed(thrown, deleted(closing(null, row), directories));
+    }
+
+    // The same, with the directories deleted only where the run succeeded, those of
+    // CleanupMode.ON_SUCCESS (kept), after the others (directories, or null).
+    public static Throwable closed(Throwable thrown, Object[] row, Path[] directories, Path[] kept, boolean failed) {
         Throwable closing = closing(null, row);
+        if (directories != null) {
+            closing = deleted(closing, directories);
+        }
+        if (!failed) {
+            closing = deleted(closing, kept);
+        }
+        return failed(thrown, closing);
+    }
+
+    private static Throwable deleted(Throwable closing, Path[] directories) {
         for (int i = directories.length - 1; i >= 0; i--) {
             if (directories[i] != null) {
                 try {
@@ -817,7 +1148,7 @@ public final class TestSources {
                 }
             }
         }
-        return failed(thrown, closing);
+        return closing;
     }
 
     private static Throwable closing(Throwable closing, Object[] row) {

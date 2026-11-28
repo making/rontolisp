@@ -66,6 +66,8 @@ final class JavaTests {
 
 	private static final String TIMEOUT = "rontolisp.internal.TestTimeout";
 
+	private static final String NAMES = "rontolisp.internal.TestNames";
+
 	private static final String NODE = API + "DynamicNode";
 
 	private static final String EXTEND_WITH = API + "extension.ExtendWith";
@@ -92,19 +94,26 @@ final class JavaTests {
 			Map.entry(API + "BeforeAll", Set.of()), Map.entry(API + "AfterAll", Set.of()),
 			Map.entry(API + "BeforeEach", Set.of()), Map.entry(API + "AfterEach", Set.of()),
 			Map.entry(API + "Nested", Set.of()), Map.entry(API + "Disabled", Set.of("value")),
-			Map.entry(API + "DisplayName", Set.of("value")), Map.entry(API + "io.TempDir", Set.of()),
+			Map.entry(API + "DisplayName", Set.of("value")),
+			Map.entry(API + "io.TempDir", Set.of("cleanup", "factory")),
 			Map.entry(API + "RepeatedTest", Set.of("value", "name", "failureThreshold")),
 			Map.entry(API + "Tag", Set.of("value")), Map.entry(API + "Tags", Set.of("value")),
 			Map.entry(API + "TestInstance", Set.of("value")), Map.entry(API + "TestMethodOrder", Set.of("value")),
 			Map.entry(API + "TestClassOrder", Set.of("value")), Map.entry(API + "Order", Set.of("value")),
 			Map.entry(API + "TestFactory", Set.of()), Map.entry(API + "Timeout", Set.of("value", "unit", "threadMode")),
 			Map.entry(EXTEND_WITH, Set.of("value")),
-			Map.entry(PARAMS + "ParameterizedTest", Set.of("name", "autoCloseArguments")),
+			Map.entry(PARAMS + "ParameterizedTest", Set.of("name", "quoteTextArguments", "autoCloseArguments")),
 			Map.entry(PROVIDER + "ValueSource",
-					Set.of("shorts", "bytes", "ints", "longs", "floats", "doubles", "chars", "booleans", "strings")),
+					Set.of("shorts", "bytes", "ints", "longs", "floats", "doubles", "chars", "booleans", "strings",
+							"classes")),
 			Map.entry(PROVIDER + "CsvSource",
 					Set.of("value", "textBlock", "quoteCharacter", "delimiter", "delimiterString", "emptyValue",
-							"nullValues", "ignoreLeadingAndTrailingWhitespace")),
+							"nullValues", "ignoreLeadingAndTrailingWhitespace", "useHeadersInDisplayName",
+							"maxCharsPerColumn", "commentCharacter")),
+			Map.entry(PROVIDER + "CsvFileSource",
+					Set.of("resources", "files", "encoding", "numLinesToSkip", "quoteCharacter", "delimiter",
+							"delimiterString", "emptyValue", "nullValues", "ignoreLeadingAndTrailingWhitespace",
+							"useHeadersInDisplayName", "maxCharsPerColumn", "commentCharacter")),
 			Map.entry(PROVIDER + "MethodSource", Set.of("value")), Map.entry(PROVIDER + "FieldSource", Set.of("value")),
 			Map.entry(PROVIDER + "EnumSource", Set.of("value", "names", "mode", "from", "to")),
 			Map.entry(PROVIDER + "NullSource", Set.of()), Map.entry(PROVIDER + "EmptySource", Set.of()),
@@ -123,6 +132,19 @@ final class JavaTests {
 
 	/** How many methods the class being written has. */
 	private int methods;
+
+	/** The file of the class whose run is being written, whose imports its class has. */
+	private @Nullable Unit unit;
+
+	/**
+	 * The classes holding what the run being written reads of the annotations of a class
+	 * of another file -- a class above, an interface --, one for each such class, under
+	 * its file's imports.
+	 */
+	private Map<JavaClass, Elsewhere> elsewhere = new LinkedHashMap<>();
+
+	/** How many classes of {@link #elsewhere} the run has declared. */
+	private int elsewhereDeclared;
 
 	private JavaTests(JavaClasses classes) {
 		this.classes = classes;
@@ -428,11 +450,13 @@ final class JavaTests {
 	 * @return its qualified name, or {@code null} for a class with no test
 	 */
 	private @Nullable String holder(JavaClass top) {
+		Unit unit = this.classes.unit(top);
+		this.unit = unit;
+		this.elsewhere = new LinkedHashMap<>();
 		Suite suite = suite(top, null);
 		if (suite == null) {
 			return null;
 		}
-		Unit unit = this.classes.unit(top);
 		String simple = top.simpleName() + "$Tests";
 		String name = unit.packageName() == null ? simple : unit.packageName() + "." + simple;
 		this.members = new StringBuilder();
@@ -440,6 +464,16 @@ final class JavaTests {
 		List<String> scopes = new ArrayList<>();
 		scopes(suite, scopes);
 		String run = run(suite);
+		for (Map.Entry<JavaClass, Elsewhere> each : this.elsewhere.entrySet()) {
+			Elsewhere other = each.getValue();
+			List<String> around = new ArrayList<>();
+			for (JavaClass level = each.getKey(); level != null; level = level.outer) {
+				around.add(0, level.name);
+			}
+			this.classes.declareGenerated(other.name, other.simple,
+					JavaAnnotations.header(this.classes.unit(each.getKey()), around) + "public final class "
+							+ other.simple + " {\n" + other.members + "}\n");
+		}
 		this.classes.declareGenerated(name, simple,
 				JavaAnnotations.header(unit, scopes) + "public final class " + simple + " {\n"
 						+ "    public static void run(" + RUN + " run) {\n        " + run + "(run);\n    }\n"
@@ -452,6 +486,72 @@ final class JavaTests {
 		for (Suite nested : suite.nested) {
 			scopes(nested, into);
 		}
+	}
+
+	/**
+	 * The class of generated Java holding what a run reads of the annotations of a class
+	 * of another file: declared in its package, under its file's imports and the static
+	 * members of the class and of those around it, so that a name means there what it
+	 * means where it is written.
+	 */
+	private static final class Elsewhere {
+
+		final String name;
+
+		final String simple;
+
+		final StringBuilder members = new StringBuilder();
+
+		/** The methods answering an expression, by its type and its text. */
+		final Map<String, String> answering = new LinkedHashMap<>();
+
+		Elsewhere(String name, String simple) {
+			this.name = name;
+			this.simple = simple;
+		}
+
+	}
+
+	/** The class of {@link #elsewhere} of a class of a file other than the holder's. */
+	private Elsewhere elsewhere(JavaClass context) {
+		return this.elsewhere.computeIfAbsent(context, key -> {
+			String packageName = this.classes.unit(key).packageName();
+			String simple = key.topLevel().simpleName() + "$Tests$" + (this.elsewhereDeclared++);
+			return new Elsewhere(packageName == null ? simple : packageName + "." + simple, simple);
+		});
+	}
+
+	/**
+	 * An expression written in an annotation of a class, as the run's class writes it:
+	 * itself where the class is of the run's file, else a call of a method answering it,
+	 * of the class of {@link #elsewhere} of the class.
+	 * @param type the expression's type, as Java source names it from any file
+	 * @param context the class the annotation is written in, or on
+	 */
+	private String written(String expression, String type, JavaClass context) {
+		if (this.classes.unit(context) == this.unit) {
+			return expression;
+		}
+		Elsewhere other = elsewhere(context);
+		String method = other.answering.computeIfAbsent(type + " " + expression, key -> {
+			String made = "v$" + other.answering.size();
+			other.members.append("    public static ")
+				.append(type)
+				.append(' ')
+				.append(made)
+				.append("() {\n        return ")
+				.append(expression)
+				.append(";\n    }\n");
+			return made;
+		});
+		return other.name + "." + method + "()";
+	}
+
+	/** An annotation as an instance, made where it is written ({@link #written}). */
+	private String annotationValue(Annotation annotation, JavaClass type, JavaClass context) {
+		Unit unit = this.classes.unit(context);
+		StringBuilder members = unit == this.unit ? this.members : elsewhere(context).members;
+		return written(this.classes.annotationValue(annotation, type, unit, members), type.name, context);
 	}
 
 	/**
@@ -589,7 +689,7 @@ final class JavaTests {
 			for (Annotation written : each.getValue()) {
 				if (each.getKey().equals(API + "Tag")) {
 					for (String text : texts(written, "value", unit)) {
-						into.add("(" + text + ")");
+						into.add(written("(" + text + ")", "String", owner));
 					}
 				}
 				else if (each.getKey().equals(API + "Tags")) {
@@ -602,7 +702,7 @@ final class JavaTests {
 										"a @Tags whose tags are not written in it");
 							}
 							for (String text : texts(tag, "value", unit)) {
-								into.add("(" + text + ")");
+								into.add(written("(" + text + ")", "String", owner));
 							}
 						}
 					}
@@ -660,7 +760,7 @@ final class JavaTests {
 				around == null ? null : around.classOrderer);
 		Inherited timed = inherited(type, API + "Timeout");
 		suite.timeoutOwn = timed != null;
-		suite.timeout = timed != null ? timed(timed.annotation(), this.classes.unit(timed.type()))
+		suite.timeout = timed != null ? timed(timed.annotation(), timed.type())
 				: around == null ? null : around.timeout;
 		suite.soft = inherited(type, EXTEND_WITH) != null || around != null && around.soft;
 		this.soft = suite.soft;
@@ -669,8 +769,9 @@ final class JavaTests {
 			suite.tags.addAll(around.tags);
 		}
 		List<Annotation> displayed = own.getOrDefault(API + "DisplayName", List.of());
-		suite.displayName = displayed.isEmpty() ? literal(type.simpleName())
-				: "(" + texts(displayed.get(0), "value", this.classes.unit(type)).get(0) + ")";
+		suite.displayName = displayed.isEmpty() ? literal(type.simpleName()) : written(
+				kept(texts(displayed.get(0), "value", this.classes.unit(type)).get(0), literal(type.simpleName())),
+				"String", type);
 		constructor(suite);
 		List<JavaClass> levels = levels(type);
 		for (int i = 0; i < levels.size(); i++) {
@@ -698,6 +799,7 @@ final class JavaTests {
 							"the @TempDir field " + field.name + " must not be final");
 				}
 				directory(field.type, "field " + field.name, source, declaration.pos());
+				cleanup(declaring, declaration.pos());
 				(field.isStatic ? suite.staticDirectories : suite.directories).add(field);
 			}
 			for (Method method : declaring.methods) {
@@ -806,7 +908,8 @@ final class JavaTests {
 	 * thread it leaves running when its time is over would run on where the target has
 	 * threads and never get a turn where it has one stack.
 	 */
-	private Timed timed(Annotation written, Unit unit) {
+	private Timed timed(Annotation written, JavaClass context) {
+		Unit unit = this.classes.unit(context);
 		for (String mode : texts(written, "threadMode", unit)) {
 			if (!mode.endsWith("SAME_THREAD") && !mode.endsWith("INFERRED")) {
 				throw JavaClasses.unsupported(unit.source(), written.pos(),
@@ -819,7 +922,9 @@ final class JavaTests {
 			throw JavaClasses.error(unit.source(), written.pos(),
 					"annotation @Timeout is missing a default value for the element 'value'");
 		}
-		return new Timed(value.get(0), given.isEmpty() ? "java.util.concurrent.TimeUnit.SECONDS" : given.get(0),
+		return new Timed(written(value.get(0), "long", context),
+				given.isEmpty() ? "java.util.concurrent.TimeUnit.SECONDS"
+						: written(given.get(0), "java.util.concurrent.TimeUnit", context),
 				!value.get(0).matches("[1-9][0-9_]*[lL]?"));
 	}
 
@@ -827,7 +932,7 @@ final class JavaTests {
 	private @Nullable Timed timed(Method method) {
 		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
 		List<Annotation> written = annotations(method.owner, declaration.pos()).get(API + "Timeout");
-		return written == null ? null : timed(written.get(0), this.classes.unit(method.owner));
+		return written == null ? null : timed(written.get(0), method.owner);
 	}
 
 	/**
@@ -922,11 +1027,6 @@ final class JavaTests {
 			return;
 		}
 		suite.constructor.addAll(givens(type, constructor, "a test class's constructor", Given.DIRECTORY, Given.INFO));
-		if (suite.perClass && suite.constructor.contains(Given.DIRECTORY)) {
-			throw JavaClasses.unsupported(this.classes.unit(type).source(),
-					java.util.Objects.requireNonNull(constructor.declaration).pos(),
-					"a @TempDir parameter of the constructor of a class of @TestInstance(PER_CLASS)");
-		}
 	}
 
 	/**
@@ -947,16 +1047,17 @@ final class JavaTests {
 			Given kind = given(declaring, parameter, type);
 			if (kind == Given.DIRECTORY) {
 				directory(type, "parameter " + parameter.name(), source, parameter.pos());
+				cleanup(declaring, parameter.pos());
 			}
 			if (kind == Given.SOFT) {
 				provider(type, source, parameter.pos());
 			}
 			if (what == null) {
-				if (kind == Given.INFO) {
+				if (kind == Given.REPETITION) {
 					throw JavaClasses.unsupported(source, parameter.pos(),
-							"a TestInfo parameter of a @ParameterizedTest method");
+							"a RepetitionInfo parameter of a @ParameterizedTest method");
 				}
-				if (kind == Given.ROW && (givens.contains(Given.DIRECTORY) || givens.contains(Given.SOFT))) {
+				if (kind == Given.ROW && givens.stream().anyMatch(each -> each != Given.ROW)) {
 					throw JavaClasses.unsupported(source, parameter.pos(),
 							"a parameter given by a row after a parameter JUnit gives");
 				}
@@ -1014,6 +1115,35 @@ final class JavaTests {
 		return annotations(declaring, parameter.pos()).containsKey(TEMP_DIR);
 	}
 
+	/**
+	 * The cleanup mode of the {@code @TempDir} of a field or a parameter: {@code ALWAYS}
+	 * (also {@code DEFAULT}, where a run configures nothing), {@code ON_SUCCESS} or
+	 * {@code NEVER}. A factory is refused but JUnit's standard one: a program's own is
+	 * given an {@code ExtensionContext}, which a run has none of.
+	 */
+	private String cleanup(JavaClass declaring, int pos) {
+		Unit unit = this.classes.unit(declaring);
+		Annotation written = java.util.Objects.requireNonNull(annotations(declaring, pos).get(TEMP_DIR)).get(0);
+		for (String factory : texts(written, "factory", unit)) {
+			String named = factory.endsWith(".class")
+					? factory.substring(0, factory.length() - ".class".length()).strip() : "";
+			JavaClass found = named.isEmpty() ? null
+					: type(new Annotation(written.pos(), named, List.of()), declaring, unit);
+			if (found == null || !found.name.equals(API + "io.TempDirFactory")
+					&& !found.name.equals(API + "io.TempDirFactory.Standard")) {
+				throw JavaClasses.unsupported(unit.source(), written.pos(), "the factory " + factory + " of @TempDir");
+			}
+		}
+		List<String> modes = texts(written, "cleanup", unit);
+		String mode = modes.isEmpty() ? "ALWAYS" : modes.get(0).substring(modes.get(0).lastIndexOf('.') + 1).strip();
+		return switch (mode) {
+			case "ALWAYS", "DEFAULT" -> "ALWAYS";
+			case "ON_SUCCESS", "NEVER" -> mode;
+			default -> throw JavaClasses.unsupported(unit.source(), written.pos(),
+					"the cleanup mode " + modes.get(0) + " of @TempDir");
+		};
+	}
+
 	/** Refuses a temporary directory declared of a type JUnit gives none of. */
 	private static void directory(JavaType type, String what, JavaClass.Source source, int pos) {
 		String name = type instanceof ClassType named ? named.declaration().name : "";
@@ -1024,10 +1154,16 @@ final class JavaTests {
 	}
 
 	/**
-	 * A new temporary directory kept in a slot of an array, as the type it is given as.
+	 * A new temporary directory, as the type it is given as, kept in a slot of an array
+	 * by its cleanup mode: one deleted when its run is over, one deleted where the run
+	 * succeeded, none for one never deleted.
 	 */
-	private static String directory(JavaType type, String array, int slot) {
-		String made = "(" + array + "[" + slot + "] = " + SOURCES + ".directory())";
+	private static String directory(JavaType type, Slots slots, String cleanup) {
+		String made = switch (cleanup) {
+			case "NEVER" -> SOURCES + ".directory()";
+			case "ON_SUCCESS" -> "(" + slots.array + "Kept[" + (slots.kept++) + "] = " + SOURCES + ".directory())";
+			default -> "(" + slots.array + "[" + (slots.count++) + "] = " + SOURCES + ".directory())";
+		};
 		return type instanceof ClassType named && named.declaration().name.equals("java.io.File") ? made + ".toFile()"
 				: made;
 	}
@@ -1177,7 +1313,8 @@ final class JavaTests {
 						.append('.')
 						.append(field.name)
 						.append(" = ")
-						.append(directory(field.type, statics.array, statics.count++))
+						.append(directory(field.type, statics,
+								cleanup(field.owner, java.util.Objects.requireNonNull(field.declaration).pos())))
 						.append(";\n");
 				}
 				for (Method method : suite.beforeAll) {
@@ -1191,14 +1328,14 @@ final class JavaTests {
 							guarded(call(method.isStatic ? method.owner.name : "self[0]", method, statics, "classInfo"),
 									"            "));
 				}
-				after
-					.append(statics.count == 0 ? ""
-							: "            thrown = " + SOURCES + ".closed(thrown, null, statics);\n")
+				// a directory kept where something of the class did not succeed
+				// (measured):
+				// a test, a class inside, what runs around them
+				after.append(statics.closed("            ", "null", "thrown != null || run.unsuccessful() != mark"))
 					.append("            if (thrown != null) {\n                throw thrown;\n            }\n");
-				if (statics.count > 0) {
-					body.append("        java.nio.file.Path[] statics = new java.nio.file.Path[")
-						.append(statics.count)
-						.append("];\n");
+				body.append(statics.declared("        "));
+				if (statics.kept > 0) {
+					body.append("        int mark = run.unsuccessful();\n");
 				}
 				if (suite.perClass) {
 					String type = suite.type.name;
@@ -1278,7 +1415,9 @@ final class JavaTests {
 			else {
 				List<Annotation> ordered = annotations(nested.type).getOrDefault(API + "Order", List.of());
 				keys = (ordered.isEmpty() ? API + "Order.DEFAULT"
-						: "(" + texts(ordered.get(0), "value", this.classes.unit(nested.type)).get(0) + ")") + ", "
+						: written("(" + texts(ordered.get(0), "value", this.classes.unit(nested.type)).get(0) + ")",
+								"int", nested.type))
+						+ ", "
 						+ (orderer.key().equals("DisplayName") ? nested.displayName : literal(nested.type.binaryName))
 						+ ", \"\"";
 			}
@@ -1335,7 +1474,7 @@ final class JavaTests {
 		String order = "org.junit.jupiter.api.Order.DEFAULT";
 		List<Annotation> ordered = test.annotations().getOrDefault(API + "Order", List.of());
 		if (!ordered.isEmpty()) {
-			order = "(" + texts(ordered.get(0), "value", unit).get(0) + ")";
+			order = written("(" + texts(ordered.get(0), "value", unit).get(0) + ")", "int", method.owner);
 		}
 		StringBuilder parameters = new StringBuilder();
 		for (JavaType each : method.parameters) {
@@ -1355,11 +1494,18 @@ final class JavaTests {
 		if (shown != null) {
 			return shown;
 		}
-		StringBuilder name = new StringBuilder(test.method().name).append('(');
-		for (int i = 0; i < test.method().parameters.size(); i++) {
-			name.append(i == 0 ? "" : ", ").append(simpleName(test.method().parameters.get(i)));
+		return literal(methodDisplayName(test.method()));
+	}
+
+	/**
+	 * A method's display name where none is given: its name and its parameters' types.
+	 */
+	private static String methodDisplayName(Method method) {
+		StringBuilder name = new StringBuilder(method.name).append('(');
+		for (int i = 0; i < method.parameters.size(); i++) {
+			name.append(i == 0 ? "" : ", ").append(simpleName(method.parameters.get(i)));
 		}
-		return literal(name.append(')').toString());
+		return name.append(')').toString();
 	}
 
 	/** A test's {@code @DisplayName} as an expression, or {@code null}. */
@@ -1367,9 +1513,28 @@ final class JavaTests {
 		List<Annotation> displayed = test.annotations().getOrDefault(API + "DisplayName", List.of());
 		if (!displayed.isEmpty() && !displayed.get(0).pairs().isEmpty()
 				&& displayed.get(0).pairs().get(0).value() instanceof JavaSyntax.ElementText text) {
-			return "(" + this.classes.unit(test.method().owner).source().text().substring(text.from(), text.to()) + ")";
+			return written(
+					kept(this.classes.unit(test.method().owner).source().text().substring(text.from(), text.to()),
+							literal(methodDisplayName(test.method()))),
+					"String", test.method().owner);
 		}
 		return null;
+	}
+
+	/**
+	 * A {@code @DisplayName} as JUnit keeps it, as an expression (measured): stripped, a
+	 * blank one the name it stands for, a line break written as {@code <CR>} or
+	 * {@code <LF>}, any other control character as U+FFFD -- a string literal escaping
+	 * nothing, with no blank at either end, as it is.
+	 * @param otherwise the name where it is blank, as an expression
+	 */
+	private static String kept(String expression, String otherwise) {
+		String text = expression.strip();
+		boolean plain = text.length() >= 3 && text.startsWith("\"") && text.endsWith("\"") && !text.startsWith("\"\"\"")
+				&& text.chars().noneMatch(c -> c == '\\' || c < ' ' || c == 0x7f)
+				&& text.indexOf('"', 1) == text.length() - 1 && !Character.isWhitespace(text.charAt(1))
+				&& !Character.isWhitespace(text.charAt(text.length() - 2));
+		return plain ? "(" + text + ")" : NAMES + ".displayed(" + text + ", " + otherwise + ")";
 	}
 
 	/** A type as a class's simple name writes it. */
@@ -1379,6 +1544,91 @@ final class JavaTests {
 			case ClassType named -> named.declaration().simpleName();
 			case JavaType.Variable variable ->
 				variable.parameter().bounds.isEmpty() ? "Object" : simpleName(variable.parameter().bounds.get(0));
+			default -> type.toString();
+		};
+	}
+
+	/**
+	 * A method as {@code Method.toGenericString} writes it, which JUnit names a method by
+	 * in what it throws (measured): its modifiers, its type parameters, its return type,
+	 * its class's name, its parameters' types with no space between them, the last of a
+	 * variable arity with {@code ...}, and what it throws.
+	 */
+	private static String methodText(Method method) {
+		return methodText(method, true);
+	}
+
+	/**
+	 * The same, or as {@code Method.toString} writes it, which JUnit names a repeated
+	 * test by (measured): with no type parameter, each type erased.
+	 */
+	private static String methodText(Method method, boolean generic) {
+		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
+		Set<String> modifiers = declaration.modifiers();
+		boolean inInterface = method.owner.isInterface;
+		StringBuilder text = new StringBuilder();
+		for (String modifier : List.of("public", "protected", "private", "abstract", "static", "final", "synchronized",
+				"native", "strictfp")) {
+			boolean has = modifiers.contains(modifier)
+					|| inInterface && modifier.equals("public") && !modifiers.contains("private")
+					|| inInterface && modifier.equals("abstract") && declaration.body() == null;
+			if (has) {
+				text.append(modifier).append(' ');
+			}
+		}
+		if (inInterface && declaration.body() != null && !modifiers.contains("static")
+				&& !modifiers.contains("private")) {
+			text.append("default ");
+		}
+		if (generic && !method.typeParameters.isEmpty()) {
+			text.append('<');
+			for (int i = 0; i < method.typeParameters.size(); i++) {
+				JavaType.TypeParameter parameter = method.typeParameters.get(i);
+				text.append(i == 0 ? "" : ",").append(parameter.name);
+				for (int b = 0; b < parameter.bounds.size(); b++) {
+					text.append(b == 0 ? " extends " : " & ").append(genericName(parameter.bounds.get(b)));
+				}
+			}
+			text.append("> ");
+		}
+		text.append(generic ? genericName(method.returnType) : typeName(method.returnType))
+			.append(' ')
+			.append(method.owner.binaryName)
+			.append('.')
+			.append(method.name)
+			.append('(');
+		for (int i = 0; i < method.parameters.size(); i++) {
+			String type = generic ? genericName(method.parameters.get(i)) : typeName(method.parameters.get(i));
+			if (generic && method.varargs && i == method.parameters.size() - 1 && type.endsWith("[]")) {
+				type = type.substring(0, type.length() - 2) + "...";
+			}
+			text.append(i == 0 ? "" : ",").append(type);
+		}
+		text.append(')');
+		for (int i = 0; i < method.thrown.size(); i++) {
+			text.append(i == 0 ? " throws " : ",")
+				.append(generic ? genericName(method.thrown.get(i)) : typeName(method.thrown.get(i)));
+		}
+		return text.toString();
+	}
+
+	/**
+	 * A type as a reflected type's {@code getTypeName} writes it: a nested class's name
+	 * with {@code $}, type arguments after a comma and a space.
+	 */
+	private static String genericName(JavaType type) {
+		return switch (type) {
+			case ArrayType array -> genericName(array.element()) + "[]";
+			case ClassType named -> {
+				StringBuilder text = new StringBuilder(named.declaration().binaryName);
+				for (int i = 0; i < named.arguments().size(); i++) {
+					text.append(i == 0 ? "<" : ", ").append(genericName(named.arguments().get(i)));
+				}
+				yield named.arguments().isEmpty() ? text.toString() : text.append('>').toString();
+			}
+			case JavaType.Wildcard wildcard -> wildcard.upper() != null ? "? extends " + genericName(wildcard.upper())
+					: wildcard.lower() != null ? "? super " + genericName(wildcard.lower()) : "?";
+			case JavaType.Variable variable -> variable.parameter().name;
 			default -> type.toString();
 		};
 	}
@@ -1442,10 +1692,47 @@ final class JavaTests {
 
 		final String array;
 
+		/** How many directories are deleted when the run is over. */
 		int count;
+
+		/**
+		 * How many directories are deleted where all of the run succeeded, those of
+		 * {@code CleanupMode.ON_SUCCESS}: in the array named with {@code Kept}.
+		 */
+		int kept;
 
 		Slots(String array) {
 			this.array = array;
+		}
+
+		/** The statements declaring the arrays. */
+		String declared(String indent) {
+			return (this.count == 0 ? ""
+					: indent + "java.nio.file.Path[] " + this.array + " = new java.nio.file.Path[" + this.count
+							+ "];\n")
+					+ (this.kept == 0 ? "" : indent + "java.nio.file.Path[] " + this.array
+							+ "Kept = new java.nio.file.Path[" + this.kept + "];\n");
+		}
+
+		/**
+		 * The statement closing what a run was given -- a row's arguments, its
+		 * directories --, or nothing where there is none.
+		 * @param row the row, or {@code null}
+		 * @param failed whether the run did not succeed, as an expression
+		 */
+		String closed(String indent, String row, String failed) {
+			if (this.kept > 0) {
+				return indent + "thrown = " + SOURCES + ".closed(thrown, " + row + ", "
+						+ (this.count == 0 ? "null" : this.array) + ", " + this.array + "Kept, " + failed + ");\n";
+			}
+			if (this.count > 0) {
+				return indent + "thrown = " + SOURCES + ".closed(thrown, " + row + ", " + this.array + ");\n";
+			}
+			return row.equals("null") ? "" : indent + "thrown = " + SOURCES + ".closed(thrown, " + row + ");\n";
+		}
+
+		boolean any() {
+			return this.count + this.kept > 0;
 		}
 
 	}
@@ -1467,16 +1754,28 @@ final class JavaTests {
 	private String arguments(Method method, Slots slots, String info, @Nullable String row) {
 		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
 		StringBuilder arguments = new StringBuilder();
+		boolean alone = row == null;
 		for (int p = 0; p < method.parameters.size(); p++) {
 			JavaType type = method.parameters.get(p);
-			arguments.append(p == 0 ? "" : ", ")
-				.append(switch (given(method.owner, declaration.parameters().get(p), type)) {
-					case DIRECTORY -> directory(type, slots.array, slots.count++);
-					case INFO -> info;
-					case REPETITION -> "repetition";
-					case ROW -> argument(type, p);
-					case SOFT -> SOFT + ".delegating(new " + JavaAnnotations.erasedText(type) + "(), soft)";
-				});
+			Given kind = given(method.owner, declaration.parameters().get(p), type);
+			String argument = switch (kind) {
+				case DIRECTORY -> directory(type, slots, cleanup(method.owner, declaration.parameters().get(p).pos()));
+				case INFO -> info;
+				case REPETITION -> "repetition";
+				case ROW -> argument(type, p);
+				case SOFT -> SOFT + ".delegating(new " + JavaAnnotations.erasedText(type) + "(), soft)";
+			};
+			if (!alone && kind != Given.ROW) {
+				// the first that JUnit gives, which a row's argument would compete for
+				alone = true;
+				argument = NAMES + ".alone(row, " + p + ", " + literal(genericName(type) + " arg" + p) + ", "
+						+ literal(methodText(method)) + ", " + literal(switch (kind) {
+							case DIRECTORY -> "org.junit.jupiter.engine.extension.TempDirectory";
+							case INFO -> "org.junit.jupiter.engine.extension.TestInfoParameterResolver";
+							default -> SOFT_EXTENSION;
+						}) + ", " + argument + ")";
+			}
+			arguments.append(p == 0 ? "" : ", ").append(argument);
 		}
 		return arguments.toString();
 	}
@@ -1516,6 +1815,20 @@ final class JavaTests {
 				closing = text.equals("true");
 			}
 		}
+		// the runs' display names: made where the test gives its runs a name of its
+		// own, which may be wrong, or where a TestInfo shows them
+		String runName = null;
+		String quoted = "true";
+		boolean informed = informed(suite, test);
+		for (Annotation written : test.annotations().getOrDefault(PARAMS + "ParameterizedTest", List.of())) {
+			for (String text : texts(written, "name", unit)) {
+				runName = written("(" + text + ")", "String", method.owner);
+			}
+			for (String text : texts(written, "quoteTextArguments", unit)) {
+				quoted = written("(" + text + ")", "boolean", method.owner);
+			}
+		}
+		boolean names = parameterized && (runName != null || informed);
 		String invoked = "test$" + (this.methods++);
 		String shared = sharedArguments(suite, true);
 		this.members.append("    private static void ")
@@ -1523,10 +1836,12 @@ final class JavaTests {
 			.append("(")
 			.append(factory ? RUN + " run" + (shared.isEmpty() ? "" : ", ") : "")
 			.append(sharedParameters(suite, true).replaceFirst("^, ", ""))
-			.append(parameterized ? (shared.isEmpty() ? "" : ", ") + "Object[] row"
+			.append(parameterized
+					? (shared.isEmpty() ? "" : ", ") + "Object[] row" + (informed ? ", String display" : "")
 					: repeated ? (shared.isEmpty() ? "" : ", ") + REPETITION + " repetition" : "")
 			.append(") throws Throwable {\n")
-			.append(invocation(suite, test, closing))
+			.append(invocation(suite, test, closing,
+					repeated ? "repetition.displayName()" : parameterized && informed ? "display" : displayName(test)))
 			.append("    }\n");
 		String named = literal(method.name);
 		if (factory) {
@@ -1538,13 +1853,6 @@ final class JavaTests {
 			List<String> value = texts(written, "value", unit);
 			List<String> pattern = texts(written, "name", unit);
 			List<String> threshold = texts(written, "failureThreshold", unit);
-			StringBuilder signature = new StringBuilder("void ").append(method.owner.binaryName)
-				.append('.')
-				.append(method.name)
-				.append('(');
-			for (int i = 0; i < method.parameters.size(); i++) {
-				signature.append(i == 0 ? "" : ",").append(typeName(method.parameters.get(i)));
-			}
 			String made = made(suite, test);
 			String repeat = "repeat$" + (this.methods++);
 			this.members.append("    private static void ")
@@ -1552,13 +1860,14 @@ final class JavaTests {
 				.append("(" + RUN + " run")
 				.append(sharedParameters(suite, true))
 				.append(") {\n        int total = (")
-				.append(value.isEmpty() ? "0" : value.get(0))
+				.append(value.isEmpty() ? "0" : written(value.get(0), "int", method.owner))
 				.append(");\n        String pattern = (")
-				.append(pattern.isEmpty() ? API + "RepeatedTest.SHORT_DISPLAY_NAME" : pattern.get(0))
+				.append(pattern.isEmpty() ? API + "RepeatedTest.SHORT_DISPLAY_NAME"
+						: written(pattern.get(0), "String", method.owner))
 				.append(");\n        int threshold = (")
-				.append(threshold.isEmpty() ? "Integer.MAX_VALUE" : threshold.get(0))
+				.append(threshold.isEmpty() ? "Integer.MAX_VALUE" : written(threshold.get(0), "int", method.owner))
 				.append(");\n        Throwable wrong = " + REPETITION + ".check(total, pattern, threshold, ")
-				.append(literal(signature.append(')').toString()))
+				.append(literal(methodText(method, false)))
 				.append(");\n        if (wrong != null) {\n            run.broken(")
 				.append(named)
 				.append(", ")
@@ -1569,7 +1878,7 @@ final class JavaTests {
 				.append(REPETITION + "(i, total, failures, threshold, pattern, ")
 				.append(displayName(test))
 				.append(");\n            if (failures >= threshold) {\n")
-				.append("                run.repetition(")
+				.append("                run.exceeded(")
 				.append(named)
 				.append(" + \"[\" + i + \"]\", ")
 				.append(shown)
@@ -1604,7 +1913,7 @@ final class JavaTests {
 			throw JavaClasses.error(unit.source(), declaration.pos(), "the @ParameterizedTest method " + method.name
 					+ " names no source of arguments the experimental Java subset has");
 		}
-		boolean texts = test.is(PROVIDER + "CsvSource");
+		boolean texts = test.is(PROVIDER + "CsvSource") || test.is(PROVIDER + "CsvFileSource");
 		for (Annotation written : test.annotations().getOrDefault(PROVIDER + "ValueSource", List.of())) {
 			texts |= !texts(written, "strings", unit).isEmpty();
 		}
@@ -1620,8 +1929,15 @@ final class JavaTests {
 			.append(rows)
 			.append("(" + RUN + " run")
 			.append(sharedParameters(suite, true))
-			.append(") {\n        java.util.List<Object[]> rows = new java.util.ArrayList<>();\n")
+			.append(names
+					? ") {\n        " + NAMES + ".Rows rows = new " + NAMES + ".Rows();\n        " + NAMES
+							+ " names = null;\n"
+					: ") {\n        java.util.List<Object[]> rows = new java.util.ArrayList<>();\n")
 			.append("        try {\n")
+			.append(names ? "            names = new " + NAMES + "("
+					+ (runName == null ? literal("[{index}] {argumentSetNameOrArgumentsWithNames}") : runName) + ", "
+					+ quoted + ", " + literal(methodText(method)) + ", " + displayName(test) + ", "
+					+ method.parameters.size() + ");\n" : "")
 			.append(sources)
 			.append("            if (rows.isEmpty()) {\n                throw new IllegalStateException(\"Configuration")
 			.append(" error: You must configure at least one set of arguments for this @ParameterizedTest\");\n")
@@ -1631,6 +1947,10 @@ final class JavaTests {
 			.append(shown)
 			.append(", thrown);\n            return;\n        }\n")
 			.append("        for (int i = 0; i < rows.size(); i++) {\n            Object[] row = rows.get(i);\n")
+			.append(!names ? "" : "            String display = null;\n            try {\n"
+					+ "                display = names.name(i + 1, row, rows.set(i));\n            }\n"
+					+ "            catch (Throwable thrown) {\n                run.broken(" + named + ", " + shown
+					+ ", thrown);\n                return;\n            }\n" + "            String given = display;\n")
 			.append("            run.test(")
 			.append(named)
 			.append(" + \"[\" + (i + 1) + \"]\", ")
@@ -1640,7 +1960,7 @@ final class JavaTests {
 			.append("(")
 			.append(shared.replaceFirst("^, ", ""))
 			.append(shared.isEmpty() ? "" : ", ")
-			.append("row));\n        }\n    }\n");
+			.append(informed ? "row, given));\n        }\n    }\n" : "row));\n        }\n    }\n");
 		return "        " + rows + "(run" + shared + ");\n";
 	}
 
@@ -1655,11 +1975,6 @@ final class JavaTests {
 		boolean info = false;
 		for (Suite level : suite.nest()) {
 			info |= level.constructor.contains(Given.INFO) && !level.perClass;
-			if (level.constructor.contains(Given.DIRECTORY) && !level.perClass) {
-				JavaSyntax.Method declaration = java.util.Objects.requireNonNull(test.method().declaration);
-				throw JavaClasses.unsupported(this.classes.unit(test.method().owner).source(), declaration.pos(),
-						"a @RepeatedTest with a failureThreshold of a class whose constructor takes a @TempDir");
-			}
 		}
 		this.members.append("    private static void ")
 			.append(name)
@@ -1672,8 +1987,20 @@ final class JavaTests {
 				.append(information(suite, test, "repetition.displayName()"))
 				.append(";\n");
 		}
-		this.members.append(instances(suite, true, new Slots("directories"), "info", "        "))
-			.append("        throw new org.opentest4j.TestAbortedException();\n    }\n");
+		// the constructors' directories are made and deleted, a skipped run counting as
+		// one that succeeded (measured)
+		Slots slots = new Slots("directories");
+		String made = instances(suite, true, slots, "info", "            ");
+		if (!slots.any()) {
+			this.members.append(instances(suite, true, slots, "info", "        ")).append("    }\n");
+			return name;
+		}
+		this.members.append(slots.declared("        "))
+			.append("        Throwable thrown = null;\n        try {\n")
+			.append(made)
+			.append("        }\n        catch (Throwable caught) {\n            thrown = caught;\n        }\n")
+			.append(slots.closed("        ", "null", "thrown != null"))
+			.append("        if (thrown != null) {\n            throw thrown;\n        }\n    }\n");
 		return name;
 	}
 
@@ -1729,27 +2056,14 @@ final class JavaTests {
 	 * @param closing whether the arguments of a row that are {@code AutoCloseable} are
 	 * closed
 	 */
-	private String invocation(Suite suite, Annotated test, boolean closing) {
+	private String invocation(Suite suite, Annotated test, boolean closing, String display) {
 		Method method = test.method();
 		List<Suite> nest = suite.nest();
 		Slots slots = new Slots("directories");
 		this.soft = suite.soft;
-		boolean info = gives(method, Given.INFO);
-		for (Suite level : nest) {
-			info |= level.constructor.contains(Given.INFO) && !level.perClass;
-			for (Method each : level.beforeEach) {
-				info |= gives(each, Given.INFO);
-			}
-			for (Method each : level.afterEach) {
-				info |= gives(each, Given.INFO);
-			}
-		}
 		StringBuilder body = new StringBuilder();
-		if (info) {
-			body.append("        " + INFORMATION + " info = ")
-				.append(information(suite, test,
-						test.is(API + "RepeatedTest") ? "repetition.displayName()" : displayName(test)))
-				.append(";\n");
+		if (informed(suite, test)) {
+			body.append("        " + INFORMATION + " info = ").append(information(suite, test, display)).append(";\n");
 		}
 		body.append(instances(suite, true, slots, "info", "        "));
 		List<String> before = new ArrayList<>();
@@ -1767,7 +2081,8 @@ final class JavaTests {
 			for (JavaClass.Field field : own.directories) {
 				// a field of a class above, which one of the level's may hide
 				String target = field.owner == own.type ? variable : "((" + field.owner.name + ") " + variable + ")";
-				before.add(target + "." + field.name + " = " + directory(field.type, slots.array, slots.count++));
+				before.add(target + "." + field.name + " = " + directory(field.type, slots,
+						cleanup(field.owner, java.util.Objects.requireNonNull(field.declaration).pos())));
 			}
 			for (Method each : own.beforeEach) {
 				before.add(call(variable, each, slots, "info"));
@@ -1784,7 +2099,8 @@ final class JavaTests {
 			// no time JUnit takes: the test's error once its instance is made (measured)
 			body.append("        " + TIMEOUT + ".positive(").append(timeout.value()).append(");\n");
 		}
-		String called = "instance." + method.name + "(" + arguments(method, slots, "info", "row") + ")";
+		String called = "instance." + method.name + "("
+				+ arguments(method, slots, "info", test.is(PARAMS + "ParameterizedTest") ? "row" : null) + ")";
 		String call;
 		if (!test.is(API + "TestFactory")) {
 			call = timed(timeout, method, called);
@@ -1803,12 +2119,10 @@ final class JavaTests {
 			// without throwing, before what runs after each test (measured)
 			call += ";\n            org.assertj.core.api.AbstractSoftAssertions.assertAll(soft)";
 		}
-		if (before.isEmpty() && after.isEmpty() && slots.count == 0 && !closing) {
+		if (before.isEmpty() && after.isEmpty() && !slots.any() && !closing) {
 			return body.append("        ").append(call.replace("\n    ", "\n")).append(";\n").toString();
 		}
-		if (slots.count > 0) {
-			body.insert(0, "        java.nio.file.Path[] directories = new java.nio.file.Path[" + slots.count + "];\n");
-		}
+		body.insert(0, slots.declared("        "));
 		body.append("        Throwable thrown = null;\n        try {\n");
 		for (String each : before) {
 			body.append("            ").append(each).append(";\n");
@@ -1820,13 +2134,27 @@ final class JavaTests {
 		for (String each : after) {
 			body.append(guarded(each, "        "));
 		}
-		if (closing || slots.count > 0) {
-			body.append("        thrown = " + SOURCES + ".closed(thrown, ")
-				.append(closing ? "row" : "null")
-				.append(slots.count > 0 ? ", directories" : "")
-				.append(");\n");
-		}
+		body.append(slots.closed("        ", closing ? "row" : "null", "thrown != null"));
 		return body.append("        if (thrown != null) {\n            throw thrown;\n        }\n").toString();
+	}
+
+	/**
+	 * Whether a run of a test makes its TestInfo: the test, what runs around it or the
+	 * constructor of a class whose instance is the run's own is given one.
+	 */
+	private boolean informed(Suite suite, Annotated test) {
+		this.soft = suite.soft;
+		boolean info = gives(test.method(), Given.INFO);
+		for (Suite level : suite.nest()) {
+			info |= level.constructor.contains(Given.INFO) && !level.perClass;
+			for (Method each : level.beforeEach) {
+				info |= gives(each, Given.INFO);
+			}
+			for (Method each : level.afterEach) {
+				info |= gives(each, Given.INFO);
+			}
+		}
+		return info;
 	}
 
 	/**
@@ -1892,6 +2220,14 @@ final class JavaTests {
 				case FLOAT -> "Float";
 				default -> "Double";
 			} + at;
+		}
+		if (type instanceof JavaType.Variable variable) {
+			// a type variable's erasure, which the method's call infers it as
+			List<JavaType> bounds = variable.parameter().bounds;
+			return bounds.isEmpty() ? SOURCES + ".object" + at
+					: bounds.get(0) instanceof ClassType bound && !bound.arguments().isEmpty()
+							? "((" + bound.declaration().name + ") " + SOURCES + ".object" + at + ")"
+							: argument(bounds.get(0), index);
 		}
 		String text = JavaAnnotations.typeText(type);
 		if (!(type instanceof ClassType) && !(type instanceof ArrayType)) {
@@ -2018,11 +2354,29 @@ final class JavaTests {
 		JavaClass annotation = java.util.Objects.requireNonNull(this.classes.qualified(type));
 		switch (type.substring(PROVIDER.length())) {
 			case "ValueSource":
-				return indent + SOURCES + ".values(rows, "
-						+ this.classes.annotationValue(written, annotation, unit, this.members) + ");\n";
+				// a class literal's array read only where one is written
+				return indent + SOURCES
+						+ (texts(written, "classes", unit).isEmpty() ? ".values(rows, " : ".classes(rows, ")
+						+ annotationValue(written, annotation, method.owner) + ");\n";
 			case "CsvSource":
-				return indent + SOURCES + ".csv(rows, "
-						+ this.classes.annotationValue(written, annotation, unit, this.members) + ");\n";
+				return indent + SOURCES + (headed(written, unit) ? ".headed(rows, " : ".csv(rows, ")
+						+ annotationValue(written, annotation, method.owner) + ");\n";
+			case "CsvFileSource": {
+				// each resource found where the program is lowered, by the test's class
+				// as
+				// JUnit finds it (measured: a name with no slash in the class's package)
+				StringBuilder streams = new StringBuilder();
+				for (String resource : texts(written, "resources", unit)) {
+					streams.append(streams.isEmpty() ? "" : ", ")
+						.append(suite.type.name)
+						.append(".class.getResourceAsStream(")
+						.append(written("(" + resource + ")", "String", method.owner))
+						.append(')');
+				}
+				return indent + SOURCES + (headed(written, unit) ? ".headedFiles(rows, " : ".files(rows, ")
+						+ annotationValue(written, annotation, method.owner) + ", new java.io.InputStream[] {" + streams
+						+ "});\n";
+			}
 			case "NullSource":
 				return indent + "rows.add(new Object[] { null });\n";
 			case "EmptySource":
@@ -2035,9 +2389,13 @@ final class JavaTests {
 				for (String text : texts(written, "value", unit)) {
 					String name = text.length() >= 2 && text.startsWith("\"") && text.endsWith("\"")
 							? text.substring(1, text.length() - 1) : null;
+					if (name != null && name.contains("#")) {
+						names.add(name);
+						continue;
+					}
 					if (name == null || !name.isEmpty() && !name.chars().allMatch(Character::isJavaIdentifierPart)) {
 						throw JavaClasses.unsupported(unit.source(), written.pos(),
-								"a @MethodSource that does not name a method of the test's class by a string literal");
+								"a @MethodSource that does not name a method by a string literal");
 					}
 					names.add(name.isEmpty() ? method.name : name);
 				}
@@ -2048,9 +2406,8 @@ final class JavaTests {
 				for (String name : names) {
 					calls.append(indent)
 						.append(SOURCES + ".rows(rows, ")
-						.append(factory(suite, name, unit, written))
-						.append('.')
-						.append(name)
+						.append(name.contains("#") ? external(name, false, unit, written)
+								: factory(suite, name, unit, written) + "." + name)
 						.append("());\n");
 				}
 				return calls.toString();
@@ -2080,11 +2437,16 @@ final class JavaTests {
 					enumeration = null;
 				}
 				String canonical = literal(enumeration == null ? constants : enumeration.name);
-				return indent + SOURCES + ".constants(rows, " + constants + ".values(), new String[] {"
-						+ String.join(", ", texts(written, "names", unit)) + "}, "
-						+ (modes.isEmpty() ? PROVIDER + "EnumSource.Mode.INCLUDE" : "(" + modes.get(0) + ")") + ", "
-						+ (from.isEmpty() ? "\"\"" : "(" + from.get(0) + ")") + ", "
-						+ (to.isEmpty() ? "\"\"" : "(" + to.get(0) + ")") + ", "
+				List<String> names = new ArrayList<>();
+				for (String name : texts(written, "names", unit)) {
+					names.add(written(name, "String", method.owner));
+				}
+				return indent + SOURCES + ".constants(rows, " + (enumeration == null ? constants : enumeration.name)
+						+ ".values(), new String[] {" + String.join(", ", names) + "}, "
+						+ (modes.isEmpty() ? PROVIDER + "EnumSource.Mode.INCLUDE"
+								: written("(" + modes.get(0) + ")", PROVIDER + "EnumSource.Mode", method.owner))
+						+ ", " + (from.isEmpty() ? "\"\"" : written("(" + from.get(0) + ")", "String", method.owner))
+						+ ", " + (to.isEmpty() ? "\"\"" : written("(" + to.get(0) + ")", "String", method.owner)) + ", "
 						+ (named.isEmpty() ? literal(PROVIDER + "NullEnum") : canonical) + ", " + canonical + ");\n";
 			}
 			case "FieldSource": {
@@ -2092,9 +2454,10 @@ final class JavaTests {
 				for (String text : texts(written, "value", unit)) {
 					String name = text.length() >= 2 && text.startsWith("\"") && text.endsWith("\"")
 							? text.substring(1, text.length() - 1) : null;
-					if (name == null || name.isBlank() || !name.chars().allMatch(Character::isJavaIdentifierPart)) {
+					if (name == null || name.isBlank()
+							|| !name.contains("#") && !name.chars().allMatch(Character::isJavaIdentifierPart)) {
 						throw JavaClasses.unsupported(unit.source(), written.pos(),
-								"a @FieldSource that does not name a field of the test's class by a string literal");
+								"a @FieldSource that does not name a field by a string literal");
 					}
 					names.add(name);
 				}
@@ -2103,13 +2466,15 @@ final class JavaTests {
 				}
 				StringBuilder reads = new StringBuilder();
 				for (String name : names) {
+					String external = name.contains("#") ? external(name, true, unit, written) : null;
 					reads.append(indent)
 						.append(SOURCES + ".field(rows, ")
-						.append(field(suite, name, unit, written))
+						.append(external != null ? external : field(suite, name, unit, written))
 						.append(", ")
-						.append(literal(name))
+						.append(literal(name.substring(name.indexOf('#') + 1)))
 						.append(", ")
-						.append(literal(suite.type.binaryName))
+						.append(literal(
+								external != null ? name.substring(0, name.indexOf('#')) : suite.type.binaryName))
 						.append(");\n");
 				}
 				return reads.toString();
@@ -2117,6 +2482,79 @@ final class JavaTests {
 			default:
 				return "";
 		}
+	}
+
+	/**
+	 * Whether a CSV source's runs are named by the headers of its first record: a
+	 * literal, since the generated code reads only where it is so.
+	 */
+	private static boolean headed(Annotation written, Unit unit) {
+		boolean headed = false;
+		for (String text : texts(written, "useHeadersInDisplayName", unit)) {
+			if (!text.equals("true") && !text.equals("false")) {
+				throw JavaClasses.unsupported(unit.source(), written.pos(),
+						"a useHeadersInDisplayName that is no literal");
+			}
+			headed = text.equals("true");
+		}
+		return headed;
+	}
+
+	/**
+	 * A static method or field of another class that a source names by its fully
+	 * qualified name, {@code "pkg.Class#member"} (a method's with an empty parameter list
+	 * or none), as an expression: what JUnit finds wrong with the name is a compile error
+	 * here, in its words (measured).
+	 * @param field whether it names a field, else a method, which the expression leaves
+	 * uncalled
+	 */
+	private String external(String name, boolean field, Unit unit, Annotation written) {
+		int hash = name.indexOf('#');
+		String className = name.substring(0, hash);
+		String member = name.substring(hash + 1);
+		if (!field && member.endsWith("()")) {
+			member = member.substring(0, member.length() - 2);
+		}
+		if (className.isEmpty() || member.isEmpty() || !member.chars().allMatch(Character::isJavaIdentifierPart)) {
+			if (!className.isEmpty() && !field && member.contains("(")) {
+				throw JavaClasses.unsupported(unit.source(), written.pos(),
+						"a @MethodSource factory method that takes parameters");
+			}
+			throw JavaClasses.error(unit.source(), written.pos(),
+					"[" + name + "] is not a valid fully qualified " + (field ? "field" : "method")
+							+ " name: it must start with a fully qualified class name followed by a '#' and then the "
+							+ (field ? "field name."
+									: "method name, optionally followed by a parameter list enclosed in parentheses."));
+		}
+		JavaClass type = this.classes.qualified(className.replace('$', '.'));
+		if (type == null) {
+			throw JavaClasses.error(unit.source(), written.pos(), "Could not load class [" + className + "]");
+		}
+		if (field) {
+			for (JavaClass.Field each : type.fields) {
+				if (each.name.equals(member)) {
+					if (!each.isStatic) {
+						throw JavaClasses.unsupported(unit.source(), written.pos(),
+								"a @FieldSource field of another class that is not static");
+					}
+					return each.owner.name + "." + member;
+				}
+			}
+			throw JavaClasses.error(unit.source(), written.pos(),
+					"Could not find field named [" + member + "] in class [" + className + "]");
+		}
+		for (Method each : type.methods) {
+			if (each.name.equals(member) && each.parameters.isEmpty() && each.declaration != null) {
+				if (!each.isStatic) {
+					throw JavaClasses.error(unit.source(), written.pos(), "Method '" + methodText(each)
+							+ "' must be static: local factory methods must be static unless the PER_CLASS "
+							+ "@TestInstance lifecycle mode is used; external factory methods must always be static.");
+				}
+				return each.owner.name + "." + member;
+			}
+		}
+		throw JavaClasses.error(unit.source(), written.pos(),
+				"Could not find factory method [" + member + "] in class [" + className + "]");
 	}
 
 	/**

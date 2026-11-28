@@ -30897,12 +30897,19 @@ standalone:
   # `q/FactoryTest.java` holds what a `@TestFactory` method makes, tests and containers
   # named by their places, and the orderers of tests and of `@Nested` classes, JUnit's
   # and the program's own.
+  # `q/NamedRunsTest.java` holds the display names of a parameterized test's runs and
+  # the names JUnit finds wrong, `q/CleanedTest.java` what a temporary directory's cleanup
+  # mode keeps, `q/SourcedTest.java` CSV files and resources, classes and the members of
+  # another class as sources, and `q/InheritedTest.java` tests inherited from a class of
+  # another file, whose annotations name what only that file imports.
   - name: a-file-of-tests-is-run-and-reported-as-junit-and-assertj-do
     file: p/SampleTest.java
     tests: [p.SampleTest, p.SecondTest, p.ThirdTest, p.FourthTest, p.FifthTest, q.OtherTest, q.DirectoryTest,
             q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest, q.LifecycleTest, q.SharedInstanceTest,
             q.RepeatedOnlyTest, q.UnmadeTest, q.ConvertedTest, q.AssertjTest, q.FactoryTest,
-            q.OrderedTest]
+            q.OrderedTest,
+            q.NamedRunsTest, q.CleanedTest, q.CleanedAfterTest, q.RepeatedDirectoryTest, q.SourcedTest,
+            q.InheritedTest]
     status: 1
     files:
       q/OtherTest.java: |
@@ -32456,6 +32463,427 @@ standalone:
             }
 
         }
+      q/NamedRunsTest.java: |
+        package q;
+
+        import java.util.List;
+        import java.util.stream.Stream;
+
+        import org.junit.jupiter.api.BeforeEach;
+        import org.junit.jupiter.api.DisplayName;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Named;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.RepeatedTest;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestInfo;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.Arguments;
+        import org.junit.jupiter.params.provider.CsvSource;
+        import org.junit.jupiter.params.provider.MethodSource;
+        import org.junit.jupiter.params.provider.ValueSource;
+
+        // The display names of a parameterized test's runs, as its TestInfo and what runs
+        // around it show them: JUnit's pattern and its placeholders, the arguments' texts, the
+        // headers of a CSV source, and a name JUnit finds wrong before a run or during one.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class NamedRunsTest implements NamedInAnInterface {
+
+            @BeforeEach
+            void before(TestInfo info) {
+                System.out.println("NamedRunsTest before " + info.getDisplayName());
+            }
+
+            static Stream<Arguments> texts() {
+                return Stream.of(Arguments.arguments("a\"b\t\\", 'c', null, new int[] { 1, 2 }, new Object[] { "x", null }),
+                        Arguments.arguments(Named.of("named\n", "n"), '\'', "\u0001", new String[][] { { "p" } }, List.of("l")),
+                        Arguments.argumentSet("a set", "s", 'd', 1.5, new int[0], new Object[0]),
+                        Arguments.arguments("y".repeat(513), '\n', 'é', null, null));
+            }
+
+            @ParameterizedTest
+            @MethodSource("texts")
+            void shown(String s, char c, Object o, Object a, Object b, TestInfo info) {
+                String name = info.getDisplayName();
+                System.out.println("NamedRunsTest.shown " + (name.length() > 80 ? name.length() + " " + name.substring(500) : name));
+            }
+
+            static Stream<Arguments> pairs() {
+                return Stream.of(Arguments.arguments(Named.of("first", 1), "x"), Arguments.argumentSet("the set", 2, "y"));
+            }
+
+            @ParameterizedTest(name = "{index}: {0} and {1} / {arguments} / {argumentSetNameOrArgumentsWithNames} / {displayName} / {2} / '{0}' '' it''s")
+            @MethodSource("pairs")
+            void pattern(int i, String s, TestInfo info) {
+                System.out.println("NamedRunsTest.pattern " + info.getDisplayName());
+            }
+
+            @ParameterizedTest(name = "'{index}' it''s {index}" + ParameterizedTest.DISPLAY_NAME_PLACEHOLDER, quoteTextArguments = false)
+            @DisplayName("verbatim\n")
+            @ValueSource(strings = "it's")
+            void verbatim(String s, TestInfo info) {
+                System.out.println("NamedRunsTest.verbatim " + info.getDisplayName());
+            }
+
+            @ParameterizedTest(name = ParameterizedTest.INDEX_PLACEHOLDER + " " + ParameterizedTest.ARGUMENTS_PLACEHOLDER)
+            @CsvSource(value = { "h1, h2", "a, b" }, useHeadersInDisplayName = true)
+            void headed(String a, String b, TestInfo info) {
+                System.out.println("NamedRunsTest.headed " + info.getDisplayName() + " " + a + b);
+            }
+
+            @Test
+            @DisplayName("plain\ttest")
+            void plain(TestInfo info) {
+                System.out.println("NamedRunsTest.plain " + info.getDisplayName());
+            }
+
+            @ParameterizedTest(name = " ")
+            @ValueSource(ints = 1)
+            public void blank(int i) throws Exception {
+                System.out.println("NamedRunsTest.blank never runs");
+            }
+
+            @ParameterizedTest(name = "{0")
+            @ValueSource(ints = 1)
+            void unmatched(int i) {
+                System.out.println("NamedRunsTest.unmatched never runs");
+            }
+
+            @ParameterizedTest(name = "{foo}")
+            @ValueSource(ints = 1)
+            void unknown(int i) {
+                System.out.println("NamedRunsTest.unknown never runs");
+            }
+
+            static Stream<Arguments> setThenNot() {
+                return Stream.of(Arguments.argumentSet("named", 1), Arguments.arguments(2));
+            }
+
+            @ParameterizedTest(name = "{argumentSetName}")
+            @MethodSource("setThenNot")
+            void setNameOfNoSet(int i, TestInfo info) {
+                System.out.println("NamedRunsTest.setNameOfNoSet " + info.getDisplayName());
+            }
+
+            @RepeatedTest(0)
+            protected <T> void neverRepeated(TestInfo info) throws Exception {
+            }
+
+            @Nested
+            class Made {
+
+                Made(TestInfo info) {
+                    System.out.println("NamedRunsTest.Made " + info.getDisplayName());
+                }
+
+                @ParameterizedTest
+                @ValueSource(strings = { "one", "two" })
+                void t(String s) {
+                }
+            }
+        }
+
+        interface NamedInAnInterface {
+
+            @ParameterizedTest(name = " ")
+            @ValueSource(ints = 1)
+            default void blankInAnInterface(int i) {
+            }
+        }
+      q/CleanedTest.java: |
+        package q;
+
+        import java.io.IOException;
+        import java.nio.file.Files;
+        import java.nio.file.Path;
+        import java.util.ArrayList;
+        import java.util.List;
+
+        import org.junit.jupiter.api.AfterAll;
+        import org.junit.jupiter.api.Assumptions;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.RepeatedTest;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestInstance;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.api.io.CleanupMode;
+        import org.junit.jupiter.api.io.TempDir;
+        import org.junit.jupiter.api.io.TempDirFactory;
+
+        // What a temporary directory's cleanup mode keeps: one never deleted, one deleted only
+        // where its test succeeded; the directory of a constructor whose class's tests share one
+        // instance, and those of the runs of a repeated test past its failure threshold.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class CleanedTest {
+
+            static Path never;
+
+            static Path succeeded;
+
+            static Path failed;
+
+            static Path aborted;
+
+            static Path shared;
+
+            @TempDir(cleanup = CleanupMode.ON_SUCCESS, factory = TempDirFactory.Standard.class)
+            Path onSuccess;
+
+            @Test
+            void a1(@TempDir(cleanup = CleanupMode.NEVER) Path kept) {
+                never = kept;
+                succeeded = this.onSuccess;
+            }
+
+            @Test
+            void a2() {
+                failed = this.onSuccess;
+                throw new AssertionError("a failure keeps the directory");
+            }
+
+            @Test
+            void a3() {
+                aborted = this.onSuccess;
+                Assumptions.abort("an abort keeps the directory too");
+            }
+
+            @Test
+            void a4() throws IOException {
+                System.out.println("CleanedTest never " + Files.exists(never) + ", succeeded " + Files.exists(succeeded)
+                        + ", failed " + Files.exists(failed) + ", aborted " + Files.exists(aborted));
+                for (Path kept : List.of(never, failed, aborted)) {
+                    Files.delete(kept);
+                }
+            }
+
+            @Nested
+            @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+            class Shared {
+
+                final Path dir;
+
+                Shared(@TempDir Path dir) {
+                    this.dir = dir;
+                    shared = dir;
+                }
+
+                @Test
+                void first() {
+                    System.out.println("CleanedTest.Shared " + Files.isDirectory(this.dir));
+                }
+
+                @Test
+                void second() {
+                    System.out.println("CleanedTest.Shared the same " + (this.dir == shared));
+                }
+            }
+        }
+
+        class CleanedAfterTest {
+
+            @Test
+            void t() {
+                System.out.println("CleanedAfterTest the shared instance's directory is gone " + !Files.exists(CleanedTest.shared));
+            }
+        }
+
+        class RepeatedDirectoryTest {
+
+            static final List<Path> made = new ArrayList<>();
+
+            RepeatedDirectoryTest(@TempDir(cleanup = CleanupMode.ON_SUCCESS) Path dir) {
+                made.add(dir);
+            }
+
+            @RepeatedTest(value = 3, failureThreshold = 1)
+            void repeated() {
+                throw new AssertionError("the first run fails");
+            }
+
+            @AfterAll
+            static void after() throws IOException {
+                System.out.println("RepeatedDirectoryTest made " + made.size() + ", kept " + Files.exists(made.get(0))
+                        + " " + Files.exists(made.get(1)) + " " + Files.exists(made.get(2)));
+                Files.delete(made.get(0));
+            }
+        }
+      q/SourcedTest.java: |
+        package q;
+
+        import java.io.IOException;
+        import java.nio.file.Files;
+        import java.nio.file.Path;
+        import java.nio.file.StandardCopyOption;
+        import java.util.List;
+        import java.util.stream.Stream;
+
+        import org.junit.jupiter.api.BeforeAll;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.TestInfo;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.CsvFileSource;
+        import org.junit.jupiter.params.provider.CsvSource;
+        import org.junit.jupiter.params.provider.FieldSource;
+        import org.junit.jupiter.params.provider.MethodSource;
+        import org.junit.jupiter.params.provider.ValueSource;
+
+        // The sources of a parameterized test past one annotation's literals: CSV files and
+        // resources, a CSV value over two lines and comments, classes, and a method and a field
+        // of another class.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class SourcedTest {
+
+            static final String FILE = "/tmp/rontolisp-java-spec-sourced.csv";
+
+            // written whole under its name, as legs that run at once read it
+            @BeforeAll
+            static void write() throws IOException {
+                Path written = Files.createTempFile("sourced", ".csv");
+                Files.writeString(written, "skipped\n# a comment\n\"two\nlines\", 2\n");
+                Files.move(written, Path.of(FILE), StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            @ParameterizedTest
+            @CsvFileSource(resources = "sourced.csv", files = FILE, numLinesToSkip = 1)
+            void file(String s, String n) {
+                System.out.println("SourcedTest.file " + s + " " + n);
+            }
+
+            @ParameterizedTest
+            @CsvFileSource(resources = "/q/sourced.csv", useHeadersInDisplayName = true)
+            void headed(String a, String b, TestInfo info) {
+                System.out.println("SourcedTest.headed " + info.getDisplayName());
+            }
+
+            @ParameterizedTest
+            @CsvFileSource(files = "rontolisp-java-spec-missing.csv")
+            void missing(String s) {
+            }
+
+            @ParameterizedTest
+            @CsvFileSource(resources = "missing.csv")
+            void missingResource(String s) {
+            }
+
+            @ParameterizedTest
+            @CsvSource(textBlock = """
+                    ; a comment
+                    'two
+                    lines', 1
+                    #, 2
+                    """, commentCharacter = ';')
+            void block(String s, int i) {
+                System.out.println("SourcedTest.block " + s + " " + i);
+            }
+
+            @ParameterizedTest
+            @ValueSource(classes = { String.class, int[].class, SourcedTest.class })
+            void classes(Class<?> type) {
+                System.out.println("SourcedTest.classes " + type.getName());
+            }
+
+            @ParameterizedTest
+            @ValueSource(ints = 1, strings = "x")
+            void twoKinds(Object o) {
+            }
+
+            @ParameterizedTest
+            @MethodSource("q.Rows#rows")
+            void external(String s) {
+                System.out.println("SourcedTest.external " + s);
+            }
+
+            @ParameterizedTest
+            @FieldSource("q.Rows$Inner#FIELD")
+            void externalField(String s) {
+                System.out.println("SourcedTest.externalField " + s);
+            }
+        }
+
+        class Rows {
+
+            static Stream<String> rows() {
+                return Stream.of("x", "y");
+            }
+
+            static class Inner {
+
+                static final List<String> FIELD = List.of("f");
+            }
+        }
+      q/InheritedTest.java: |
+        package q;
+
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestMethodOrder;
+
+        // A class whose tests are those of a class above, of another file.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class InheritedTest extends r.Base {
+
+            @Test
+            void own() {
+                System.out.println("InheritedTest.own");
+            }
+        }
+      r/Base.java: |
+        package r;
+
+        import java.util.concurrent.TimeUnit;
+
+        import org.junit.jupiter.api.DisplayName;
+        import org.junit.jupiter.api.Tag;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestInfo;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.EnumSource;
+        import org.junit.jupiter.params.provider.ValueSource;
+        import s.Limits;
+
+        // Tests a class of another file and package inherits: their annotations name what only
+        // this file imports, and a constant private to this class.
+        public abstract class Base {
+
+            private static final String TAG = "base";
+
+            @ParameterizedTest
+            @ValueSource(ints = { Limits.LOW, Limits.HIGH })
+            @DisplayName(Limits.SHOWN)
+            @Tag(TAG)
+            void limits(int value, TestInfo info) {
+                System.out.println("Base.limits " + value + " " + info.getDisplayName() + " " + info.getTags());
+            }
+
+            @ParameterizedTest
+            @EnumSource(value = TimeUnit.class, names = { "SECONDS", "DAYS" })
+            void units(TimeUnit unit) {
+                System.out.println("Base.units " + unit);
+            }
+
+            @Test
+            @Tag(Limits.SHOWN)
+            void tagged(TestInfo info) {
+                System.out.println("Base.tagged " + info.getTags());
+            }
+        }
+      s/Limits.java: |
+        package s;
+
+        public final class Limits {
+
+            public static final int LOW = 1;
+
+            public static final int HIGH = 9;
+
+            public static final String SHOWN = "limits";
+
+            private Limits() {
+            }
+        }
     source: |
       package p;
 
@@ -32870,6 +33298,9 @@ standalone:
 
       }
     library:
+      q/sourced.csv: |
+        h1,h2
+        r1,"r2"
       p/Counter.java: |
         package p;
 
@@ -34022,10 +34453,101 @@ standalone:
       Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Last$Deep1
       Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Last
       Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest
+      Running q.NamedRunsTest
+      NamedRunsTest before 1 h1 = "a", h2 = "b"
+      NamedRunsTest.headed 1 h1 = "a", h2 = "b" ab
+      NamedRunsTest before 1: first and "x" / first, "x" / first, "x" / pattern(int, String, TestInfo) / {2} / {0} ' it's
+      NamedRunsTest.pattern 1: first and "x" / first, "x" / first, "x" / pattern(int, String, TestInfo) / {2} / {0} ' it's
+      NamedRunsTest before 2: 2 and "y" / 2, "y" / the set / pattern(int, String, TestInfo) / {2} / {0} ' it's
+      NamedRunsTest.pattern 2: 2 and "y" / 2, "y" / the set / pattern(int, String, TestInfo) / {2} / {0} ' it's
+      NamedRunsTest before plain�test
+      NamedRunsTest.plain plain�test
+      NamedRunsTest before named
+      NamedRunsTest.setNameOfNoSet named
+      NamedRunsTest before [1] "a\"b\t\\", 'c', null, [1, 2], [x, null]
+      NamedRunsTest.shown [1] "a\"b\t\\", 'c', null, [1, 2], [x, null]
+      NamedRunsTest before [2] named<LF>, '\'', "�", [[p]], [l]
+      NamedRunsTest.shown [2] named<LF>, '\'', "�", [[p]], [l]
+      NamedRunsTest before [3] a set
+      NamedRunsTest.shown [3] a set
+      NamedRunsTest before [4] "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…", '\n', 'é', null, null
+      NamedRunsTest.shown 541 yyyyyyyyyyyyyyyy…", '\n', 'é', null, null
+      NamedRunsTest before '1' it''s 1verbatim
+      NamedRunsTest.verbatim '1' it''s 1verbatim
+      Running q.NamedRunsTest$Made
+      NamedRunsTest.Made [1] "one"
+      NamedRunsTest before [1] "one"
+      NamedRunsTest.Made [2] "two"
+      NamedRunsTest before [2] "two"
+      Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in q.NamedRunsTest$Made
+      Tests run: 16, Failures: 0, Errors: 6, Skipped: 0 <<< FAILURE! -- in q.NamedRunsTest
+      q.NamedRunsTest.blank <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Configuration error: @ParameterizedTest on method [public void q.NamedRunsTest.blank(int) throws java.lang.Exception] must be declared with a non-empty name.
+      q.NamedRunsTest.blankInAnInterface <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Configuration error: @ParameterizedTest on method [public default void q.NamedInAnInterface.blankInAnInterface(int)] must be declared with a non-empty name.
+      q.NamedRunsTest.neverRepeated <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Configuration error: @RepeatedTest on method [protected void q.NamedRunsTest.neverRepeated(org.junit.jupiter.api.TestInfo) throws java.lang.Exception] must be declared with a positive 'value'.
+      q.NamedRunsTest.setNameOfNoSet <<< ERROR!
+      org.junit.platform.commons.JUnitException: Failed to format display name for parameterized test. See nested exception for further details.
+      Caused by: org.junit.jupiter.api.extension.ExtensionConfigurationException: When the display name pattern for a @ParameterizedTest contains {argumentSetName}, the arguments must be supplied as an ArgumentSet.
+      q.NamedRunsTest.unknown <<< ERROR!
+      org.junit.platform.commons.JUnitException: The display name pattern defined for the parameterized test is invalid. See nested exception for further details.
+      Caused by: java.lang.IllegalArgumentException: can't parse argument number: foo
+      Caused by: java.lang.NumberFormatException: For input string: "foo"
+      q.NamedRunsTest.unmatched <<< ERROR!
+      org.junit.platform.commons.JUnitException: The display name pattern defined for the parameterized test is invalid. See nested exception for further details.
+      Caused by: java.lang.IllegalArgumentException: Unmatched braces in the pattern.
+      Running q.CleanedTest
+      CleanedTest never true, succeeded false, failed true, aborted true
+      Running q.CleanedTest$Shared
+      CleanedTest.Shared true
+      CleanedTest.Shared the same true
+      Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in q.CleanedTest$Shared
+      Tests run: 4, Failures: 1, Errors: 0, Skipped: 1 <<< FAILURE! -- in q.CleanedTest
+      q.CleanedTest.a2 <<< FAILURE!
+      a failure keeps the directory
+      Running q.CleanedAfterTest
+      CleanedAfterTest the shared instance's directory is gone true
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.CleanedAfterTest
+      Running q.RepeatedDirectoryTest
+      RepeatedDirectoryTest made 3, kept true false false
+      Tests run: 3, Failures: 1, Errors: 0, Skipped: 2 <<< FAILURE! -- in q.RepeatedDirectoryTest
+      q.RepeatedDirectoryTest.repeated[1] <<< FAILURE!
+      the first run fails
+      Running q.SourcedTest
+      SourcedTest.block two
+      lines 1
+      SourcedTest.block # 2
+      SourcedTest.classes java.lang.String
+      SourcedTest.classes [I
+      SourcedTest.classes q.SourcedTest
+      SourcedTest.external x
+      SourcedTest.external y
+      SourcedTest.externalField f
+      SourcedTest.file r1 r2
+      SourcedTest.file two
+      lines 2
+      SourcedTest.headed [1] h1 = "r1", h2 = "r2"
+      Tests run: 14, Failures: 0, Errors: 3, Skipped: 0 <<< FAILURE! -- in q.SourcedTest
+      q.SourcedTest.missing <<< ERROR!
+      org.junit.platform.commons.JUnitException: File [rontolisp-java-spec-missing.csv] could not be read
+      Caused by: java.nio.file.NoSuchFileException: rontolisp-java-spec-missing.csv
+      q.SourcedTest.missingResource <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Classpath resource [missing.csv] does not exist
+      q.SourcedTest.twoKinds <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Exactly one type of input must be provided in the @ValueSource annotation, but there were 2
+      Running q.InheritedTest
+      Base.limits 1 [1] 1 [base]
+      Base.limits 9 [2] 9 [base]
+      InheritedTest.own
+      Base.tagged [limits]
+      Base.units SECONDS
+      Base.units DAYS
+      Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in q.InheritedTest
 
       Results:
 
-      Tests run: 178, Failures: 23, Errors: 25, Skipped: 12
+      Tests run: 226, Failures: 25, Errors: 34, Skipped: 15
   # A test given its time by `@Timeout`, in a program of its own: the thread that
   # interrupts the test when its time is over makes the run a program of threads, which
   # the tests above are not on a `.wasm`. The time a class gives its tests, inherited

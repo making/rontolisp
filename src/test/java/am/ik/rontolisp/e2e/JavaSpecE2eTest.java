@@ -515,6 +515,13 @@ class JavaSpecE2eTest {
 		List<DynamicNode> legs = new ArrayList<>();
 		List<Standalone> cases = loadSpec().standalone();
 		cases = cases == null ? List.of() : cases;
+		// -Drontolisp.java.spec.standalone=TEXT,... runs only the cases whose names hold
+		// one of the texts
+		String only = System.getProperty("rontolisp.java.spec.standalone");
+		if (only != null) {
+			List<String> texts = List.of(only.split(","));
+			cases = cases.stream().filter(s -> texts.stream().anyMatch(s.name()::contains)).toList();
+		}
 		// the legs run at once, each in the directories its stem names
 		assertThat(cases.stream().map(Standalone::stem)).as("the stems of the standalone cases")
 			.doesNotHaveDuplicates();
@@ -667,19 +674,23 @@ class JavaSpecE2eTest {
 	 * JUnit's the runner has not, wherever it is written; an element of one it has that
 	 * it does not read; one written on an annotation type, whose methods JUnit would run;
 	 * a test given its time in a thread of its own; a RepetitionInfo given around a test
-	 * that is not repeated; a parameter of a parameterized test that JUnit would make of
-	 * its own, or whose TestInfo would name its arguments; a text a parameterized test's
-	 * source gives to a class parameter; an extension that is not AssertJ's of soft
-	 * assertions, that one where the run does not read it, and the soft assertions it
-	 * gives nothing under JUnit. A test factory JUnit would not run -- one declared to
-	 * return what holds no test -- is an error where it is declared.
+	 * that is not repeated; a temporary directory a factory of the program's makes; a
+	 * parameter of a parameterized test that JUnit would make of its own, or that a row
+	 * gives after one JUnit gives; a text a parameterized test's source gives to a class
+	 * parameter; an extension that is not AssertJ's of soft assertions, that one where
+	 * the run does not read it, and the soft assertions it gives nothing under JUnit. A
+	 * test factory JUnit would not run -- one declared to return what holds no test -- is
+	 * an error where it is declared, as is a source naming a factory method JUnit does
+	 * not find.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
 		String[][] refusals = {
 				{ "import java.nio.file.Path; import org.junit.jupiter.api.Test; import org.junit.jupiter.api.io.*; "
-						+ "class T { @TempDir(cleanup = CleanupMode.NEVER) Path dir; @Test void t() { } }", "@TempDir",
-						"the element cleanup of @TempDir" },
+						+ "class T { @TempDir(factory = F.class) Path dir; @Test void t() { } } "
+						+ "class F implements TempDirFactory { public Path createTempDirectory(org.junit.jupiter.api."
+						+ "extension.AnnotatedElementContext e, org.junit.jupiter.api.extension.ExtensionContext c) { "
+						+ "return null; } }", "@TempDir", "the factory F.class of @TempDir" },
 				{ "import org.junit.jupiter.api.*; class T { @Test @Timeout(value = 1, threadMode = "
 						+ "Timeout.ThreadMode.SEPARATE_THREAD) void t() { } }", "@Timeout",
 						"the thread mode SEPARATE_THREAD of @Timeout" },
@@ -696,11 +707,11 @@ class JavaSpecE2eTest {
 						"the annotation org.junit.jupiter.api.condition.EnabledOnOs" },
 				{ "import org.junit.jupiter.api.TestInfo; import org.junit.jupiter.params.ParameterizedTest; "
 						+ "import org.junit.jupiter.params.provider.ValueSource; class T { @ParameterizedTest "
-						+ "@ValueSource(ints = 1) void t(int i, TestInfo info) { } }", "info)",
-						"a TestInfo parameter of a @ParameterizedTest method" },
-				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
-						+ "class T { @ParameterizedTest @ValueSource(classes = String.class) void t(Class<?> c) { } }",
-						"@ValueSource", "the element classes of @ValueSource" },
+						+ "@ValueSource(ints = 1) void t(TestInfo info, int i) { } }", "i)",
+						"a parameter given by a row after a parameter JUnit gives" },
+				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.MethodSource; "
+						+ "class T { @ParameterizedTest @MethodSource(\"T#rows\") void t(int i) { } }", "@MethodSource",
+						"Could not find factory method [rows] in class [T]", "" },
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
 						+ "class T { @ParameterizedTest @ValueSource(strings = \"java.lang.String\") void t(Class<?> c) { } }",
 						"c)", "the conversion of a text to a java.lang.Class" },

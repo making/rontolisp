@@ -134,7 +134,7 @@ $T -o cart-tests-comp.wasm --component && \
 | --- | --- |
 | `@Test` | `@TempDir`、`TestInfo`、および AssertJ のエクステンションが与える[ソフトアサーション](#soft-assertions)以外のパラメータのないメソッド |
 | `@RepeatedTest` | メソッドを `value` 回実行します。各回には `RepetitionInfo` を与え、`name` (`{displayName}`、`{currentRepetition}`、`{totalRepetitions}`) で名前を付けます。失敗が `failureThreshold` 回に達すると残りはスキップします。JUnit と同じく、スキップする回にもインスタンスは作ります。`value` が正でない、しきい値が範囲外、名前が空白のときはテストのエラーです |
-| `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (`classes` 以外の全要素)、`@CsvSource` (`value`、`textBlock`、`delimiter`、`delimiterString`、`quoteCharacter`、`emptyValue`、`nullValues`、`ignoreLeadingAndTrailingWhitespace`)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッドか、`@TestInstance(PER_CLASS)` なら共有インスタンスのメソッド、または名前を省いてテストと同名のもの。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@FieldSource` (文字列リテラルで名前を書いたそのクラスのフィールドか、名前を省いてテストと同名のもの。static か、`@TestInstance(PER_CLASS)` なら共有インスタンスのもの。値は `Iterable`、配列、またはストリームかそのどちらかを返す `Supplier`)、`@EnumSource` (`value`、`names`、`mode`、`from`、`to`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。引数は JUnit と同じように変換します。文字列はプリミティブ型とそのボックス (数値の `_` は除く)、enum、JUnit が変換する JDK の型 (`File`、`Path`、`URI`、`URL`、`UUID`、`BigDecimal`、`BigInteger`、`Charset`、言語タグによる `Locale`、`java.time` の型)、`String` を取る static ファクトリメソッドかコンストラクタを持つクラスに変換します。数値はプリミティブ型には拡大変換し、ボックスにはしません。JUnit が変換できない値は、JUnit と同じ文言でその実行のエラーになります |
+| `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (要素は 1 つ。`classes` も可)、`@CsvSource` (全要素。引用符で囲んだ値は複数行にわたってよく、`textBlock` の行で `commentCharacter` から始まるものはコメント)、`@CsvFileSource` (全要素。`resources` はファイルのコンパイル時に、クラスリテラルの `getResourceAsStream` と同じくテストのクラスから探し、`files` は実行する場所で読む)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッドか、`@TestInstance(PER_CLASS)` なら共有インスタンスのメソッド、名前を省いてテストと同名のもの、または `"pkg.Class#method"` と書いた別のクラスの static メソッド。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@FieldSource` (文字列リテラルで名前を書いたそのクラスのフィールドか、名前を省いてテストと同名のもの。static か、`@TestInstance(PER_CLASS)` なら共有インスタンスのもの。`"pkg.Class#field"` と書いた別のクラスの static フィールドも可。値は `Iterable`、配列、またはストリームかそのどちらかを返す `Supplier`)、`@EnumSource` (`value`、`names`、`mode`、`from`、`to`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。引数は JUnit と同じように変換します。文字列はプリミティブ型とそのボックス (数値の `_` は除く)、enum、JUnit が変換する JDK の型 (`File`、`Path`、`URI`、`URL`、`UUID`、`BigDecimal`、`BigInteger`、`Charset`、言語タグによる `Locale`、`java.time` の型)、`String` を取る static ファクトリメソッドかコンストラクタを持つクラスに変換します。数値はプリミティブ型には拡大変換し、ボックスにはしません。JUnit が変換できない値は、JUnit と同じ文言でその実行のエラーになります。各回には JUnit と同じ名前を付け、その回の `TestInfo` と前後に実行するメソッドの `TestInfo` が示します。名前は `name` (既定は `[{index}] {argumentSetNameOrArgumentsWithNames}`) とそのプレースホルダで作り、文字列は `quoteTextArguments = false` でなければ引用符で囲み、`Named` の引数と引数セットはその名前、`useHeadersInDisplayName` の CSV ソースでは値の前にヘッダを書きます。javac を `-parameters` なしで使ったときと同じく、引数にパラメータの名前は付けません。空白だけの `name` や不正な `name` はテストのエラーです |
 | `@TestFactory` | メソッドが作るテストを実行します。戻り値は `DynamicNode`、その配列、または `DynamicNode` の `Stream`・`Iterable`・`Iterator` です。`DynamicTest` はそれぞれ 1 つのテストとして数え、順番で名前を付け (`prices[2]`。`DynamicContainer` の中なら `prices[2][1]`)、表示名とともに報告します。`@BeforeEach` と `@AfterEach` は各テストの前後ではなく、ファクトリの前後で 1 回実行します。ストリームはテストの後で閉じます。テストを作る途中でファクトリやコンテナが投げた例外は、それ自身のエラーです。それまでに作られたテストは実行済みです |
 | `@Timeout` | テスト、ファクトリ (ファクトリが作るテストは対象外)、テストの前後で実行するメソッドの制限時間です。クラスに付けると、そのクラスと `@Nested` クラスの各テストの制限時間になり、上位クラスとインタフェースから継承します。時間を過ぎるとテストのスレッドに 1 回割り込みます。待機は `InterruptedException` で終わり、メソッドはその後に何をしても何を投げても `TimeoutException` で失敗します。待機しないメソッドは最後まで実行されます。正でない値はエラーです。読む要素は `value`、`unit`、`threadMode` (`SEPARATE_THREAD` 以外) です |
 | `@BeforeEach`、`@AfterEach` | 各テストの前後に、そのインスタンスで実行します。テストの `TestInfo` を与え、前後で実行するテストがすべて繰り返しテストなら `RepetitionInfo` も与えます。インタフェースと上位クラスのものはテストの前では先に、後では最後に実行し、`@Nested` クラスを囲むクラスのものは内側のクラスのものの外側で実行します |
@@ -145,8 +145,8 @@ $T -o cart-tests-comp.wasm --component && \
 | `@Tag`、`@Tags` | `TestInfo.getTags()` が返すタグ。テストのもの、次にクラスのもの (上位クラス、各インタフェース、自身の順)、次に囲むクラスのもので、前後の空白を除き、不正なタグは除きます。タグでテストを選ぶ実行はありません |
 | `@Nested` | 内部クラスのテスト。テストごとに、囲むクラスのインスタンスの中に作ったインスタンスで実行します |
 | `@Disabled` | テストをスキップとして数えます。クラスなら、そのテストと `@Nested` クラスをそれぞれ数えます |
-| `@TempDir` | 型が `Path` か `File` のフィールドまたはパラメータ。それぞれに専用のディレクトリを `/tmp` に作ります。static フィールドのものはそのクラスのテスト全体の前後、ほかは各テストの前後で、終わると中身ごと削除します |
-| `@DisplayName` | テストに付けたものは、失敗したときにテスト名の後ろに書かれます。テストやクラスに付けたものは `TestInfo` の表示名になります |
+| `@TempDir` | 型が `Path` か `File` のフィールドまたはパラメータ (コンストラクタのものも含む)。それぞれに専用のディレクトリを `/tmp` に作ります。static フィールドと共有インスタンスのものはそのクラスのテスト全体の前後、ほかは各テストの前後で、終わると中身ごと削除します。`cleanup = NEVER` なら削除せず、`ON_SUCCESS` ならそのテストやクラスで失敗も中断もなかったときだけ削除します。`factory` は JUnit の `TempDirFactory.Standard` です |
+| `@DisplayName` | テストに付けたものは、失敗したときにテスト名の後ろに書かれます。テストやクラスに付けたものは `TestInfo` の表示名になります。JUnit と同じく前後の空白を除き、改行は `<CR>` か `<LF>`、ほかの制御文字は U+FFFD と表示します |
 | `@ExtendWith` | クラスに付けた AssertJ の `SoftAssertionsExtension` だけを扱います。そのクラス、その下位クラス、その `@Nested` クラスの各テストに[ソフトアサーション](#soft-assertions)を与えます |
 
 同じソースを複数回書いたときは、JUnit と同じ順で行を与えます。同じ種類のソースをまとめて、
@@ -312,17 +312,18 @@ AssertJ の `SoftAssertionsExtension` 以外のエクステンションとメソ
 `SoftAssertionsExtension`、テストの前後に実行するメソッドやコンストラクタに与える
 ソフトアサーション、`static` や `final` の `@InjectSoftAssertions` フィールド、
 別スレッドで実行する `@Timeout` (`threadMode = SEPARATE_THREAD`)、
-アノテーション型に付けた JUnit のアノテーション (合成アノテーション)、上の表にない要素 (`@ValueSource` の
-`classes`、`@TempDir` の `cleanup` と `factory`)、`Class` のパラメータに与える文字列、`@TempDir`
+アノテーション型に付けた JUnit のアノテーション (合成アノテーション)、`@ArgumentsSource`、プログラムの
+`TempDirFactory`、パラメータ化テストの `name` の書式型 (`{0,number}`)、`Class` のパラメータに与える文字列、`@TempDir`
 でも `TestInfo` でもエクステンションのソフトアサーションでもない `@Test` メソッドや
 `@TestFactory` メソッドのパラメータ、戻り値の型が
-`DynamicNode` を示さない `@TestFactory` メソッド (`Object`、型引数のない `Stream`)、型が JUnit のものであるパラメータ化
-テストのパラメータ (`ArgumentsAccessor`、引数を表示名に含む `TestInfo`)、繰り返しでないテストの
+`DynamicNode` を示さない `@TestFactory` メソッド (`Object`、型引数のない `Stream`)、型が JUnit のもの (`ArgumentsAccessor`) か、
+JUnit が与えるパラメータの後ろで行が与えるパラメータ化テストのパラメータ、繰り返しでないテストの
 前後で与える `RepetitionInfo`。AssertJ では、BDD のソフトアサーション (`BDDSoftAssertions`)、
 クラスを受け取る `SoftAssertionsProvider.assertSoftly`、上の表にない検査 (`Path` の
 `hasParent`、再帰比較の独自のコンパレータとイントロスペクション戦略、`ZonedDateTime`・`URI`・
 `BigDecimal` に固有の検査。これらの値は `Comparable` として扱います)。テストクラスのコンストラクタは 1 つで、
 パラメータは `TestInfo` と `@TempDir` のディレクトリにできます。テストクラスの中の `static` クラスは、ファイル直下のクラスとして
-書いたときだけ実行されます。
+書いたときだけ実行されます。アノテーションの文字列を含む JUnit のメッセージ (読めない CSV、
+不明な `encoding`) は要素を宣言順に書きます。JDK は独自の順で書きます。
 
 `rontolisp format` は `.java` ファイルを拒否します。このコマンドが整形するのは S 式です。

@@ -1795,8 +1795,9 @@ JDK in the front end's semantics, the library and the host.
   run: an annotation of a package under `org.junit.` that `JavaTests.RAN` does not hold
   (JUnit 4's included), an element of one it holds that the run does not read, one on an
   annotation type (a composed annotation, whose methods JUnit runs), a parameterized test's
-  parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes
-  (a `TestInfo`'s display name would show the arguments), a `@Timeout` whose `threadMode` is
+  parameter of JUnit's type (`ArgumentsAccessor`, `Named`), which JUnit makes, a
+  `@TempDir` factory but `TempDirFactory.Standard` and `@ArgumentsSource` (both need an
+  `ExtensionContext`: `.todo/n17`), a `@Timeout` whose `threadMode` is
   `SEPARATE_THREAD`, a `RepetitionInfo` given around a test that
   is not repeated (JUnit: a `ParameterResolutionException` of that test), a text a
   `@ValueSource(strings)` or `@CsvSource` gives a `Class` parameter (JUnit's `Class.forName`
@@ -1881,8 +1882,10 @@ JDK in the front end's semantics, the library and the host.
   name, each a `PreconditionViolationException` of the test naming the method as
   `Method.toString` does; a run past the threshold still MAKES the instance (its constructor
   runs, and one that throws is that run's error), then is skipped; an abort is no failure;
-  `{displayName}` is replaced first. Refused instead of matched: a constructor `@TempDir`
-  under `PER_CLASS` or of a repeated test with a threshold (unprobed). Cost (wasm, one test):
+  `{displayName}` is replaced first. A constructor `@TempDir` under `PER_CLASS` is made with
+  the instance and deleted after the class, as a static field's; a run past the threshold
+  makes its constructor's and deletes it, `ON_SUCCESS` too (the skip is no failure: the
+  generated code calls `TestRun.exceeded`). Cost (wasm, one test):
   `TestInfo` +6.0 KB (the tag set made in `getTags`, else a `LinkedHashSet` +49 KB;
   `getTestMethod` costs only where called), `@RepeatedTest` +11.1 KB; a run with none of it,
   the two tree suites and `examples/java/shop` byte-identical (`TestRun.repetition` is a
@@ -1929,6 +1932,61 @@ JDK in the front end's semantics, the library and the host.
   `UrlCodecTest` 238,387 -> 241,703 B wasm (the three exception classes), `SqlTest`,
   `ScramTest` and `examples/java/shop` byte-identical; JUnit 5.11.4's sources run the same
   file to the same bytes.
+- **A run's display name, the CSV sources, a holder per file: measured** (JUnit 6.0.3,
+  2026-11-28; pinned by the corpus case's `q/NamedRunsTest.java`, `q/CleanedTest.java`,
+  `q/SourcedTest.java`, `q/InheritedTest.java`, four backends against the oracle):
+  - **Names** (`rontolisp.internal.TestNames`, made only where a `name` is written or a
+    `TestInfo` is given: else the run is byte-identical): `{default_display_name}` is
+    `[{index}] {argumentSetNameOrArgumentsWithNames}`; a blank name is the test's
+    `PreconditionViolationException` before its sources are read, naming the method as
+    `Method.toGenericString` writes it (`@RepeatedTest`'s check as `Method.toString`:
+    modifiers, `throws`, no type parameters). The six placeholders are found wherever
+    written, quotes or none; each stretch between them that holds a `{` is a MessageFormat
+    of the arguments' texts (else verbatim: `it''s {index}` keeps `''`), one that is no
+    pattern the test's `JUnitException` ("... is invalid"), checked before the sources;
+    `{argumentSetName}` of a row that is no set fails at that run, the runs before it
+    having run. An argument's text: `Named` its name, a `CharSequence` and a `char` quoted
+    with `\t \b \n \r \f \\` and the quote escaped (`quoteTextArguments = false`: as
+    is), an array by `deepToString`, a `toString` that throws `Class@identityhash`, each cut
+    past 512 to 511 and `…` before quoting; an argument set's name uncut; only the first
+    as many arguments as the method has parameters. The whole name then, as every display
+    name: `\r` `<CR>`, `\n` `<LF>`, any other ISO control U+FFFD. `@DisplayName` stripped
+    (`strip`, so U+2003 too), a blank one the default (JUnit warns at discovery), then the
+    same. A format type (`{0,number}`, which JUnit applies to the RAW argument) is the
+    library MessageFormat's refusal. A `TestInfo` or `@TempDir` after a row longer than
+    the parameters before it is JUnit's "multiple competing ParameterResolvers" with its
+    resolvers' identity hashes, here this program's (`TestNames.alone`): no oracle pins it.
+  - **CSV** (`TestSources.Csv`): a record a line but where a quoted column goes on, an open
+    quote taking the rest; an empty line none, a blank line one null column; a comment
+    only in a text block or a file and only at column 0 (`  # x` is a value); anything
+    but blanks after a closing quote, or a column past `maxCharsPerColumn`, is
+    `CsvParsingException` caused by FastCSV's shaded `CsvParseException` ("Exception when
+    reading first record" / "... record that started in line N"), here a class of
+    `TestSources` of that simple name. `useHeadersInDisplayName`: a literal, the first
+    record the headers, each argument `header = value` (`TestSources.Headed`, a `Named`),
+    more columns than headers `PreconditionViolationException`. `@CsvFileSource`: resources
+    before files, `numLinesToSkip` physical lines, a resource by the TEST class's
+    `getResourceAsStream` where the program is lowered (a name with no `/` in its package,
+    measured), a missing one `Classpath resource [..] does not exist`, a file `File [..]
+    could not be read` caused by the `NoSuchFileException`, both empty `Resources or files
+    must not be empty`, a bad `encoding` "The charset supplied in @.. is invalid". JUnit
+    writes the annotation in those messages in an order of a JDK's own that differs
+    between runs; here in the order declared. `@ValueSource`: exactly one element given
+    (`there were 0`/`2`, measured), `classes` through `TestSources.classes`.
+  - **`"pkg.Class#member"`** of `@MethodSource` (also with `()`) and `@FieldSource`: a
+    binary name; a missing class, member or a non-static method is a compile error in
+    JUnit's words (`Could not load class [..]`, `Could not find factory method [..] in
+    class [..]`, `.. must be static: .. external factory methods must always be static.`).
+  - **A holder per file** (`JavaTests.written`): an expression of an annotation of a class
+    of another file (an inherited test's, an interface's) is a method of a class generated
+    beside that class, in its package, under its file's imports and its static scope
+    (`<Top>$Tests$N`), so it names what only its file imports. Also fixed: a type
+    variable parameter takes its erasure (`(T)` named no class).
+  - **Cost** (wasm): `UrlCodecTest` (a `@CsvSource` text block) 242,243 -> 251,551 B: the
+    reader 6.0 KB, the annotation's text of its errors 3.3 KB (`Integer.toHexString` alone
+    cost 12 KB: `Csv.hex` is by hand); `SqlTest` 294,333 -> 294,716, `ScramTest`
+    368,549 -> 368,869, `TargetTest` 391,391 -> 391,751 (`unsuccessful`);
+    `examples/java/shop` 321,439 byte-identical.
 - **Skips, `@TempDir`, closed arguments: measured** (JUnit 6.0.3, surefire 3.6.0, 2026-11-25).
   Surefire counts a skipped CLASS as its direct children (each test, a parameterized test
   one, each `@Nested` class one): `@Disabled` on a class of two tests is `Tests run: 2,
@@ -1940,7 +1998,12 @@ JDK in the front end's semantics, the library and the host.
   made before `@BeforeAll` and deleted after `@AfterAll`, an instance field's and a
   parameter's around each test, deleted after `@AfterEach`; a lifecycle method's parameter
   gets one too (probed: `@BeforeEach`'s and `@AfterEach`'s differ, as `@BeforeAll`'s and
-  `@AfterAll`'s). `cleanup`/`factory` are refused; a `final` field or one not `Path`/`File`
+  `@AfterAll`'s). `cleanup` (2026-11-28): `NEVER` is never deleted (its slot not kept),
+  `ON_SUCCESS` deleted only where the test (with what runs around it) threw nothing, an
+  abort too, or for a class's where nothing of the class or its `@Nested` classes failed
+  or aborted, an abort of `@BeforeAll` too (`TestRun.unsuccessful`, ~300 B of wasm in
+  every run); JUnit's INFO log of a skipped cleanup is not written. `factory`:
+  `TempDirFactory.Standard` (or the interface, the default) only; a `final` field or one not `Path`/`File`
   is a compile error here, an `ExtensionConfigurationException` of the test under JUnit; a
   `@TempDir` parameter before a row's is refused (JUnit: competing `ParameterResolver`s). A `.wasm` reaches `/tmp` only preopened:
   java-spec's wasm legs and the plugin's run `--dir /tmp::/tmp`; without it the class errors

@@ -41,6 +41,13 @@
   from cumulative pressure, not one bad test. Two forks times 6 GB is the most the 16 GB
   runner affords beside Maven itself and the wasmtime host compiles.
 
+## One standalone case of `java-spec.yaml`
+
+`-Dtest='JavaSpecE2eTest#standalone' -Drontolisp.java.spec.standalone=a-file-of-tests,soft-assertions`
+runs only the standalone cases whose names hold one of the texts: the corpus case of
+`rontolisp test` alone is 75 s of its five legs (2026-11-28), the 130 standalone cases far
+more.
+
 ## CI shards
 
 The CI test job is two jobs, `test-e2e` and `test-rest`, each on its own 16 GB runner with

@@ -150,7 +150,7 @@ public class MessageFormat implements Cloneable, Serializable {
             index = Integer.parseInt(digits);
         }
         catch (NumberFormatException e) {
-            throw new IllegalArgumentException("can't parse argument number: " + digits);
+            throw new IllegalArgumentException("can't parse argument number: " + digits, e);
         }
         if (index < 0) {
             throw new IllegalArgumentException("negative argument number: " + index);
