@@ -166,7 +166,9 @@ final class JavaWitTypes {
 							&& arm(wit.error(), type.arguments().get(1), method, what);
 				case KEYWORD_LIST -> declared instanceof ClassType type
 						&& type.declaration().name.equals("java.util.Set") && type.arguments().size() == 1
-						&& type.arguments().get(0).equals(new ClassType(member(wit, method, what), List.of()));
+						&& type.arguments()
+							.get(0)
+							.equals(new ClassType(member(wit, type.arguments().get(0), method, what), List.of()));
 				case STREAM_HANDLE -> isU8(wit.element()) ? isClass(declared, INPUT_STREAM)
 						: declared instanceof ClassType type
 								&& type.declaration().name.equals(JavaWitImports.WIT_STREAM)
@@ -176,7 +178,7 @@ final class JavaWitTypes {
 						&& type.declaration().name.equals(JavaWitImports.WIT_FUTURE) && type.arguments().size() == 1
 						&& futureMatches(Objects.requireNonNull(wit.element()), type.arguments().get(0), method, what);
 				case PLIST, TAGGED_LIST, KEYWORD, HANDLE ->
-					declared.equals(new ClassType(member(wit, method, what), List.of()));
+					declared.equals(new ClassType(member(wit, declared, method, what), List.of()));
 				default -> false;
 			};
 		}
@@ -246,8 +248,9 @@ final class JavaWitTypes {
 								what);
 					}
 				}
-				case PLIST, TAGGED_LIST, KEYWORD, KEYWORD_LIST, HANDLE ->
-					definition(wit, member(wit, method, what), method);
+				case PLIST, TAGGED_LIST, KEYWORD, HANDLE ->
+					definition(wit, member(wit, declared, method, what), method);
+				case KEYWORD_LIST -> definition(wit, member(wit, argument(declared), method, what), method);
 				default -> {
 				}
 			}
@@ -256,31 +259,36 @@ final class JavaWitTypes {
 		/**
 		 * The class standing for a named type the scope takes from another, or
 		 * {@code null} for a type of the scope's own, its owner's member type.
+		 * @param declared the type written for it, or {@code null} where none is
 		 */
-		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+		@Nullable JavaClass used(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method, String what) {
 			return null;
 		}
 
 		/**
 		 * The Java type a WIT type is, as source names it
-		 * ({@link JavaWitTypes#javaText}): a handle by the class {@link #handleClassOf}
+		 * ({@link JavaWitTypes#javaText}): a named type by the class {@link #classOf}
 		 * names, where it names one.
 		 */
 		String text(JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared, boolean simple) {
-			return javaText(this.owner, this::handleClassOf, wit, boxed, declared, simple);
+			return javaText(this.owner, this::classOf, wit, boxed, declared, simple);
 		}
 
 		/**
-		 * The class a handle is, where it is not the owner's member type of its name, or
-		 * {@code null}.
+		 * The class a named type is where none is written for it and it is not the
+		 * owner's member type of its name, or {@code null}.
 		 */
-		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
 			return null;
 		}
 
-		/** The class a named type is: the interface's member type of its name. */
-		private JavaClass member(JavaBoundary.Type wit, JavaClass.Method method, String what) {
-			JavaClass used = used(wit, method, what);
+		/**
+		 * The class a named type is: the interface's member type of its name.
+		 * @param declared the type written for it, or {@code null} where none is
+		 */
+		private JavaClass member(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method,
+				String what) {
+			JavaClass used = used(wit, declared, method, what);
 			if (used != null) {
 				return used;
 			}
@@ -306,8 +314,9 @@ final class JavaWitTypes {
 				return;
 			}
 			String definition = Objects.requireNonNull(wit.definition());
-			String what = this.owner.simpleName() + "." + named.simpleName() + " (" + definition + " of " + this.scope
-					+ ")";
+			// a type of another interface is named as that one's
+			String what = simpleText(named) + " (" + definition + " of "
+					+ (named.outer == this.owner ? this.scope : wit.home()) + ")";
 			switch (wit.rep()) {
 				case PLIST -> {
 					if (!named.isRecord) {
@@ -450,18 +459,18 @@ final class JavaWitTypes {
 
 		/**
 		 * The Java type a WIT type is, as the generated source names it
-		 * ({@link JavaWitTypes#javaText}): a handle by the class {@link #handleClassOf}
+		 * ({@link JavaWitTypes#javaText}): a named type by the class {@link #classOf}
 		 * names, where it names one.
 		 */
 		String text(JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared) {
-			return javaText(this.owner, this::handleClassOf, wit, boxed, declared, false);
+			return javaText(this.owner, this::classOf, wit, boxed, declared, false);
 		}
 
 		/**
-		 * The class a handle is, where it is not the owner's member type of its name, or
-		 * {@code null}.
+		 * The class a named type is where none is written for it and it is not the
+		 * owner's member type of its name, or {@code null}.
 		 */
-		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
 			return null;
 		}
 
@@ -623,7 +632,7 @@ final class JavaWitTypes {
 					}
 				}
 				case PLIST -> {
-					JavaClass record = memberClass(wit);
+					JavaClass record = memberClass(wit, declared);
 					Map<String, JavaBoundary.Part> fields = new LinkedHashMap<>();
 					for (JavaBoundary.Part part : wit.parts()) {
 						fields.put(JavaWitImports.lowerCamel(part.label()), part);
@@ -661,7 +670,7 @@ final class JavaWitTypes {
 					}
 				}
 				case TAGGED_LIST -> {
-					JavaClass sealed = memberClass(wit);
+					JavaClass sealed = memberClass(wit, declared);
 					if (in) {
 						body.append("        Object tag = ").append(v).append(".tag(v);\n");
 					}
@@ -704,7 +713,7 @@ final class JavaWitTypes {
 						}
 					}
 					body.append(in ? "        throw new IllegalStateException(\"no case of " + wit.definition() + " of "
-							+ this.scope + "\");\n" : "        throw new NullPointerException();\n");
+							+ scopeOf(sealed, wit) + "\");\n" : "        throw new NullPointerException();\n");
 				}
 				case RESULT -> {
 					// the envelope (:ok . value) or (:error . value), the value of an arm
@@ -749,7 +758,7 @@ final class JavaWitTypes {
 					}
 				}
 				case KEYWORD -> {
-					JavaClass named = memberClass(wit);
+					JavaClass named = memberClass(wit, declared);
 					for (JavaBoundary.Part part : wit.parts()) {
 						if (in) {
 							body.append("        if (")
@@ -775,10 +784,10 @@ final class JavaWitTypes {
 						}
 					}
 					body.append(in ? "        throw new IllegalStateException(\"no case of " + wit.definition() + " of "
-							+ this.scope + "\");\n" : "        throw new NullPointerException();\n");
+							+ scopeOf(named, wit) + "\");\n" : "        throw new NullPointerException();\n");
 				}
 				case KEYWORD_LIST -> {
-					JavaClass named = memberClass(wit);
+					JavaClass named = memberClass(wit, argument(declared));
 					if (in) {
 						body.append("        java.util.Set<")
 							.append(named.name)
@@ -869,9 +878,21 @@ final class JavaWitTypes {
 			return this.binding + "." + name;
 		}
 
-		/** The interface's member class a named type is. */
-		private JavaClass memberClass(JavaBoundary.Type wit) {
-			return Objects.requireNonNull(
+		/** The scope defining a named type, as a message names it. */
+		private @Nullable String scopeOf(JavaClass named, JavaBoundary.Type wit) {
+			return named.outer == this.owner ? this.scope : wit.home();
+		}
+
+		/**
+		 * The class a named type is: the one written for it, else the one
+		 * {@link #classOf} names, else the interface's member class of its name.
+		 */
+		private JavaClass memberClass(JavaBoundary.Type wit, @Nullable JavaType declared) {
+			if (declared instanceof ClassType type && type.arguments().isEmpty()) {
+				return type.declaration();
+			}
+			JavaClass known = classOf(wit);
+			return known != null ? known : Objects.requireNonNull(
 					this.owner.members.get(JavaWitImports.upperCamel(Objects.requireNonNull(wit.definition()))));
 		}
 
@@ -1033,22 +1054,26 @@ final class JavaWitTypes {
 
 	/**
 	 * Like {@link #javaText(JavaClass, JavaBoundary.Type, boolean, JavaType, boolean)}, a
-	 * handle named by the class a function answers for it, where it answers one.
+	 * named type named by the class a function answers for it, where it answers one.
 	 */
-	static String javaText(JavaClass owner, java.util.function.Function<JavaBoundary.Type, @Nullable JavaClass> handles,
+	static String javaText(JavaClass owner, java.util.function.Function<JavaBoundary.Type, @Nullable JavaClass> classes,
 			JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared, boolean simple) {
 		return javaText(new Spelling() {
 			@Override
 			public String named(JavaBoundary.Type named, @Nullable JavaType written, boolean simpleName) {
-				JavaClass known = named.rep() == Rep.HANDLE ? handles.apply(named) : null;
+				boolean handle = named.rep() == Rep.HANDLE;
+				if (!handle && !simpleName && written instanceof ClassType type && type.arguments().isEmpty()) {
+					// the type written for it, which may be another interface's
+					return JavaAnnotations.typeText(type);
+				}
+				JavaClass known = classes.apply(named);
 				if (known != null) {
 					return simpleName ? simpleText(known) : known.name;
 				}
 				// a resource may be another interface's, which the type written for it
 				// names
-				return named.rep() == Rep.HANDLE && !simpleName && written instanceof ClassType type
-						&& type.arguments().isEmpty() ? JavaAnnotations.typeText(type)
-								: memberText(owner, named, simpleName);
+				return handle && !simpleName && written instanceof ClassType type && type.arguments().isEmpty()
+						? JavaAnnotations.typeText(type) : memberText(owner, named, simpleName);
 			}
 
 			@Override
@@ -1103,7 +1128,8 @@ final class JavaWitTypes {
 			case RESULT -> (simple ? "WitResult<" : JavaWitImports.WIT_RESULT + "<")
 					+ armText(spelling, wit.element(), declared, 0, simple) + ", "
 					+ armText(spelling, wit.error(), declared, 1, simple) + ">";
-			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + spelling.named(wit, null, simple) + ">";
+			case KEYWORD_LIST ->
+				(simple ? "Set<" : "java.util.Set<") + spelling.named(wit, argument(declared), simple) + ">";
 			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> spelling.named(wit, declared, simple);
 			case STREAM_HANDLE -> isU8(wit.element()) ? simple ? "InputStream" : INPUT_STREAM
 					: (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<") + javaText(spelling,

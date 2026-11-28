@@ -174,8 +174,8 @@ public interface JavaBoundary {
 	 * @param definition the definition a named type or a handle resolves to, else
 	 * {@code null}
 	 * @param borrow whether it is a {@code borrow<R>} handle
-	 * @param home the canonical id of the interface whose resource a handle is, else
-	 * {@code null}
+	 * @param home the canonical id of the interface defining a named type or the resource
+	 * a handle is of, else {@code null}
 	 */
 	record Type(Rep rep, @Nullable Type element, String wit, @Nullable Type error, List<Part> parts,
 			@Nullable String definition, boolean borrow, @Nullable String home) {

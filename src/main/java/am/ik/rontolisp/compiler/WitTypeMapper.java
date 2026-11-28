@@ -175,9 +175,9 @@ public final class WitTypeMapper {
 	 * a front end that names its types after the WIT's finds its own type by
 	 * @param borrow whether the type is a {@code borrow<R>} handle, aliases followed: one
 	 * the callee does not take from its caller
-	 * @param home the canonical id of the interface whose resource a handle is (the plain
-	 * name of a world's inline interface), what tells two resources of one name apart;
-	 * {@code null} for every other representation
+	 * @param home the canonical id of the interface defining a named type or the resource
+	 * a handle is of (the plain name of a world's inline interface), what tells two
+	 * definitions of one name apart; {@code null} for every structural type
 	 */
 	public record Shape(Rep rep, @Nullable Shape element, String wit, @Nullable Shape error, List<Part> parts,
 			@Nullable String definition, boolean borrow, @Nullable String home) {
@@ -315,13 +315,13 @@ public final class WitTypeMapper {
 	}
 
 	/**
-	 * Like {@link #shape(WitType, WitResolver, WitItem.InterfaceDef)}, a handle's home
-	 * named by the caller: a scope of its own making (an exported interface with its
+	 * Like {@link #shape(WitType, WitResolver, WitItem.InterfaceDef)}, a named type's
+	 * home named by the caller: a scope of its own making (an exported interface with its
 	 * {@code use} clauses written out) is in no package of the document.
 	 * @param type the type use
 	 * @param resolver the resolver over the document
 	 * @param scope the scope the type is written in
-	 * @param homes the id of the interface defining a resource, by that interface
+	 * @param homes the id of the interface defining a type, by that interface
 	 * @return the shape
 	 */
 	public static Shape shape(WitType type, WitResolver resolver, WitItem.InterfaceDef scope,
@@ -376,8 +376,7 @@ public final class WitTypeMapper {
 						}
 					}
 					return new Shape(repOfDefinition(owned.item()), null, wit, null, List.copyOf(parts),
-							definedName(owned.item()), false,
-							owned.item() instanceof WitItem.ResourceDef ? homes.apply(owned.owner()) : null);
+							definedName(owned.item()), false, homes.apply(owned.owner()));
 				}
 				finally {
 					path.removeLast();

@@ -174,7 +174,7 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 | `enum` | enum。ケースが定数（`NO_SUCH_STORE`） | スコープのクラスのメンバー |
 | `flags` | enum の `Set`。ラベルが定数 | スコープのクラスのメンバー |
 | 別名（`type id = u32`） | 別名が指す型 | |
-| `use` で取り込んだ record、variant、enum、flags | 上と同じ。名前は `use` 句が与えたもの | 取り込む側のスコープのクラスのメンバー |
+| `use` で取り込んだ record、variant、enum、flags | 上と同じ | インポートでは書いた型で決まり、定義するインタフェースを表す `@WitImport` インタフェースのメンバー（名前はそこでの名前）か、取り込む側のインタフェースのメンバー。型を書かない場所（投げられるエラー側）では、取り込む側に宣言があればそれ、なければ定義する側のもの。エクスポートでは取り込む側のスコープのクラスのメンバーで、名前は `use` 句が与えたもの |
 | インポートするインタフェースのリソース、`own<R>`、`borrow<R>` | インタフェース。メソッドがリソースのメソッドで、`close()` が解放 | `@WitImport` インタフェースのメンバー |
 | エクスポートするインタフェースのリソース、`own<R>`、`borrow<R>` | クラス。コンストラクタ、インスタンスメソッド、static メソッドがリソースのもので、`close()` がデストラクタ。ハンドルはそのオブジェクト | インタフェースのメンバークラスの static メンバー |
 | `use` で取り込んだリソース | 定義する側のスコープでそのリソースを表すもの | 定義するインタフェースを表す型のメンバー。プログラムがインポートするインタフェースなら `@WitImport` インタフェース、world がエクスポートするインタフェースならそのメンバークラス |
@@ -242,12 +242,15 @@ catch (WitException e) {
 リソースは `close()` で解放します。ハンドルはホストに返り、ストアはそのまま残ります。関数に
 渡した `own` のハンドルは関数のものになり、オブジェクトは閉じられます。
 
-インタフェースが `use` でほかのインタフェースから取るリソースは、それを定義するインタフェースを
-表す `@WitImport` インタフェースに 1 度だけ宣言し、そこから名前で参照します。`wasi:http/client`
-の `send` は、`wasi:http/types` の `request` を受け取り、`response` を返します。定義する側の
-インタフェースは、自分の関数がそのリソースを受け渡すかどうかにかかわらず、メンバーインタフェースを
-宣言します。`use` で取るレコード、variant、enum、flags は、取る側のインタフェースのメンバー型で、
-そこにもう 1 度宣言します。
+インタフェースが `use` でほかのインタフェースから取る型は、それを定義するインタフェースを表す
+`@WitImport` インタフェースに 1 度だけ宣言し、そこから名前で参照します。`wasi:http/client` の
+`send` は、`wasi:http/types` の `request` を受け取って `response` を返し、`error-code` を
+`Types.ErrorCode` として投げます。定義する側のインタフェースは、自分の関数がそのリソースを
+受け渡すかどうかにかかわらず、リソースのメンバーインタフェースを宣言します。レコード、variant、
+enum、flags は、取る側のインタフェースにもう 1 度宣言したメンバー型でもよく、どちらになるかは
+書いた型で決まります。型を書かない場所（投げられるエラー側）では、取る側に宣言があればそれ、
+なければ定義する側のものです。定義する側を表す `@WitImport` インタフェースが 2 つあるときは
+そこで拒否されます（`WitResult` を返してください）。
 
 ```console
 // interface client { use types.{request, response, error-code};
@@ -255,9 +258,8 @@ catch (WitException e) {
 @WitImport(value = "wasi:http/client@0.3.0", wit = "wit/http.wit")
 public interface Client {
 
+    // エラー側は Types.ErrorCode として投げられる
     Types.Response send(Types.Request request);
-
-    sealed interface ErrorCode { ... }
 }
 ```
 

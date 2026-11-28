@@ -174,7 +174,7 @@ exported interface's. Each is checked against its definition, once.
 | `enum` | an enum, a case a constant (`NO_SUCH_STORE`) | a member of the scope's class |
 | `flags` | a `Set` of an enum, a label a constant | a member of the scope's class |
 | an alias (`type id = u32`) | the type it names | |
-| a record, a variant, an enum or flags taken with `use` | as above, under the name the clause gives it | a member of the class of the scope taking it |
+| a record, a variant, an enum or flags taken with `use` | as above | an import's: the type written decides, a member of the `@WitImport` interface standing for the interface that defines it, under its name there, or of the interface taking it; where none is written (an error arm thrown), the latter's if it declares one, else the former's. An export's: a member of the class of the scope taking it, under the name the clause gives it |
 | a resource of an imported interface, `own<R>`, `borrow<R>` | an interface, its methods the resource's, `close()` its release | a member of the `@WitImport` interface |
 | a resource of an exported interface, `own<R>`, `borrow<R>` | a class, its constructor, instance methods and static methods the resource's, `close()` its destructor; a handle is the object | a static member of the interface's member class |
 | a resource taken with `use` | what stands for it in the scope that defines it | a member of the type standing for the interface that defines it: the `@WitImport` interface of an interface the program imports, the member class of one the world exports |
@@ -244,12 +244,16 @@ catch (WitException e) {
 A resource is released by `close()`: the handle goes back to the host, and the store stays.
 An `own` handle given to a function passes to it, and the object is closed.
 
-A resource an interface takes from another with `use` is declared once, in the
-`@WitImport` interface standing for the interface that defines it, and named from there:
+A type an interface takes from another with `use` is declared once, in the `@WitImport`
+interface standing for the interface that defines it, and named from there:
 `wasi:http/client`'s `send` takes the `request` and answers the `response` of
-`wasi:http/types`. That interface declares the member interface whether or not a function
-of its own takes or answers the resource. A record, a variant, an enum or flags taken
-with `use` is a member type of the interface taking it, declared there again.
+`wasi:http/types`, and throws its `error-code` as a `Types.ErrorCode`. That interface
+declares a resource's member interface whether or not a function of its own takes or
+answers the resource. A record, a variant, an enum or flags may also be a member type of
+the interface taking it, declared there again: the type written decides. Where none is
+written (an error arm thrown), it is the taking interface's if that declares one, else the
+defining one's; two `@WitImport` interfaces standing for the defining one are refused there
+(answer the `WitResult`).
 
 ```console
 // interface client { use types.{request, response, error-code};
@@ -257,9 +261,8 @@ with `use` is a member type of the interface taking it, declared there again.
 @WitImport(value = "wasi:http/client@0.3.0", wit = "wit/http.wit")
 public interface Client {
 
+    // its error arm thrown as a Types.ErrorCode
     Types.Response send(Types.Request request);
-
-    sealed interface ErrorCode { ... }
 }
 ```
 

@@ -458,10 +458,11 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
 - **The front ends** (`describe`): each resource function is an `Export` with its
   `resource`, `kind`, own `function` name and `member`, keyed by `namesKey(member)`
   (`<iface>#counter-add`); each resource a `WorldDescription.Resource` whose destructor's
-  function the table may name (`<iface>#counter-drop`) or leave out. A handle's shape
-  carries `home` (`WitTypeMapper.Shape.home`), the id of the interface defining its
-  resource: what tells an exported resource's handle (the value) from an imported one's
-  (the integer), and two resources of one name apart. Trap: the scope `describe` walks is
+  function the table may name (`<iface>#counter-drop`) or leave out. A named type's shape
+  carries `home` (`WitTypeMapper.Shape.home`), the id of the interface defining it (a
+  handle's: its resource's): what tells an exported resource's handle (the value) from an
+  imported one's (the integer), two definitions of one name apart, and a Java import's
+  value type of another interface (`.kb/java-frontend.md`, "A type of another interface"). Trap: the scope `describe` walks is
   the interface with its use clauses written out (`WitUses.inline`), in no package, so its
   own resource gets the export's id from `shapeOf`'s homes; `canonicalId` answers null
   there. Java: a class (`.kb/java-frontend.md`, "WIT exports"); Clojure: a var per member

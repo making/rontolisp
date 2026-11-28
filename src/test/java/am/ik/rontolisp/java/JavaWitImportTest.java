@@ -252,8 +252,8 @@ class JavaWitImportTest {
 				tcp-socket of wasi:sockets/types@0.3.0 is closed
 				""");
 		write("http.wit", wasiHttpWit());
-		write("Types.java", HTTP_TYPES.replace("ERROR_CODE", HTTP_ERROR_CODE));
-		write("Client.java", HTTP_CLIENT.replace("ERROR_CODE", HTTP_ERROR_CODE));
+		write("Types.java", HTTP_TYPES);
+		write("Client.java", HTTP_CLIENT);
 		Path http = write("HttpMain.java",
 				"""
 						import java.io.IOException;
@@ -318,7 +318,9 @@ class JavaWitImportTest {
 						            answer += " " + body.trailers().get().isPresent();
 						        }
 						        catch (WitException e) {
-						            answer = e.getMessage();
+						            // send's error arm: the error-code of wasi:http/types
+						            answer = e.error() instanceof Types.ErrorCode.InternalError internal
+						                    ? "an internal error, " + internal.value().orElse("") : e.getMessage();
 						        }
 						        try {
 						            sent.transmission().get();
@@ -407,22 +409,19 @@ class JavaWitImportTest {
 						+ " [ -n \"$port\" ] || { echo 'wasmtime serve never reported its port' 1>&2; cat " + log
 						+ " 1>&2; exit 1; }; wasmtime run -S http=y --env PORT=$port " + client);
 		assertThat(exchanged.exitCode()).as("wasmtime: %s", exchanged.stderr()).isZero();
-		assertThat(exchanged.stdout()).isEqualTo(
-				"""
-						Get[]
-						Other[value=PURGE]
-						request-set-method of wasi:http/types@0.3.0 answered its error arm
-						200 probed PURGE /first false, sent
-						200 probed POST /posted and its body false, sent
-						200 probed POST /plain false, sent
-						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[the first trailers]], \
-						not sent: InternalError[value=Optional[the first trailers]]
-						The future of send of wasi:http/client@0.3.0 is closed
-						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[other trailers, \
-						longer than the first ones were]], not sent: InternalError[value=Optional[other trailers, longer than \
-						the first ones were]]
-						200 probed GET /last false, sent
-						""");
+		assertThat(exchanged.stdout()).isEqualTo("""
+				Get[]
+				Other[value=PURGE]
+				request-set-method of wasi:http/types@0.3.0 answered its error arm
+				200 probed PURGE /first false, sent
+				200 probed POST /posted and its body false, sent
+				200 probed POST /plain false, sent
+				an internal error, the first trailers, not sent: InternalError[value=Optional[the first trailers]]
+				The future of send of wasi:http/client@0.3.0 is closed
+				an internal error, other trailers, longer than the first ones were, not sent: \
+				InternalError[value=Optional[other trailers, longer than the first ones were]]
+				200 probed GET /last false, sent
+				""");
 		// standard input as an InputStream, read in a thread (which puts the component's
 		// bodies in asyncMode) before the bytes are there: the read waits where it is
 		write("stdin.wit", STDIN_WIT);
@@ -1062,6 +1061,30 @@ class JavaWitImportTest {
 					.replace("    Bucket open", "    abstract Bucket open"));
 		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageContaining(
 				"@WitImport annotates an interface, whose abstract methods are the functions of the WIT interface");
+		// a type of another interface, taken with use, is the type written: a member type
+		// of the @WitImport interface standing for that one, or of this one
+		write("http/http.wit", wasiHttpWit());
+		write("http/Types.java", HTTP_TYPES);
+		String waited = HTTP_CLIENT
+			.replace("WitFuture<Types.Response> send", "WitResult<Types.Response, Types.ErrorCode> send")
+			.replace("import am.ik.rontolisp.wit.WitFuture;", "import am.ik.rontolisp.wit.WitResult;");
+		write("http/Client.java", waited);
+		Path sends = write("http/Main.java", """
+				import java.util.ServiceLoader;
+
+				public class Main {
+
+				    public static void main(String[] args) {
+				        Client client = ServiceLoader.load(Client.class).findFirst().orElseThrow();
+				        System.out.println(client.send(null));
+				    }
+				}
+				""");
+		assertThat(read(sends, true)).anyMatch(form -> form.contains(":INTERFACE \"wasi:http/client@0.3.0\""));
+		write("http/Client.java", waited.replace("Types.ErrorCode> send", "String> send"));
+		assertThatThrownBy(() -> read(sends, false)).hasMessageContaining(
+				"its result is result<response, error-code>, which is WitResult<Types.Response, Types.ErrorCode> in "
+						+ "Java, not WitResult<Response,String>");
 	}
 
 	/**
@@ -2429,32 +2452,6 @@ class JavaWitImportTest {
 			        record Other(Optional<String> value) implements HeaderError {}
 			    }
 
-			ERROR_CODE
-			}
-			""";
-
-	/**
-	 * {@code wasi:http/client@0.3.0}, whose request and response are
-	 * {@code wasi:http/types}' resources; a value type it takes is a member type of its
-	 * own. Its {@code send} is started: the {@code WitFuture} of the response.
-	 */
-	private static final String HTTP_CLIENT = """
-			import java.util.Optional;
-
-			import am.ik.rontolisp.wit.WitFuture;
-			import am.ik.rontolisp.wit.WitImport;
-
-			@WitImport(value = "wasi:http/client@0.3.0", wit = "http.wit")
-			public interface Client {
-
-			    WitFuture<Types.Response> send(Types.Request request);
-
-			ERROR_CODE
-			}
-			""";
-
-	/** {@code error-code} of {@code wasi:http/types@0.3.0} and the records it holds. */
-	private static final String HTTP_ERROR_CODE = """
 			    sealed interface ErrorCode {
 			        record DNSTimeout() implements ErrorCode {}
 			        record DNSError(DNSErrorPayload value) implements ErrorCode {}
@@ -2505,6 +2502,24 @@ class JavaWitImportTest {
 
 			    record FieldSizePayload(Optional<String> fieldName, Optional<Integer> fieldSize) {
 			    }
+						}
+			""";
+
+	/**
+	 * {@code wasi:http/client@0.3.0}, whose request, response and error code are
+	 * {@code wasi:http/types}' types, which it takes with {@code use}: the member types
+	 * of {@code Types}, the error code thrown where no type is written for it. Its
+	 * {@code send} is started: the {@code WitFuture} of the response.
+	 */
+	private static final String HTTP_CLIENT = """
+			import am.ik.rontolisp.wit.WitFuture;
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:http/client@0.3.0", wit = "http.wit")
+			public interface Client {
+
+			    WitFuture<Types.Response> send(Types.Request request);
+			}
 			""";
 
 }

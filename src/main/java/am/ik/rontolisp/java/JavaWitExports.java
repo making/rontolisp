@@ -494,11 +494,11 @@ final class JavaWitExports {
 		}
 
 		@Override
-		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+		@Nullable JavaClass used(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method, String what) {
 			if (wit.rep() != JavaBoundary.Rep.HANDLE) {
 				return null;
 			}
-			JavaClass known = handleClassOf(wit);
+			JavaClass known = classOf(wit);
 			if (known != null) {
 				return known;
 			}
@@ -515,7 +515,7 @@ final class JavaWitExports {
 		}
 
 		@Override
-		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
 			return handleClassIn(this.declaration, this.world, this.imported, wit);
 		}
 
@@ -548,7 +548,7 @@ final class JavaWitExports {
 			Map<String, JavaClass> imported, JavaBoundary.Type wit) {
 		String home = wit.home();
 		String name = wit.definition();
-		if (home == null || name == null) {
+		if (wit.rep() != JavaBoundary.Rep.HANDLE || home == null || name == null) {
 			return null;
 		}
 		if (!exportedResource(world, wit)) {
@@ -760,7 +760,7 @@ final class JavaWitExports {
 		}
 
 		@Override
-		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
 			return handleClassIn(this.world.declaration(), this.world.described(), this.world.imported(), wit);
 		}
 
@@ -771,7 +771,7 @@ final class JavaWitExports {
 
 		@Override
 		boolean handle(boolean in, JavaBoundary.Type wit, String javaType, StringBuilder body) {
-			JavaClass named = Objects.requireNonNull(handleClassOf(wit));
+			JavaClass named = Objects.requireNonNull(classOf(wit));
 			String v = JavaWitTypes.VALUES;
 			if (named.isInterface) {
 				// a resource the component imports: the binding's object over the

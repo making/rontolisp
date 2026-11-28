@@ -112,6 +112,9 @@ final class JavaWitImports {
 	 */
 	private final Map<JavaClass, Optional<Import>> imports = new IdentityHashMap<>();
 
+	/** The interfaces being checked, which a check of another one does not ask about. */
+	private final Set<JavaClass> checking = new java.util.HashSet<>();
+
 	/** The binding of each interface, made on a WASM target. */
 	private final Map<JavaClass, JavaClass> bindings = new IdentityHashMap<>();
 
@@ -154,9 +157,12 @@ final class JavaWitImports {
 	 * @param members the WIT interface's member names, in its order: the directive's
 	 * @param used the imports standing for the interfaces whose resources this one takes
 	 * with {@code use}, by the resource's WIT name
+	 * @param types the class of each value type of another interface where no type is
+	 * written for it and this one declares none of its name: the member type of the
+	 * {@code @WitImport} interface standing for that one, by {@code <home>#<name>}
 	 */
 	record Import(JavaClass declaration, String id, String path, List<Bound> functions, Map<String, Resource> resources,
-			List<String> members, Map<String, Import> used) {
+			List<String> members, Map<String, Import> used, Map<String, JavaClass> types) {
 	}
 
 	/**
@@ -234,7 +240,14 @@ final class JavaWitImports {
 			throw JavaClasses.error(source, written.pos(), "@WitImport: cannot read WIT " + wit + ": no "
 					+ (tree ? "file of the source tree and no " : "") + "root of the source path holds " + name);
 		}
-		Import made = new Checker(declaration, described, source).check();
+		this.checking.add(declaration);
+		Import made;
+		try {
+			made = new Checker(declaration, described, source).check();
+		}
+		finally {
+			this.checking.remove(declaration);
+		}
 		this.imports.put(declaration, Optional.of(made));
 		return made;
 	}
@@ -359,6 +372,9 @@ final class JavaWitImports {
 
 		private final Map<String, Import> usedImports = new LinkedHashMap<>();
 
+		/** The classes {@link Import#types} holds. */
+		private final Map<String, JavaClass> types = new LinkedHashMap<>();
+
 		Checker(JavaClass declaration, JavaBoundary.WitInterface wit, Source source) {
 			super(declaration, wit.id(), "the @WitImport interface", source);
 			this.declaration = declaration;
@@ -403,7 +419,8 @@ final class JavaWitImports {
 			return new Import(this.declaration, this.wit.id(), this.wit.path(), List.copyOf(bound),
 					java.util.Collections.unmodifiableMap(this.resources),
 					this.wit.members().stream().map(JavaBoundary.Function::name).toList(),
-					java.util.Collections.unmodifiableMap(this.usedImports));
+					java.util.Collections.unmodifiableMap(this.usedImports),
+					java.util.Collections.unmodifiableMap(this.types));
 		}
 
 		// Whether a handle is of a resource the interface takes from another with use.
@@ -446,7 +463,10 @@ final class JavaWitImports {
 		}
 
 		@Override
-		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+		@Nullable JavaClass used(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method, String what) {
+			if (foreign(wit)) {
+				return foreignType(wit, declared, method, what);
+			}
 			if (!taken(wit)) {
 				return null;
 			}
@@ -459,6 +479,97 @@ final class JavaWitImports {
 								+ "over: the method answers a WitResult of it");
 			}
 			return named;
+		}
+
+		// Whether a type is a record, a variant, an enum or flags another interface
+		// defines, which this one takes with use.
+		private boolean foreign(JavaBoundary.Type wit) {
+			String home = wit.home();
+			return switch (wit.rep()) {
+				case PLIST, TAGGED_LIST, KEYWORD, KEYWORD_LIST -> home != null && !home.equals(this.wit.id());
+				default -> false;
+			};
+		}
+
+		/**
+		 * The class a value type of another interface is: the type written for it where
+		 * it is the member type of the {@code @WitImport} interface standing for that
+		 * one; else this interface's member type of its name, which the check compares
+		 * the type written with; else, where none is written, that interface's.
+		 */
+		private JavaClass foreignType(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method,
+				String what) {
+			String name = Objects.requireNonNull(wit.definition());
+			String home = Objects.requireNonNull(wit.home());
+			JavaClass own = this.declaration.members.get(upperCamel(name));
+			JavaClass named = declared instanceof ClassType type && type.arguments().isEmpty() ? type.declaration()
+					: null;
+			JavaClass outer = named == null || named == own ? null : named.outer;
+			if (outer != null && outer != this.declaration && !JavaWitImports.this.checking.contains(outer)) {
+				Import imported = of(outer);
+				JavaClass member = outer.members.get(upperCamel(name));
+				if (imported != null && imported.id().equals(home) && member != null && member == named) {
+					return member;
+				}
+			}
+			if (own != null) {
+				return own;
+			}
+			List<JavaClass> found = homeTypes(home, name);
+			if (found.size() != 1) {
+				throw at(method, what + " is " + wit.wit() + ", the type " + name + " of " + home + ", which "
+						+ this.wit.id() + " takes with use: in Java " + upperCamel(name) + ", a member type of "
+						+ this.declaration.simpleName() + " or of the @WitImport interface standing for " + home
+						+ (found.isEmpty() ? "; neither declares one"
+								: ", which "
+										+ String.join(" and ", found.stream().map(JavaWitTypes::simpleText).toList())
+										+ " both are: the type is written where it is handed over"));
+			}
+			if (declared == null) {
+				this.types.put(home + "#" + name, found.get(0));
+			}
+			return found.get(0);
+		}
+
+		// The member types of one name of the @WitImport interfaces standing for an
+		// interface, which no check under way stands for.
+		private List<JavaClass> homeTypes(String home, String name) {
+			List<JavaClass> found = new ArrayList<>();
+			for (JavaClass candidate : List.copyOf(JavaWitImports.this.classes.all())) {
+				if (candidate == this.declaration || JavaWitImports.this.checking.contains(candidate)) {
+					continue;
+				}
+				JavaSyntax.Annotation written = annotation(candidate);
+				String reference = written == null ? null
+						: literal(written, "WitImport", "value", JavaWitImports.this.classes.unit(candidate))
+							.toLowerCase(Locale.ROOT);
+				if (reference == null || !home.equals(reference) && !home.startsWith(reference + "@")) {
+					continue;
+				}
+				Import imported = of(candidate);
+				JavaClass member = candidate.members.get(upperCamel(name));
+				if (imported != null && imported.id().equals(home) && member != null) {
+					found.add(member);
+				}
+			}
+			return found;
+		}
+
+		/**
+		 * The class a named type is in a message where none is written: a value type's of
+		 * another interface, a resource's met.
+		 */
+		@Override
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
+			String name = wit.definition();
+			if (taken(wit)) {
+				return this.usedClasses.get(name);
+			}
+			if (!foreign(wit) || this.declaration.members.containsKey(upperCamel(Objects.requireNonNull(name)))) {
+				return null;
+			}
+			List<JavaClass> found = homeTypes(Objects.requireNonNull(wit.home()), name);
+			return found.size() == 1 ? found.get(0) : null;
 		}
 
 		private void named(Map<String, JavaBoundary.Function> names, String name, JavaBoundary.Function member) {
@@ -567,7 +678,7 @@ final class JavaWitImports {
 			if (!matches(wit, declared, false, method, what)) {
 				throw at(method,
 						what + " is " + wit.wit() + ", which the program hands the host: "
-								+ JavaWitTypes.javaText(this.declaration, wit, false, declared, true)
+								+ text(wit, false, declared, true)
 								+ " in Java, whose get() answers the value the host reads, not " + declared);
 			}
 			JavaType argument = JavaWitTypes.argument(declared);
@@ -1060,6 +1171,11 @@ final class JavaWitImports {
 		}
 
 		@Override
+		@Nullable JavaClass classOf(JavaBoundary.Type wit) {
+			return wit.rep() == Rep.HANDLE ? null : this.imported.types().get(wit.home() + "#" + wit.definition());
+		}
+
+		@Override
 		String handleClass(String resource) {
 			String own = this.handles.get(resource);
 			if (own != null) {
@@ -1275,10 +1391,7 @@ final class JavaWitImports {
 					.append(".cons(")
 					.append(v)
 					.append(".label(\"error\"), ")
-					.append(error == null ? "null"
-							: out(error, null,
-									"((" + JavaWitTypes.javaText(this.imported.declaration(), error, true, null, false)
-											+ ") e.error())"))
+					.append(error == null ? "null" : out(error, null, "((" + text(error, true, null) + ") e.error())"))
 					.append(");\n")
 					.append(body)
 					.append("}\n");
@@ -1358,7 +1471,7 @@ final class JavaWitImports {
 			boolean counted = stream && !JavaWitTypes.isU8(payload) && payload.rep() != Rep.HANDLE;
 			String read = this.binding + "." + nativeFor(alias + "-read", counted ? 2 : 1, false);
 			String drop = this.binding + "." + nativeFor(alias + "-drop-readable", 1, false);
-			String javaType = JavaWitTypes.javaText(this.imported.declaration(), wit, false, declared, false);
+			String javaType = text(wit, false, declared);
 			String what = wit.wit() + " of " + this.imported.id();
 			String v = VALUES;
 			JavaType argument = JavaWitTypes.argument(declared);
@@ -1369,8 +1482,7 @@ final class JavaWitImports {
 				.append(javaType)
 				.append(" {\n        int handle;\n");
 			JavaBoundary.Type value = stream || payload.rep() != Rep.RESULT ? payload : payload.element();
-			String valueText = value == null ? "java.lang.Void"
-					: JavaWitTypes.javaText(this.imported.declaration(), value, true, argument, false);
+			String valueText = value == null ? "java.lang.Void" : text(value, true, argument);
 			if (!stream) {
 				// what get() throws is made where it throws: the making of what a throw
 				// throws decides no loop's turn (JavaResumable)
@@ -1542,8 +1654,7 @@ final class JavaWitImports {
 			String wait = this.binding + "." + nativeFor(member.name() + "-wait", 1, raw);
 			JavaType argument = Objects.requireNonNull(JavaWitTypes.argument(bound.method().returnType));
 			JavaBoundary.Type value = raw ? Objects.requireNonNull(result).element() : result;
-			String valueText = value == null ? "java.lang.Void"
-					: JavaWitTypes.javaText(this.imported.declaration(), value, true, argument, false);
+			String valueText = value == null ? "java.lang.Void" : text(value, true, argument);
 			String what = member.name() + " of " + this.imported.id();
 			String v = VALUES;
 			StringBuilder text = new StringBuilder();

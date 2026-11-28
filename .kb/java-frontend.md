@@ -1449,8 +1449,27 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   `<Home>$Wit.R<n>`). `wasi:http/client`'s `send` needs it. So an import's `resources` holds
   every member interface named after a resource of its WIT, reached by its own methods or
   not (checked, a class written; unreached it is not lowered: the eight outputs below
-  byte-identical). A value type taken with `use` stays a member type of the using interface
-  (`.todo/n01`).
+  byte-identical).
+- **A type of another interface** (a record, a variant, an enum, flags; `use`, or nested in
+  one): told by its shape's `home` (`Checker.foreign`). The type written decides
+  (`Checker.foreignType`): the member type of the `@WitImport` interface standing for
+  `home`, or the using interface's own of the definition's name. None written (an error arm
+  thrown): the own one if declared, else the unique one of the interfaces standing for
+  `home` (`homeTypes`, found by the annotation's `value` before `of`; an interface under
+  check skipped, else a check asking for its caller recurses), kept in `Import.types` for
+  the binding (`Writer.classOf`). Unlike a resource, two classes for one type may meet in
+  one interface: a converter is keyed by the type written (`Converters.memberClass`).
+  `Description.used` stays resources only: the scaffold follows it to the interfaces it
+  declares, and a value type needs no import of its own. The scaffold still declares a used
+  value type in the using interface (`.todo/n25`). Measured 2026-11-28 (wasmtime 51): the test's HTTP
+  client with `Client`'s copy of `error-code` (39 cases, 3 records) dropped 307,528 ->
+  286,946 B (gzip 93,223 -> 89,621); 15 outputs byte-identical (`PageHits`, `page-hits`
+  Lisp and Clojure, `Shapes` and the two Lisp shapes programs, `Counters`, the Lisp and
+  Clojure counters, the resource app, `Echo.java`, `analyzer.lisp`, both pipeline programs,
+  the HTTP client with its copy). Pins: `JavaWitImportTest.everyKindOfValueCrossesWasmtimesOwnInterfaces`
+  (`send`'s error arm caught as `Types.ErrorCode.InternalError`),
+  `.theDeclarationsAreCheckedAgainstTheWitTheyName` (a written `Types.ErrorCode` accepted, a
+  wrong one refused).
 - **An HTTP client over `wasi:http@0.3.0`** (measured 2026-11-27, wasmtime 51, against
   `wasmtime serve`): a GET of a Java program 304,488 B / 91,644 gzip; in a thread (asyncMode)
   too. wasmtime reads a request's BODY within `client.send`, so a body written before the
