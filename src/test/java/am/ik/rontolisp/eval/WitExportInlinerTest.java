@@ -335,6 +335,51 @@ class WitExportInlinerTest {
 					+ "exports the flat types alone (s8, s16, s32, s64, u8, u16, u32, u64, f64, bool, string)");
 		cli.run(new String[] { words.toString(), "-o", out, "--no-wasi", "--emit-js-glue" });
 		assertThat(this.tempDir.resolve("words.js")).content().contains("countVowels: make$countVowels(");
+		// A resource of an interface the world does not export is the component's
+		// import, with that interface: a --no-wasi component, which imports nothing,
+		// refuses it.
+		Files.writeString(this.tempDir.resolve("handles.wit"), """
+				package root:component;
+
+				interface store {
+				  resource blob;
+				}
+
+				world root {
+				  use store.{blob};
+				  export size: func(b: borrow<blob>) -> u32;
+				}
+				""");
+		Path handles = this.tempDir.resolve("handles.lisp");
+		Files.writeString(handles, "(defun size (b) b)\n(rontolisp:wit-export \"handles.wit\")");
+		assertThatThrownBy(() -> cli.run(new String[] { handles.toString(), "-o",
+				this.tempDir.resolve("handles.wasm").toString(), "--component", "--no-wasi" }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("handles.wit:9: the world's exports name the resource 'blob' of "
+					+ "root:component/store, which the component imports with that interface: --no-wasi asks for a "
+					+ "component that imports nothing; drop --no-wasi");
+		// Nor does a component take one of its own WASI surface, which it imports for
+		// itself.
+		Files.writeString(this.tempDir.resolve("handles.wit"), """
+				package root:component;
+
+				world root {
+				  use wasi:filesystem/types@0.3.0.{descriptor};
+				  export size: func(b: borrow<descriptor>) -> u32;
+				}
+
+				package wasi:filesystem@0.3.0 {
+				  interface types {
+				    resource descriptor;
+				  }
+				}
+				""");
+		assertThatThrownBy(() -> cli.run(new String[] { handles.toString(), "-o",
+				this.tempDir.resolve("handles.wasm").toString(), "--component" }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("the world's exports name the resource 'descriptor' of 'wasi:filesystem/types@0.3.0', an "
+					+ "interface the component imports as part of its own WASI surface, whose types an export does "
+					+ "not take");
 	}
 
 	@Test

@@ -44,16 +44,19 @@ import org.jspecify.annotations.Nullable;
  * declares the copy and imports no instance for it -- {@code wasm-tools component new}
  * imports the other interface's instance and aliases the type out of it, which
  * {@code wasm-tools component targets} does not ask for. A type this boundary does not
- * carry (a stream, a future, a handle of a resource the scope does not declare) is left
- * out, with every type that mentions it; a function naming one was refused when the world
- * was lowered ({@code WitExportDirective}).
+ * carry (a stream, a future, a handle of a resource the scope does not name) is left out,
+ * with every type that mentions it; a function naming one was refused when the world was
+ * lowered ({@code WitExportDirective}).
  *
  * <p>
  * <strong>A resource of an exported interface</strong> is a type the component defined
- * before its core module was instantiated ({@link ExportedResources}), so the space is
- * told its index ({@link Space#define}); a shim imports it ({@code (sub resource)}) ahead
- * of everything else and exports that import under the resource's name. A named type in a
- * value position that is a resource is an owned handle of it.
+ * before its core module was instantiated ({@link ExportedResources}), and <strong>one of
+ * an interface the component imports</strong> a type it aliased out of that instance
+ * ({@code WasmComponentBuilder.appendUserImports}): either way the space is told its
+ * index ({@link Space#define}). A shim imports it ({@code (sub resource)}) ahead of
+ * everything else and exports that import under the resource's name; a world's use clause
+ * imports it under the clause's name, equal to the type held. A named type in a value
+ * position that is a resource is an owned handle of it.
  */
 final class WitExportTypes {
 
@@ -216,11 +219,12 @@ final class WitExportTypes {
 	/**
 	 * The type definitions of a scope a component declares, in wasm-tools' order:
 	 * definition order, except that a type waits until every type it mentions has been
-	 * declared (the earliest-defined type that can go, goes). A {@code use} clause an
-	 * exported interface still holds names resources of another exported interface: it is
-	 * declared where it stands, once, and gives the scope each of its names. A world's
-	 * own clause, and a resource the world declares, are imports of the component, which
-	 * declares none.
+	 * declared (the earliest-defined type that can go, goes). A {@code use} clause still
+	 * in the scope names resources -- of another exported interface, or of one the
+	 * component imports: it is declared where it stands, once, and gives the scope each
+	 * of its names. A world's own clause names only resources a function of the world
+	 * reaches ({@code WitExportDirective} cuts it to those), each a type import of the
+	 * component; a resource the world declares is an import the component leaves out.
 	 * @param abi the calculator scoped to the scope
 	 * @param exported whether the scope is an exported interface's, not the world's
 	 * @return the definitions, and the clauses
@@ -229,7 +233,7 @@ final class WitExportTypes {
 		LinkedHashMap<String, WitItem> candidates = new LinkedHashMap<>();
 		for (WitItem item : abi.scope().items()) {
 			switch (item) {
-				case WitItem.Use use when exported -> namesOf(use).forEach(name -> candidates.put(name, use));
+				case WitItem.Use use -> namesOf(use).forEach(name -> candidates.put(name, use));
 				case WitItem.TypeAlias alias -> candidates.put(alias.name(), item);
 				case WitItem.RecordDef record when !record.fields().isEmpty() -> candidates.put(record.name(), item);
 				case WitItem.VariantDef variant -> candidates.put(variant.name(), item);
@@ -376,21 +380,19 @@ final class WitExportTypes {
 	}
 
 	// A resource of the scope where the space does not hold it yet: a shim's first half
-	// imports it, its second half exports that import. The component itself defined
-	// the type ahead of its core module (Space.define) -- under the interface that
-	// declares it, which another's use clause names --, and a world has none.
+	// imports it, its second half exports that import. The component itself holds the
+	// type (Space.define) under the interface that declares it, which another's use
+	// clause names: one it defined ahead of its core module, or one it aliased out of
+	// the instance it imports of that interface. A world's clause names the second
+	// kind: the world imports the type, equal to the aliased one, under the clause's
+	// name.
 	private static int resource(Space space, Naming naming, Scope scope, String name) {
 		return switch (naming) {
-			case BARE -> {
-				WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
-				String owner = scope.abi().resolver().canonicalId(owned.owner());
-				Integer defined = owner == null ? null
-						: space.named.get(owner + "#" + WitComponentTypeEncoder.definedNameOf(owned.item()));
-				if (defined == null) {
-					throw new IllegalStateException(
-							"the resource '" + name + "' of " + scope.name() + " is defined by no component");
-				}
-				yield defined;
+			case BARE -> held(space, scope, name);
+			case WORLD_IMPORT -> {
+				space.sink.accept(ComponentWriter.SEC_IMPORT,
+						ComponentWriter.importTypeEq(name, held(space, scope, name)));
+				yield space.next++;
 			}
 			case SHIM_IMPORT -> {
 				space.sink.accept(ComponentWriter.SEC_IMPORT,
@@ -403,9 +405,21 @@ final class WitExportTypes {
 						Objects.requireNonNull(space.importing).named(scope.name(), name)));
 				yield space.next++;
 			}
-			default -> throw new IllegalStateException(
-					"the resource '" + name + "' of " + scope.name() + " is defined by no component");
 		};
+	}
+
+	// The type the component holds for a resource a scope names: by the interface that
+	// declares it.
+	private static int held(Space space, Scope scope, String name) {
+		WitResolver.Owned owned = scope.abi().resolveOwned(new WitType.Named(name));
+		String owner = scope.abi().resolver().canonicalId(owned.owner());
+		Integer defined = owner == null ? null
+				: space.named.get(owner + "#" + WitComponentTypeEncoder.definedNameOf(owned.item()));
+		if (defined == null) {
+			throw new IllegalStateException(
+					"the resource '" + name + "' of " + scope.name() + " is defined by no component");
+		}
+		return defined;
 	}
 
 	// Whether a name of the scope is a resource's, by whatever alias: in a value

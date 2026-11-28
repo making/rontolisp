@@ -212,11 +212,17 @@ final class WitEmitter {
 			items.addAll(firstExport, importItems);
 			// An export of the world's own function that is typed from its WIT declares
 			// the world's named types (type imports of the component), which the tool
-			// prints with the imports.
+			// prints with the imports: a use clause -- the resources the component
+			// imports for the world's functions -- ahead of the definitions, whatever
+			// the order of the type imports.
 			for (WasmExportCompiler.Decl decl : flat) {
 				WitExportSignature wit = decl.typing();
 				if (wit != null) {
-					items.addAll(firstExport + importItems.size(), WitExportTypes.declared(wit.abi(), false));
+					List<WitItem> declared = WitExportTypes.declared(wit.abi(), false);
+					List<WitItem> ordered = new ArrayList<>();
+					declared.stream().filter(WitItem.Use.class::isInstance).forEach(ordered::add);
+					declared.stream().filter(item -> !(item instanceof WitItem.Use)).forEach(ordered::add);
+					items.addAll(firstExport + importItems.size(), ordered);
 					break;
 				}
 			}

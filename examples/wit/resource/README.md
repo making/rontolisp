@@ -1,9 +1,11 @@
-# wit/resource -- a resource a component exports
+# wit/resource -- a resource a component exports, and one that takes it
 
 [`counters.lisp`](counters.lisp) implements the world `counters` of
 [`wit/counters.wit`](wit/counters.wit): the interface `registry` declares the
 resource `counter`, and the interface `report` takes one in a function of its own.
 [`app.lisp`](app.lisp) uses both from another component.
+[`reporter.lisp`](reporter.lisp) implements `report` a second time, in a component
+of its own that imports `registry` (the world `reporter`).
 
 A resource is implemented with ordinary functions, and the value its constructor
 answers is the resource:
@@ -48,6 +50,31 @@ RONTOLISP=../../../target/rontolisp ./build.sh
 
 It needs [`wac`](https://github.com/bytecodealliance/wac) (`cargo install wac-cli`)
 and `wasmtime` 46+.
+
+## A component that takes a resource it imports
+
+`reporter.lisp` exports `report` and imports `registry`, so its `counter` is a
+resource the component imports: a handle there is the integer
+`rontolisp:wit-import` takes, as in `app.lisp`, and `summary` reads the counter
+through `reg:counter-read`. A borrowed handle is lent for the call, and the export
+releases it when `summary` has answered.
+
+```lisp
+(rontolisp:wit-import "wit/counters.wit"
+                      :interface "example:counters/registry"
+                      :package reg)
+
+(defun summary (c)
+  (let ((reading (reg:counter-read c)))
+    (format nil "~a is at ~d" (getf reading :name) (getf reading :value))))
+
+(rontolisp:wit-export "wit/counters.wit" :world reporter :reactor t)
+```
+
+The second half of `build.sh` wires three components with
+[`composition.wac`](composition.wac): the reporter and the command both import
+`registry` from the one `counters` instance, and the command's `report` comes from
+the reporter. It prints the same lines again.
 
 `rontolisp counters.lisp -o counters.wasm --component --emit-wit` writes the world
 the component has: `registry` with its resource, and `report` naming it with

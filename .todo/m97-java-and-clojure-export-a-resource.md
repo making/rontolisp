@@ -19,5 +19,10 @@ ends refuse the world.
 - `describe` gives a handle's shape as `HANDLE` with `resource` and `borrow`; an export's
   handle of an exported resource is the value, which the front end must tell from an
   imported one's integer.
+- A handle of a resource the component imports (`.kb/wit.md`, "A resource the component
+  imports") crosses a Common Lisp export as that integer; `describe` refuses it for the
+  front ends (`WitExportDirective.NOT_IMPORTED`). Java's natural value is the object of the
+  `@WitImport` member interface standing for the resource, Clojure's the integer; the
+  wrapper already releases a borrowed one.
 - Docs: `doc/en/java/wit.md` and `doc/ja/java/wit.md` ("The types of an export",
   Limitations), `doc/*/clojure/reference/wit.md`.

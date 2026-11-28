@@ -9,6 +9,7 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.wasm.Type;
 import am.ik.wit.WitFunc;
 import am.ik.wit.WitItem;
+import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
 import org.jspecify.annotations.Nullable;
@@ -93,6 +94,159 @@ record WitExportSignature(WitCanonicalAbi abi, WitFunc func, boolean ofWorld, St
 			break;
 		}
 		return interfaces;
+	}
+
+	/**
+	 * What a world's exports name of an interface the component imports: the resources
+	 * whose types their signatures name, which the component takes from that interface's
+	 * instance, and those an export's parameter borrows -- a borrowed handle of a
+	 * resource another component implements is one more in this instance's handle table,
+	 * which the export must release before it returns (wasmtime traps "borrow handles
+	 * still remain at the end of the call").
+	 *
+	 * @param ifaceId the interface's id
+	 * @param iface the interface, as the world's document defines it
+	 * @param resolver the resolver over that document
+	 * @param types the resources' names in the interface, in the order the world names
+	 * them
+	 * @param borrowed the names of those an export's parameter borrows
+	 * @param at the WIT file and line of the first export that names one
+	 * ({@code path:line})
+	 */
+	record Imported(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<String> types,
+			List<String> borrowed, String at) {
+	}
+
+	/**
+	 * Lists what the exports of a world name of the interfaces the component imports
+	 * ({@link Imported}): a resource an exported interface names in a {@code use} clause
+	 * of an interface the world does not export -- whether or not a function takes it,
+	 * since the interface exports the type -- and one a {@code use} clause of the world
+	 * names, which only a function of the world reaches ({@code WitExportDirective} cuts
+	 * the clause to those).
+	 * @param decls the exports
+	 * @return one entry per interface, in the order the world names them; none when no
+	 * export says what its world is
+	 */
+	static List<Imported> importedResources(List<WasmExportCompiler.Decl> decls) {
+		Map<String, Imported> found = new LinkedHashMap<>();
+		java.util.Set<String> exported = new java.util.HashSet<>();
+		boolean interfaces = false;
+		for (WasmExportCompiler.Decl decl : decls) {
+			WitExportSignature typing = decl.typing();
+			if (typing == null) {
+				continue;
+			}
+			if (!interfaces) {
+				interfaces = true;
+				typing.worldInterfaces().forEach(iface -> exported.add(iface.id()));
+				for (WitExportDirective.InterfaceExport iface : typing.worldInterfaces()) {
+					WitExportSignature first = decls.stream()
+						.map(WasmExportCompiler.Decl::typing)
+						.filter(java.util.Objects::nonNull)
+						.filter(other -> iface.id().equals(other.scopeName()))
+						.findFirst()
+						.orElse(typing);
+					used(typing.abi().scopedTo(iface.scope()), exported, false, first, found);
+				}
+			}
+			if (typing.ofWorld()) {
+				used(typing.abi(), exported, true, typing, found);
+			}
+			if (typing == decl.wit()) {
+				for (WitFunc.Param param : typing.func().params()) {
+					typing.borrows(param.type(), typing.abi(), exported, found, new java.util.HashSet<>());
+				}
+			}
+		}
+		return List.copyOf(found.values());
+	}
+
+	// The resources a scope's use clauses name of interfaces the component imports: in a
+	// world, every one (a world's clause imports the interface it names); in an exported
+	// interface, those of an interface the world does not export.
+	private static void used(WitCanonicalAbi abi, java.util.Set<String> exported, boolean world, WitExportSignature by,
+			Map<String, Imported> found) {
+		for (WitItem item : abi.scope().items()) {
+			if (item instanceof WitItem.Use use) {
+				for (WitItem.UseName name : use.names()) {
+					WitResolver.Owned owned = abi.resolver()
+						.resolveOwned(abi.scope(), name.alias() == null ? name.name() : name.alias());
+					if (owned != null && owned.item() instanceof WitItem.ResourceDef) {
+						imported(abi, owned, exported, world, false, by, found);
+					}
+				}
+			}
+		}
+	}
+
+	// Records a resource of an interface the component imports; one of an exported
+	// interface, named from an interface, is the component's own.
+	private static void imported(WitCanonicalAbi abi, WitResolver.Owned owned, java.util.Set<String> exported,
+			boolean world, boolean borrowed, WitExportSignature by, Map<String, Imported> found) {
+		String ifaceId = abi.resolver().canonicalId(owned.owner());
+		if (ifaceId == null || !world && exported.contains(ifaceId)) {
+			return;
+		}
+		String name = WitComponentTypeEncoder.definedNameOf(owned.item());
+		Imported was = found.get(ifaceId);
+		List<String> types = new ArrayList<>(was == null ? List.of() : was.types());
+		List<String> borrows = new ArrayList<>(was == null ? List.of() : was.borrowed());
+		if (!types.contains(name)) {
+			types.add(name);
+		}
+		if (borrowed && !borrows.contains(name)) {
+			borrows.add(name);
+		}
+		found.put(ifaceId,
+				was != null
+						? new Imported(ifaceId, was.iface(), was.resolver(), List.copyOf(types), List.copyOf(borrows),
+								was.at())
+						: new Imported(ifaceId, owned.owner(), abi.resolver(), List.copyOf(types), List.copyOf(borrows),
+								by.at()));
+	}
+
+	// The resources of interfaces the component imports that a parameter of this export
+	// borrows, wherever it nests.
+	private void borrows(@Nullable WitType type, WitCanonicalAbi abi, java.util.Set<String> exported,
+			Map<String, Imported> found, java.util.Set<WitItem> walking) {
+		switch (type) {
+			case null -> {
+			}
+			case WitType.BorrowOf borrow -> {
+				WitResolver.Owned owned = abi.resolveOwned(new WitType.Named(borrow.resource()));
+				if (owned.item() instanceof WitItem.ResourceDef) {
+					imported(abi, owned, exported, this.ofWorld, true, this, found);
+				}
+			}
+			case WitType.Named named -> {
+				WitResolver.Owned owned = abi.resolveOwned(named);
+				if (!walking.add(owned.item())) {
+					return;
+				}
+				WitCanonicalAbi in = abi.scopedTo(owned.owner());
+				switch (owned.item()) {
+					case WitItem.TypeAlias alias -> borrows(alias.target(), in, exported, found, walking);
+					case WitItem.RecordDef record ->
+						record.fields().forEach(field -> borrows(field.type(), in, exported, found, walking));
+					case WitItem.VariantDef variant ->
+						variant.cases().forEach(c -> borrows(c.payload(), in, exported, found, walking));
+					default -> {
+					}
+				}
+				walking.remove(owned.item());
+			}
+			case WitType.ListOf list -> borrows(list.element(), abi, exported, found, walking);
+			case WitType.OptionOf option -> borrows(option.element(), abi, exported, found, walking);
+			case WitType.ResultOf res -> {
+				borrows(res.ok(), abi, exported, found, walking);
+				borrows(res.err(), abi, exported, found, walking);
+			}
+			case WitType.TupleOf tuple ->
+				tuple.elements().forEach(element -> borrows(element, abi, exported, found, walking));
+			default -> {
+			}
+		}
 	}
 
 	/**

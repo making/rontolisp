@@ -305,21 +305,23 @@ public final class WitPrinter {
 	}
 
 	// Which world members group together without a separating blank line: consecutive
-	// imports, consecutive exports; everything else is its own group.
+	// imports and the use clauses after them (a world's clause is a type import of the
+	// interface it names, which wasm-tools prints among the imports), consecutive
+	// exports; everything else is its own group.
 	private static int worldGroup(WitItem item) {
 		return switch (item) {
 			case WitItem.ImportRef ignored -> 1;
 			case WitItem.ImportNamed ignored -> 1;
+			case WitItem.Use ignored -> 1;
 			case WitItem.ExportRef ignored -> 2;
 			case WitItem.ExportNamed ignored -> 2;
 			case WitItem.Include ignored -> 3;
-			case WitItem.Use ignored -> 4;
 			default -> OWN_GROUP;
 		};
 	}
 
 	// A type definition of a world: a group by itself, a blank line on either side.
-	private static final int OWN_GROUP = 5;
+	private static final int OWN_GROUP = 4;
 
 	// The source spelling of an identifier: %-escaped iff it collides with a WIT keyword
 	// (the model holds the bare name; see WitIdentifiers).

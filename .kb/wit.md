@@ -38,7 +38,8 @@ The ONE vocabulary the binders consult, pinned by `WitTypeMapperTest` (the decis
 reversing a cell is a breaking change). `record`=keyword plist, `enum`=keyword, `variant`=tagged
 list, `flags`=keyword list (the labels set), `option<T>`=value-or-nil, `tuple`=list,
 `resource`/`borrow`/`own`=opaque integer handle (`.kb/read-load-streams.md`; the value itself
-in the program that EXPORTS the resource, "A resource the world exports"), `s64`/`u64`
+in the program that EXPORTS the resource, "A resource the world exports"; the integer in an
+export of one the component imports, "A resource the component imports"), `s64`/`u64`
 bignum-safe.
 
 **`result<T, E>` = a condition on EVERY backend.** Ok arm = the return value (payload-less ok ->
@@ -190,9 +191,10 @@ exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is no
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
 types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); a resource's
-function or destructor that the program gets wrong, and a resource where the output is no
-component of the default backend ("A resource the world exports"); a `use` clause whose type
-cannot be named in the scope ("A type of another interface").
+function or destructor that the program gets wrong, and a resource -- exported or imported --
+where the output is no component of the default backend ("A resource the world exports", "A
+resource the component imports"); a `use` clause whose type cannot be named in the scope ("A
+type of another interface").
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
 ### Compound types across an export — the canonical form
@@ -259,7 +261,7 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   it as any export (`:async` is a component's). `flip: async func(point) -> point` 1,938 B /
   1,126 gzip against the sync 1,881 / 1,098 (the held mark, wasi-component.md).
 - **Refused at the WIT line** (`requireCanonical`): a stream, a future, a handle of a
-  resource the world does not export; `--no-gc`, which has no value a record could be (no
+  resource the world declares; `--no-gc`, which has no value a record could be (no
   cons). In the compiler,
   which knows the output's shape: a WASI Preview 1 module (its host, wasmtime, calls a core
   export with core values) and `--reentrant` (the answer waits on the bump heap for the glue).
@@ -373,7 +375,7 @@ the marshalling, `WitExportTypes` and `WitEmitter` needed no change.
   by another type is refused at the clause's line, with `as`.
 - **A resource is nominal**: a name whose definition is one, or holds a handle, stays a `use`
   clause (path rewritten to the full id, since the scope answered is in no package). What the
-  clause then is: "A resource the world exports".
+  clause then is: "A resource the world exports", or "A resource the component imports".
 - `--emit-wit` prints the scope with the copies (the tool's reading of the component), not the
   `use`.
 - Pins: `WitResolverTest.writesAUseClauseOutAsTheDefinitionsItNames`,
@@ -430,11 +432,9 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
 - An `async func` of a resource is the sync form with `:async t`, like any export's. Measured
   2026-11-27 with a `:blocking t` Lisp importer, both component shapes: async methods and a
   static async function taking an owned handle and a borrowed one of another interface.
-- **Refused**: a `use` of a resource of an interface the world does not export, at the
-  interface (function or not: the component would lack the type; the tool imports the
-  instance, `.todo/m95`); a used type holding a handle; a world's own `use` of a resource or
-  `resource` (imports of the component; a clause alone is left out); a core module and
-  `--no-gc` (`.todo/m96`); `describe`, so the Java and Clojure front ends (`.todo/m97`).
+- **Refused**: a used type holding a handle; a core module and `--no-gc` (`.todo/m96`);
+  `describe`, so the Java and Clojure front ends (`.todo/m97`). A resource of an interface the
+  world does not export: "A resource the component imports".
 - `--emit-wit` prints the resource with its functions (no docs) and the residual `use`, bare
   inside its own package: byte-identical to the tool.
 - Measured (2026-11-26, wasmtime 51, wasm-tools 1.263.0): composed with a Lisp importer,
@@ -453,6 +453,72 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...` (emitted WIT = the tool's, `targets`,
   both world orders) / `.aComponentCallsWhatAnotherExportsOverCompoundTypes`
   (`examples/wit/resource` composed, both component shapes), `examples.yaml`'s `wit/resource`.
+
+### A resource the component imports
+**Invariant: a resource of an interface the world does not export, named by an exported
+interface's `use` clause or by one of the world's own, is an IMPORT of the component: the
+interface is an instance import, the resource type is aliased out of it for the exports, and a
+handle crosses as the integer a `wit-import` binding takes -- the program calls the resource
+through such a binding.** A component of the default backend; the interpreter and the JVM check
+the contract and export nothing.
+
+- **Shape** (the tool's, read off `wasm-tools component new` 1.263.0 probes): the instance type
+  declares what the program binds of the interface and the resources the exports name
+  (`Import.exportUses`, from `WitExportSignature.importedResources`), and of those alone when
+  nothing is bound (`(instance (export "blob" (type (sub resource))))`). `appendUserImports`
+  aliases each out (`Appended.exportTypes`), and the export wiring holds it by
+  `<iface>#<resource>` like an exported resource's type (`Space.define`): a shim imports it as
+  one `import-type-<name>` (the tool adds an `eq` `import-type-<name>0`), a world's clause is
+  `(import "<local>" (type (eq <aliased>)))`. A `wit-import` of the interface shares the one
+  instance import (`withExportUses`), so a handle the export gets is one the binding calls.
+- **A borrowed handle is released before the export returns**: lowered into this instance's
+  table, it counts against the task, and wasmtime 51 traps `borrow handles still remain at the
+  end of the call` (measured 2026-11-28, a hand-written prober without its drop; with it, it
+  runs). The lift conses each borrowed handle of an imported resource onto a list per resource
+  as it lifts it, wherever it nests (`Gen.emitRecordBorrow`), and the wrapper drops them once
+  the function has answered, before the result is lowered (`ExportMarshal.releaseBorrows`),
+  through the core import `[resource-drop]<r>` of module `<iface>` -- a binding's `<r>-drop`
+  field, one slot. So the program does not drop a borrowed handle (the index may name another
+  handle by then). An owned handle received is the program's to keep, hand on or drop; one
+  answered is the caller's. Cost: 145 B raw / 72 gzip (`reporter.lisp` 11,570 / 5,668 against
+  11,425 / 5,596 for the same function over an owned handle).
+- **A world's own clause is cut to what a function of the world reaches**
+  (`WitExportDirective.reachedUses`): the tool imports the instance for any world-level `use`;
+  here an unreached name imports nothing, so a `--component --no-wasi` world keeps compiling.
+  The tool prints a world's `use` among its imports, after every interface import and before
+  its types, whatever the binary order (`WitPrinter.worldGroup`, `WitEmitter`); `--emit-wit`
+  is the tool's reading byte for byte.
+- **Refused**: a resource the world declares (its functions are inline imports of the world,
+  which `wit-import` does not bind); a world's clause naming a resource of an interface the
+  world exports (the clause imports that interface: no program means the imported one);
+  `--component --no-wasi` (it imports nothing: `WasmLispCompiler`, at the export's WIT line);
+  a resource of an interface on the component's own WASI surface
+  (`rejectAdapterImportCollisions`, the variant's whole world, as for a binding); a core module
+  and `--no-gc` (at the WIT line); `describe` (`NOT_IMPORTED`, `.todo/m97`).
+- Hosts measured (2026-11-28, wasmtime 51.0.0, wasm-tools 1.263.0, wac 0.12.0):
+  `examples/wit/resource`'s app <- reporter <- counters, through `wasm-tools compose -c` (its
+  `instantiations` wire a dependency's import to another dependency; `-d` alone wires none)
+  and through `wac compose` (`composition.wac`), prints what the interpreter prints; a relay
+  of a list of borrows, a borrow in a record, owned handles in a list and out in an option and
+  a result, and an async func sleeping on a borrow, answers in place, `live` back at 0.
+  `wasm-tools compose` PANICS (`AliasableResourceId ... TypeEncoder::component_entity_type`)
+  on a component whose world-level function names such a resource -- the tool's own component
+  too --; `wac` composes it given the world's type import (`counter:
+  provider[...].counter`; with `...` alone "resource types are not the same", the tool's
+  component too), and a hand-written caller drove the world functions: a borrow released, an
+  owned handle answered and dropped. `targets` accepts the component when it imports nothing
+  else (a program reaching no WASI: `reduce`/`mapcar` bring stdout); a printing `--component`
+  imports WASI, which the world does not.
+- Byte-identical before and after: 36 components and their WIT (count-vowels, shapes,
+  counters, rust-calls-lisp, stats, memory-store on `--component`, `--no-wasi`, `--optimize`;
+  the resource, shapes and pipeline apps, page-hits in Lisp, Java and Clojure,
+  lisp-calls-rust, the Java shapes, on two), a Preview 1, a `--no-gc` and a `--no-wasi` module
+  and its glue.
+- Pins: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`,
+  `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`,
+  `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...` (reporter, `peeking`, `untouched`;
+  `targets`) / `.aComponentCallsWhatAnotherExportsOverCompoundTypes` (the reporter and the
+  relay composed), `examples.yaml`'s `wit/resource/reporter.lisp`.
 
 ### The integer boundary — the exact-or-trap rule (`compiler/BoundaryType`)
 **The vocabulary IS the WIT spelling**: `:s8`..`:u64`, plus `:float` (f64 -- no internal f32,

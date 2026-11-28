@@ -49,9 +49,10 @@ final class ComponentExportWiring {
 	 * @param nextComponentInstance the first free component instance index; each exported
 	 * interface consumes one
 	 * @param forceAsync whether every export is lifted against an async function type
-	 * @param resourceTypes the component type index of each resource the world exports,
-	 * by {@code <interface id>#<resource>} ({@link ExportedResources}); empty for a world
-	 * that exports none
+	 * @param resourceTypes the component type index of each resource the world exports
+	 * ({@link ExportedResources}) and of each one the exports name that the component
+	 * imports, aliased out of its instance, by {@code <interface id>#<resource>}; empty
+	 * for a world that names none
 	 */
 	static void append(ComponentWriter c, List<Lifted> exported, int memory, int realloc, int nextType,
 			int nextComponentFunc, int nextComponentInstance, boolean forceAsync, Map<String, Integer> resourceTypes) {
@@ -157,8 +158,11 @@ final class ComponentExportWiring {
 			for (String type : shim.importedTypes()) {
 				argNames.add("import-type-" + type);
 				argSorts.add(ComponentWriter.SORT_TYPE);
+				// a resource of another exported interface is that instance's export; one
+				// of an interface the component imports is the type aliased out of the
+				// import, which the space holds
 				WitExportTypes.Foreign foreign = WitExportTypes.foreign(scope, type);
-				if (foreign != null) {
+				if (foreign != null && ifaceGroups.containsKey(foreign.ifaceId())) {
 					used.add(new Used(argIndices.size(), foreign));
 				}
 				argIndices.add(WitExportTypes.bare(space, scope, type));

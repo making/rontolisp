@@ -37,3 +37,9 @@ world counters {
   export registry;
   export report;
 }
+
+/// A component that reports on the counters another component keeps.
+world reporter {
+  import registry;
+  export report;
+}

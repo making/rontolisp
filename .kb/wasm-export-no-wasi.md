@@ -121,8 +121,9 @@ sees `defparameter` globals assigned.
   `Ctx.reactorComponent` = the raw shape `Ctx.component` deliberately reports as false; `asyncMode`
   off. The CLI gates the five wasi:*-binding library splices (http/wait/sockets/stdin/environment) as
   ONE decision (`spliceBackend` = `WASM_GC` for a reactor) and the compiler enforces it
-  (`componentImports` non-empty + reactor = an error naming the interface); serve + `--no-wasi` = a
-  ctor hard error. `reactor = noWasi || noGc` in the CLI, so `#+rontolisp-reactor` selects the
+  (`componentImports` non-empty + reactor = an error naming the interface; so does a world whose
+  exports name a resource the component would import, [wit.md](wit.md), "A resource the
+  component imports"); serve + `--no-wasi` = a ctor hard error. `reactor = noWasi || noGc` in the CLI, so `#+rontolisp-reactor` selects the
   reactor branch under the component too.
 - **Trap**: a trap in a top-level form kills INSTANTIATION; no `_initialize` exists to wrap in
   try/catch, so what a top-level form may hit is decided by the stub policy.

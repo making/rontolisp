@@ -208,6 +208,9 @@ and the value the constructor answers is the resource -- the host holds a handle
 of it, and a function that takes a `counter` receives that value
 ([Resources](../reference/functions/rontolisp-wit-export.md#resources),
 [`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)).
+A resource of an interface the world only imports crosses as well, as the integer
+handle `wit-import` takes: the component imports the interface for it
+([A resource the component imports](../reference/functions/rontolisp-wit-export.md#a-resource-the-component-imports)).
 
 A WASI module (`-o out.wasm` alone) and `--no-gc` export the flat types alone:
 its host calls a function of core values, which have no type to state a record

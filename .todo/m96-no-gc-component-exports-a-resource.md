@@ -18,3 +18,7 @@ can be the integer the constructor answers, with no store: an owned handle answe
   export took in (the default backend marks the slot; here a flag in linear memory).
 - A `--no-wasi` core module (no component) has no resource type at all: its JavaScript glue
   would have to make the handle table. Not part of this item unless measured cheap.
+- A handle of a resource the component imports (`.kb/wit.md`, "A resource the component
+  imports") would be a plain `i32` on this backend too, but `--no-gc --component`'s
+  `wit-import` binds no resource (`validateNoGcComponentFunc`), so nothing could call it:
+  the two go together.

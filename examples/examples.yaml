@@ -1378,6 +1378,17 @@ examples:
       the resource type, its built-ins and its destructor); jvm-compile that the
       same contract check runs on a backend exporting nothing. Called by app.wasm
       once composed, so the harness only compiles
+  - path: wit/resource/reporter.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      implements the world reporter of wit/counters.wit: it imports registry and
+      exports report, so its counter is a resource the component imports, a handle
+      the integer a wit-import of registry takes. wasm-component pins that the world
+      lowers (the component imports registry for the type, the export releases the
+      handle it was lent); jvm-compile that the contract check passes on a backend
+      exporting nothing. Called by app.wasm once composed with counters.wasm
+      (build.sh, composition.wac; WitOracleE2eTest composes and compares), so the
+      harness only compiles
   - path: wit/resource/app.lisp
     backends: [interpreter, jvm, wasm-component]
     note: >-

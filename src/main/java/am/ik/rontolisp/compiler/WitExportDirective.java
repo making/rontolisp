@@ -45,7 +45,7 @@ import org.jspecify.annotations.Nullable;
  * <li>an export the world declares but the program does not define, or defines with a
  * different arity</li>
  * <li>a WIT type no export carries (a stream, a future, a handle of a resource the world
- * does not export), or one beyond the flat set (every fixed-width integer, {@code f64},
+ * declares), or one beyond the flat set (every fixed-width integer, {@code f64},
  * {@code bool} and {@code string} — see {@link BoundaryType}) where the output is no
  * component</li>
  * <li>an export name that is not a component-model label, or the reserved
@@ -70,7 +70,11 @@ import org.jspecify.annotations.Nullable;
  * named as an import of the interface binds them ({@code counter-new},
  * {@code counter-add}), and the value the constructor answers is the resource -- the
  * component keeps it behind the handle a host holds ({@code wit-resource.lisp}), and a
- * function taking or answering the resource takes or answers that value.
+ * function taking or answering the resource takes or answers that value. A resource of an
+ * interface the world does not export, which an exported interface or the world names
+ * with {@code use}, is one the component imports: its handle is the integer
+ * {@code rontolisp:wit-import} gives one, and a borrowed one is released when the
+ * function has answered.
  *
  * <p>
  * This directive covers the export side only. A world's {@code import} interface items
@@ -365,6 +369,16 @@ public final class WitExportDirective {
 				forms.addAll(destructorForms(ifaceId, resource, witPath, locations, item, defuns, backend, directive,
 						destructors));
 			}
+
+			@Override
+			public void imported(String use, WitItem item) {
+				if (backend != Backend.WASM_COMPONENT && backend != Backend.OTHER) {
+					throw error(witPath, locations, item,
+							use + IMPORTED_BY_A_COMPONENT + ": "
+									+ (backend.isNoGc() ? "the scalar backend exports the flat types alone"
+											: "a core module imports no resource type"));
+				}
+			}
 		});
 		// A function is what says the world to the backend: types alone -- a resource
 		// with no function among them, whose destructor is no function -- export nothing.
@@ -392,6 +406,12 @@ public final class WitExportDirective {
 
 		// A resource of an exported interface, ahead of its functions.
 		default void resource(String ifaceId, WitItem.ResourceDef resource, WitItem item) {
+		}
+
+		// A resource of an interface the world imports, which an exported interface
+		// names in a use clause, ahead of the interface's functions: `use` says so, for
+		// a refusal to complete.
+		default void imported(String use, WitItem item) {
 		}
 
 		// A world item a lenient walk refused, after whatever of it was visited.
@@ -452,7 +472,88 @@ public final class WitExportDirective {
 			}
 		}
 		return new Implemented(locations, resolver, world,
-				inlineUses(resolver, worldScope(world), false, witPath, locations), scopes);
+				reachedUses(resolver, inlineUses(resolver, worldScope(world), false, witPath, locations), world),
+				scopes);
+	}
+
+	// The world's own use clauses cut down to the names a function of the world reaches,
+	// through the world's types: what is still a clause there names a resource (or a
+	// type holding a handle, refused where a function names it), an import of the
+	// component -- of the interface that declares it, with the type --, so a name no
+	// export reaches is left out, and the component imports nothing for it.
+	private static WitItem.InterfaceDef reachedUses(WitResolver resolver, WitItem.InterfaceDef scope,
+			WitItem.World world) {
+		Set<String> reached = new java.util.HashSet<>();
+		for (WitItem item : world.items()) {
+			if (item instanceof WitItem.ExportNamed export
+					&& export.extern() instanceof WitItem.Extern.ExternFunc func) {
+				for (WitFunc.Param param : func.func().params()) {
+					reach(param.type(), resolver, scope, reached);
+				}
+				reach(func.func().result(), resolver, scope, reached);
+			}
+		}
+		List<WitItem> items = new ArrayList<>();
+		boolean cut = false;
+		for (WitItem item : scope.items()) {
+			if (!(item instanceof WitItem.Use use)) {
+				items.add(item);
+				continue;
+			}
+			List<WitItem.UseName> kept = use.names()
+				.stream()
+				.filter(name -> reached.contains(name.alias() == null ? name.name() : name.alias()))
+				.toList();
+			cut |= kept.size() != use.names().size();
+			if (kept.size() == use.names().size()) {
+				items.add(use);
+			}
+			else if (!kept.isEmpty()) {
+				items.add(new WitItem.Use(use.meta(), use.path(), kept));
+			}
+		}
+		return cut ? new WitItem.InterfaceDef(scope.meta(), scope.name(), List.copyOf(items)) : scope;
+	}
+
+	// Collects the names a type reaches in the world's scope, a definition of the world
+	// walked into.
+	private static void reach(@Nullable WitType type, WitResolver resolver, WitItem.InterfaceDef scope,
+			Set<String> reached) {
+		switch (type) {
+			case null -> {
+			}
+			case WitType.Named named -> {
+				if (!reached.add(named.name())) {
+					return;
+				}
+				WitResolver.Owned owned = resolver.resolveOwned(scope, named.name());
+				if (owned == null || owned.owner() != scope) {
+					return;
+				}
+				switch (owned.item()) {
+					case WitItem.TypeAlias alias -> reach(alias.target(), resolver, scope, reached);
+					case WitItem.RecordDef record ->
+						record.fields().forEach(field -> reach(field.type(), resolver, scope, reached));
+					case WitItem.VariantDef variant ->
+						variant.cases().forEach(c -> reach(c.payload(), resolver, scope, reached));
+					default -> {
+					}
+				}
+			}
+			case WitType.OwnOf own -> reached.add(own.resource());
+			case WitType.BorrowOf borrow -> reached.add(borrow.resource());
+			case WitType.ListOf list -> reach(list.element(), resolver, scope, reached);
+			case WitType.OptionOf option -> reach(option.element(), resolver, scope, reached);
+			case WitType.ResultOf res -> {
+				reach(res.ok(), resolver, scope, reached);
+				reach(res.err(), resolver, scope, reached);
+			}
+			case WitType.TupleOf tuple -> tuple.elements().forEach(element -> reach(element, resolver, scope, reached));
+			case WitType.StreamOf stream -> reach(stream.element(), resolver, scope, reached);
+			case WitType.FutureOf future -> reach(future.element(), resolver, scope, reached);
+			case WitType.Prim ignored -> {
+			}
+		}
 	}
 
 	// A scope with the value types its use clauses name written out as its own: a value
@@ -809,11 +910,11 @@ public final class WitExportDirective {
 	// such a world declares the types of every scope, so every export form carries the
 	// WIT; a world of flat functions over primitives is the hand-written export list.
 	private static boolean namesTypes(Implemented implemented, String witPath) {
-		if (definesTypes(implemented.worldScope(), false)) {
+		if (definesTypes(implemented.resolver(), implemented.worldScope(), false)) {
 			return true;
 		}
 		for (InterfaceExport export : interfaceExports(implemented)) {
-			if (definesTypes(export.scope(), true)) {
+			if (definesTypes(implemented.resolver(), export.scope(), true)) {
 				return true;
 			}
 		}
@@ -829,13 +930,23 @@ public final class WitExportDirective {
 	}
 
 	// `exported`: whether the scope is an exported interface's, whose resource the
-	// component defines; a world's own resource is an import it leaves out.
-	private static boolean definesTypes(WitItem.InterfaceDef scope, boolean exported) {
+	// component defines, and whose use clause of a resource names one it exports too; a
+	// world's own resource is an import it leaves out.
+	private static boolean definesTypes(WitResolver resolver, WitItem.InterfaceDef scope, boolean exported) {
 		for (WitItem item : scope.items()) {
 			if (item instanceof WitItem.TypeAlias || item instanceof WitItem.RecordDef
 					|| item instanceof WitItem.VariantDef || item instanceof WitItem.EnumDef
 					|| item instanceof WitItem.FlagsDef || exported && item instanceof WitItem.ResourceDef) {
 				return true;
+			}
+			if (exported && item instanceof WitItem.Use use) {
+				for (WitItem.UseName name : use.names()) {
+					WitResolver.Owned owned = resolver.resolveOwned(scope,
+							name.alias() == null ? name.name() : name.alias());
+					if (owned != null && owned.item() instanceof WitItem.ResourceDef) {
+						return true;
+					}
+				}
 			}
 		}
 		return false;
@@ -1000,8 +1111,9 @@ public final class WitExportDirective {
 			Implemented implemented) {
 		boolean any = false;
 		// What is still a use clause is nominal: a resource, or a type that holds a
-		// handle. The interface exports the name, which the component can only give a
-		// resource it defines itself.
+		// handle. The interface exports the name: a resource the component defines when
+		// the world exports the interface that declares it, and otherwise one the
+		// component imports, with that interface.
 		for (WitItem member : scope.items()) {
 			if (member instanceof WitItem.Use use) {
 				for (WitItem.UseName name : use.names()) {
@@ -1017,10 +1129,12 @@ public final class WitExportDirective {
 										+ "use clause and define the type in the interface");
 					}
 					if (implemented.exportedId(owned.owner()) == null) {
-						throw error(witPath, locations, item,
-								"interface '" + ifaceId + "' uses the resource '" + name.name() + "' of " + use.path()
-										+ ", which the world does not export: a "
-										+ "component would import that interface for it; export it from the world");
+						String imported = "interface '" + ifaceId + "' uses the resource '" + name.name() + "' of "
+								+ use.path() + ", an interface the world imports, ";
+						if (!resources) {
+							throw error(witPath, locations, item, imported + NOT_IMPORTED);
+						}
+						visitor.imported(imported, item);
 					}
 				}
 			}
@@ -1059,7 +1173,7 @@ public final class WitExportDirective {
 			}
 		}
 		// An interface of types alone exports those, which a component declares.
-		if (!any && !definesTypes(scope, true)) {
+		if (!any && !definesTypes(implemented.resolver(), scope, true)) {
 			throw error(witPath, locations, item, "interface '" + ifaceId + "' declares no functions to export");
 		}
 	}
@@ -1491,14 +1605,16 @@ public final class WitExportDirective {
 
 	// Refuses a type the canonical export does not carry, and a backend that has no
 	// canonical export: the scalar backend holds no value a record, a list or a variant
-	// could be. What is carried is everything but a resource handle, a stream and a
-	// future, wherever it nests.
+	// could be. What is carried is everything but a stream and a future, wherever it
+	// nests; a handle of a resource the component imports only where the component can
+	// import it (a component of the default backend; the interpreter and the JVM, which
+	// export nothing, check the contract alone).
 	// `resources`: whether the program is one that exports a resource (walk), which
-	// the list of what is carried then names.
+	// the list of what is carried then names; a front end binding its own names
+	// (describe) takes no handle.
 	private static void requireCanonical(WitType type, String exportName, String what, String witPath,
 			WitLocations locations, WitItem item, Backend backend, Implemented implemented, WitItem.InterfaceDef scope,
 			boolean resources) {
-		WitResolver resolver = implemented.resolver();
 		if (backend.isNoGc()) {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "': the WIT type of " + what + " is not one --no-gc can carry ("
@@ -1506,58 +1622,76 @@ public final class WitExportDirective {
 							+ "); compile the world on the default backend, a --component or a --no-wasi module, "
 							+ "where the canonical ABI marshals it");
 		}
-		String refused = refusedCanonical(type, implemented, scope, new java.util.HashSet<>(),
-				"the result".equals(what));
+		Walk walk = new Walk(implemented, "the result".equals(what),
+				resources && (backend == Backend.WASM_COMPONENT || backend == Backend.OTHER), new boolean[1]);
+		String refused = refusedCanonical(type, scope, new java.util.HashSet<>(), walk);
+		if (refused != null && walk.imported()[0]) {
+			throw error(witPath, locations, item,
+					"export '" + exportName + "': the WIT type of " + what + " holds " + refused + ", " + (resources
+							? IMPORTED_BY_A_COMPONENT + ": a core module imports no resource type" : NOT_IMPORTED));
+		}
 		if (refused != null) {
 			throw error(witPath, locations, item, "export '" + exportName + "': the WIT type of " + what + " holds "
 					+ refused + ", which an export does not carry (carried: every primitive type, "
-					+ (resources ? "a handle of a resource the world exports, " : "")
+					+ (resources ? "a handle of a resource the world exports or the component imports, " : "")
 					+ "and a list, an option, a result, a tuple, a record, a variant, an enum or flags " + "of them)");
 		}
 	}
 
-	// What of a type the canonical export does not carry, in words, or null. `answered`:
-	// whether the type is a function's result, where no handle is borrowed.
-	private static @Nullable String refusedCanonical(WitType type, Implemented implemented, WitItem.InterfaceDef scope,
-			Set<String> walking, boolean answered) {
-		WitResolver resolver = implemented.resolver();
+	/** Where a handle of a resource the component imports crosses an export. */
+	private static final String IMPORTED_BY_A_COMPONENT = "which only a component of the default backend imports "
+			+ "for an export (--component without --no-gc)";
+
+	/** Why a front end binding its own names takes no handle of an imported resource. */
+	private static final String NOT_IMPORTED = "which this language takes in no export (a Common Lisp program does: "
+			+ "the integer handle rontolisp:wit-import calls the interface with)";
+
+	// What a walk of refusedCanonical carries: the world, whether the type is a
+	// function's result (where no handle is borrowed), whether a handle of a resource
+	// the component imports crosses here, and -- set by the walk -- whether the refusal
+	// it answers is that of such a handle.
+	private record Walk(Implemented implemented, boolean answered, boolean imports, boolean[] imported) {
+	}
+
+	// What of a type the canonical export does not carry, in words, or null.
+	private static @Nullable String refusedCanonical(WitType type, WitItem.InterfaceDef scope, Set<String> walking,
+			Walk walk) {
+		WitResolver resolver = walk.implemented().resolver();
 		return switch (type) {
 			case WitType.Prim ignored -> null;
-			case WitType.ListOf list -> refusedCanonical(list.element(), implemented, scope, walking, answered);
-			case WitType.OptionOf option -> refusedCanonical(option.element(), implemented, scope, walking, answered);
+			case WitType.ListOf list -> refusedCanonical(list.element(), scope, walking, walk);
+			case WitType.OptionOf option -> refusedCanonical(option.element(), scope, walking, walk);
 			case WitType.ResultOf res -> {
-				String ok = res.ok() == null ? null : refusedCanonical(res.ok(), implemented, scope, walking, answered);
-				yield ok != null || res.err() == null ? ok
-						: refusedCanonical(res.err(), implemented, scope, walking, answered);
+				String ok = res.ok() == null ? null : refusedCanonical(res.ok(), scope, walking, walk);
+				yield ok != null || res.err() == null ? ok : refusedCanonical(res.err(), scope, walking, walk);
 			}
 			case WitType.TupleOf tuple -> {
 				String refused = null;
 				for (WitType element : tuple.elements()) {
-					refused = refused != null ? refused
-							: refusedCanonical(element, implemented, scope, walking, answered);
+					refused = refused != null ? refused : refusedCanonical(element, scope, walking, walk);
 				}
 				yield refused;
 			}
 			case WitType.StreamOf ignored -> "a stream";
 			case WitType.FutureOf ignored -> "a future";
 			case WitType.BorrowOf borrow ->
-				answered ? "a borrowed handle of the resource '" + borrow.resource() + "' in a result"
-						: refusedHandle(borrow.resource(), implemented, scope);
-			case WitType.OwnOf own -> refusedHandle(own.resource(), implemented, scope);
+				walk.answered() ? "a borrowed handle of the resource '" + borrow.resource() + "' in a result"
+						: refusedHandle(borrow.resource(), scope, walk);
+			case WitType.OwnOf own -> refusedHandle(own.resource(), scope, walk);
 			case WitType.Named named -> {
 				WitResolver.Owned owned = resolver.resolveOwned(scope, named.name());
 				if (owned == null) {
 					yield "'" + named.name() + "', a type the file does not define";
 				}
 				if (owned.item() instanceof WitItem.ResourceDef) {
-					yield refusedHandle(named.name(), implemented, scope);
+					yield refusedHandle(named.name(), scope, walk);
 				}
 				if (owned.owner() != scope) {
 					// What is still a use clause holds a resource (inlineUses): say
 					// which.
 					String name = java.util.Objects.requireNonNull(WitResolver.definedTypeName(owned.item()));
-					String held = refusedCanonical(new WitType.Named(name), implemented, owned.owner(),
-							new java.util.HashSet<>(), answered);
+					String held = refusedCanonical(new WitType.Named(name), owned.owner(), new java.util.HashSet<>(),
+							walk);
 					yield held != null ? held : "'" + named.name() + "', a type of another interface that holds a "
 							+ "handle (name the resource in the use clause and define the type here)";
 				}
@@ -1565,14 +1699,12 @@ public final class WitExportDirective {
 					yield "'" + named.name() + "', a type that contains itself";
 				}
 				String refused = switch (owned.item()) {
-					case WitItem.TypeAlias alias ->
-						refusedCanonical(alias.target(), implemented, scope, walking, answered);
+					case WitItem.TypeAlias alias -> refusedCanonical(alias.target(), scope, walking, walk);
 					case WitItem.RecordDef record -> {
 						String field = record.fields().isEmpty() ? "'" + named.name() + "', a record of no field"
 								: null;
 						for (WitItem.Field f : record.fields()) {
-							field = field != null ? field
-									: refusedCanonical(f.type(), implemented, scope, walking, answered);
+							field = field != null ? field : refusedCanonical(f.type(), scope, walking, walk);
 						}
 						yield field;
 					}
@@ -1580,7 +1712,7 @@ public final class WitExportDirective {
 						String payload = null;
 						for (WitItem.Case c : variant.cases()) {
 							payload = payload != null || c.payload() == null ? payload
-									: refusedCanonical(c.payload(), implemented, scope, walking, answered);
+									: refusedCanonical(c.payload(), scope, walking, walk);
 						}
 						yield payload;
 					}
@@ -1594,23 +1726,44 @@ public final class WitExportDirective {
 		};
 	}
 
-	// A handle crosses an export when its resource is one the world exports: one an
-	// exported interface declares, which the component defines. Any other resource is
-	// an import of the component, whose handles an export does not carry.
-	private static @Nullable String refusedHandle(String resource, Implemented implemented,
-			WitItem.InterfaceDef scope) {
+	// A handle crosses an export when its resource is one the world exports -- one an
+	// exported interface declares, which the component defines -- or one the component
+	// imports: a resource of an interface the world does not export, named by an
+	// exported interface's use clause or by one of the world's own, whose handle is the
+	// integer rontolisp:wit-import gives one. Not carried: a resource the world itself
+	// declares, whose functions are imports of the world no rontolisp:wit-import binds,
+	// and one a use clause of the world names of an interface the world exports, which
+	// the clause imports (a function of the world cannot take the world's own). Inside a
+	// type of another interface a handle is the type's refusal, which the caller words.
+	private static @Nullable String refusedHandle(String resource, WitItem.InterfaceDef scope, Walk walk) {
+		Implemented implemented = walk.implemented();
 		WitResolver.Owned owned = implemented.resolver().resolveOwned(scope, resource);
 		if (owned == null || !(owned.item() instanceof WitItem.ResourceDef)) {
 			return "a handle of '" + resource + "', which is no resource";
 		}
-		if (implemented.exports(scope) && implemented.exports(owned.owner())) {
+		boolean world = scope == implemented.worldScope();
+		if (!world && !implemented.exports(scope)) {
 			return null;
 		}
-		return "a handle of the resource '" + resource + "' ("
-				+ (implemented.exports(owned.owner())
-						? "a use clause of the world itself imports the interface that declares it"
-						: "no interface the world exports declares it")
-				+ ")";
+		if (!world && implemented.exports(owned.owner())) {
+			return null;
+		}
+		if (owned.owner() == scope) {
+			return "a handle of the resource '" + resource + "' the world declares, whose functions are imports of "
+					+ "the world that rontolisp:wit-import does not bind (declare the resource in an interface the "
+					+ "world imports, and name it with use)";
+		}
+		String id = implemented.resolver().canonicalId(owned.owner());
+		if (world && implemented.exports(owned.owner())) {
+			return "a handle of the resource '" + resource + "' of " + id + ", which a use clause of the world "
+					+ "imports although the world exports that interface (a function of the world takes the imported "
+					+ "resource: export the function from an interface to take the world's own)";
+		}
+		if (!walk.imports()) {
+			walk.imported()[0] = true;
+			return "a handle of the resource '" + resource + "' of " + id + ", an interface the world imports";
+		}
+		return null;
 	}
 
 	// The WIT spellings the flat boundary carries, in vocabulary order.

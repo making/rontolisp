@@ -590,7 +590,9 @@ public final class WasmComponentBuilder {
 	 * {@code wasi:cli/run} instance and the user-import instances); each exported WIT
 	 * interface consumes one
 	 * @param resourceTypes the component type index of each resource the world exports
-	 * ({@link ExportedResources.Defined#typeOf}); empty for a world that exports none
+	 * ({@link ExportedResources.Defined#typeOf}) and of each one the exports name that
+	 * the component imports ({@link Appended#exportTypes}), by
+	 * {@code <interface id>#<resource>}; empty for a world that names none
 	 */
 	private static void appendFuncExports(ComponentWriter c, List<WasmExportCompiler.Decl> decls, int nextCoreFunc,
 			int nextType, int nextComponentFunc, int rontolispInstance, int nextComponentInstance,
@@ -795,7 +797,8 @@ public final class WasmComponentBuilder {
 		final java.util.ArrayDeque<WasmComponentImportCompiler.Import> pending = new java.util.ArrayDeque<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			byId.put(imported.ifaceId(), imported);
-			if (modules.contains(imported.ifaceId()) || (imported.decls().isEmpty() && imported.calls().isEmpty())) {
+			if (modules.contains(imported.ifaceId()) || (imported.decls().isEmpty() && imported.calls().isEmpty())
+					|| !imported.exportUses().types().isEmpty()) {
 				kept.add(imported.ifaceId());
 				pending.add(imported);
 			}
@@ -820,6 +823,11 @@ public final class WasmComponentBuilder {
 			WasmComponentImportCompiler.Import imported) {
 		final List<WitComponentTypeEncoder.ForeignResource> reached = new java.util.ArrayList<>(
 				WitComponentTypeEncoder.foreignResourcesOf(imported));
+		// A resource the world's exports name is one the instance type exports, whatever
+		// the program binds of the interface: the component aliases it out for them.
+		for (String resource : imported.exportUses().types()) {
+			reached.add(new WitComponentTypeEncoder.ForeignResource(imported.ifaceId(), resource));
+		}
 		// A DROPPED resource must be declared too: `canon resource.drop` projects it out
 		// of this instance, and the encoder would otherwise never declare it -- it
 		// declares a resource only when a bound function's signature reaches one, and a
@@ -893,6 +901,15 @@ public final class WasmComponentBuilder {
 		}
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			if (wasiSurface.contains(imported.ifaceId())) {
+				// an interface imported for the world's exports alone, which no binding
+				// names
+				if (imported.decls().isEmpty() && imported.calls().isEmpty() && imported.drops().isEmpty()
+						&& !imported.exportUses().types().isEmpty()) {
+					throw new UnsupportedOperationException("the world's exports name the resource '"
+							+ imported.exportUses().types().get(0) + "' of '" + imported.ifaceId()
+							+ "', an interface the component imports as part of its own WASI surface, whose types an "
+							+ "export does not take");
+				}
 				throw new UnsupportedOperationException("rontolisp:wit-import cannot bind '" + imported.ifaceId()
 						+ "': this component already imports that interface as part of its own WASI surface, and a "
 						+ "component cannot import the same interface twice. Either drop the built-in that carries it "
@@ -931,10 +948,13 @@ public final class WasmComponentBuilder {
 	 * @param coreFuncs core function indices consumed (one {@code canon lower} per bound
 	 * function + one {@code canon resource.drop} per drop + one async built-in per bound
 	 * async op)
+	 * @param exportTypes the component type index each resource the world's exports name
+	 * was aliased out to, by {@code <interface id>#<resource>}
+	 * ({@link WasmComponentImportCompiler.ExportUses}); empty for exports that name none
 	 */
-	record Appended(int types, int componentFuncs, int coreFuncs) {
+	record Appended(int types, int componentFuncs, int coreFuncs, java.util.Map<String, Integer> exportTypes) {
 
-		static final Appended NONE = new Appended(0, 0, 0);
+		static final Appended NONE = new Appended(0, 0, 0, java.util.Map.of());
 
 	}
 
@@ -1060,18 +1080,43 @@ public final class WasmComponentBuilder {
 		final List<byte[]> dropCanons = new java.util.ArrayList<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			CoreExports core = Objects.requireNonNull(exports.get(imported.ifaceId()));
+			// field -> resource: a binding's drops, then the built-in an export releases
+			// what it borrows through -- the same field, shared when the program binds it
+			final java.util.Map<String, String> dropped = new java.util.LinkedHashMap<>();
 			for (WasmComponentImportCompiler.Drop drop : imported.distinctDrops()) {
-				String key = imported.ifaceId() + "#" + drop.resource();
+				dropped.put(drop.field(), drop.resource());
+			}
+			for (String resource : imported.exportUses().borrowed()) {
+				dropped.putIfAbsent(WasmComponentImportCompiler.DROP_PREFIX + resource, resource);
+			}
+			for (java.util.Map.Entry<String, String> drop : dropped.entrySet()) {
+				String key = imported.ifaceId() + "#" + drop.getValue();
 				Integer outer = outerOf.get(key);
 				if (outer == null) {
 					dropAliases.add(ComponentWriter.aliasInstanceType(
-							Objects.requireNonNull(instanceOf.get(imported.ifaceId())), drop.resource()));
+							Objects.requireNonNull(instanceOf.get(imported.ifaceId())), drop.getValue()));
 					outer = typeIdx++;
 					outerOf.put(key, outer);
 				}
 				dropCanons.add(ComponentWriter.canonResourceDrop(outer));
-				core.fields().add(drop.field());
+				core.fields().add(drop.getKey());
 				core.coreIndices().add(coreFunc++);
+			}
+		}
+		// The resources the world's exports name, which their types take as this
+		// component's: aliased out of the instance like a drop's, once.
+		final java.util.Map<String, Integer> exportTypes = new java.util.LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			for (String resource : imported.exportUses().types()) {
+				String key = imported.ifaceId() + "#" + resource;
+				Integer outer = outerOf.get(key);
+				if (outer == null) {
+					dropAliases.add(ComponentWriter
+						.aliasInstanceType(Objects.requireNonNull(instanceOf.get(imported.ifaceId())), resource));
+					outer = typeIdx++;
+					outerOf.put(key, outer);
+				}
+				exportTypes.put(key, outer);
 			}
 		}
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(funcAliases));
@@ -1172,7 +1217,8 @@ public final class WasmComponentBuilder {
 			coreInstances.add(ComponentWriter.coreInstanceFromFuncs(core.fields(), core.coreIndices()));
 		}
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(coreInstances));
-		return new Appended(typeIdx - nextType, compFunc - nextComponentFunc, coreFunc - nextCoreFunc);
+		return new Appended(typeIdx - nextType, compFunc - nextComponentFunc, coreFunc - nextCoreFunc,
+				java.util.Map.copyOf(exportTypes));
 	}
 
 	/**
@@ -1814,13 +1860,17 @@ public final class WasmComponentBuilder {
 		final int exportCoreFunc = io.nextCoreFunc() + user.coreFuncs() + resources.coreFuncs()
 				+ resources.fixedCoreFuncs();
 		final int nextExportType = io.nextType() + user.types() + resources.types();
+		// The export wiring names a resource by the type the component defined for it,
+		// or the one it aliased out of an import for the exports.
+		final java.util.Map<String, Integer> resourceTypes = new java.util.HashMap<>(user.exportTypes());
+		resourceTypes.putAll(resources.typeOf());
 		if (!run) {
 			// A reactor: the world's exports alone, at the indices the run wiring below
 			// would have pushed one (core func, component func) and two (component
 			// instance) further on.
 			appendFuncExports(c, funcExports, exportCoreFunc, nextExportType,
 					io.nextComponentFunc() + user.componentFuncs(), rontolisp, blockInstances + userIfaces,
-					resources.typeOf());
+					resourceTypes);
 			return c.toByteArray();
 		}
 		final int runFuncType = at(typeIndex, T_RUN_FUNC);
@@ -1845,7 +1895,7 @@ public final class WasmComponentBuilder {
 		// an index -- so the next free instance is two past the import instances.
 		appendFuncExports(c, funcExports, exportCoreFunc + 1, nextExportType,
 				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, blockInstances + 2 + userIfaces,
-				resources.typeOf());
+				resourceTypes);
 		return c.toByteArray();
 	}
 

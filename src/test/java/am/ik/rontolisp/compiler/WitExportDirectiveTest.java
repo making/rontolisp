@@ -336,7 +336,8 @@ class WitExportDirectiveTest {
 				""";
 		for (var refusal : Map
 			.of("func() -> list<stream<u8>>", "the WIT type of the result holds a stream", "func(d: option<alarm>)",
-					"the WIT type of d holds a handle of the resource 'timer'")
+					"the WIT type of d holds 'alarm', a type of another interface that holds a handle (name the "
+							+ "resource in the use clause and define the type here)")
 			.entrySet()) {
 			assertThatThrownBy(() -> lower(clock.formatted("duration, alarm", refusal.getKey()), Backend.WASM_COMPONENT,
 					Map.of("count-vowels", refusal.getKey().contains("()") ? List.of() : List.of("p"))))
@@ -481,16 +482,83 @@ class WitExportDirectiveTest {
 					"(RONTOLISP:WASM-EXPORT '|counter%wit-dtor%1| :AS \"[dtor]counter\" :PARAMS '(:S32) :INTERFACE"
 							+ " \"root:component/tags\")",
 					"(RONTOLISP:WASM-EXPORT '|tag-name| :AS \"[method]counter.name\" :WIT ");
-		// A resource no exported interface declares is an import of the component,
-		// whose handles an export does not carry: the world's own, and another
-		// interface's, named in a use clause or held by a type of it.
+		// A resource of an interface the world does not export is one the component
+		// imports, its handle the integer a wit-import binding takes: named by an
+		// exported interface's use clause, or by the world's own clause where a
+		// function of the world reaches it. A component of the default backend imports
+		// the interface for it; the interpreter and the JVM check the contract alone.
+		String importing = """
+				package root:component;
+
+				interface store {
+				  resource blob;
+				  resource lock;
+				}
+
+				interface files {
+				  use store.{blob};
+				  pick: func(b: borrow<blob>, more: list<blob>) -> option<blob>;
+				}
+
+				world analyzer {
+				  use store.{blob as stored, lock};
+				  export files;
+				  export keep: func(s: borrow<stored>) -> stored;
+				}
+				""";
+		Map<String, List<String>> keeping = Map.of("pick", List.of("b", "more"), "keep", List.of("s"));
+		String at = " :WIT \"...\" :WIT-WORLD \"analyzer\" :WIT-AT \"world.wit:%d\" :PARAM-NAMES '(%s)";
+		for (Backend backend : List.of(Backend.WASM_COMPONENT, Backend.OTHER)) {
+			assertThat(lower(importing, backend, keeping).stream()
+				.map(form -> form.print().replaceAll(":WIT \"[^\"]*\"", ":WIT \"...\""))).as(backend.name())
+				.containsExactly(
+						"(RONTOLISP:WASM-EXPORT '|pick| :AS \"pick\"" + at.formatted(15, "|b| |more|")
+								+ " :INTERFACE \"root:component/files\")",
+						"(RONTOLISP:WASM-EXPORT '|keep| :AS \"keep\"" + at.formatted(16, "|s|") + ")");
+		}
+		// Elsewhere the use clause is refused whether or not a function names the
+		// resource, and a function of the world naming one where it is reached; a front
+		// end binding its own names takes no handle.
+		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+			assertThatThrownBy(() -> lower(importing, backend, keeping)).as(backend.name())
+				.hasMessage("world.wit:15: interface 'root:component/files' uses the resource 'blob' of "
+						+ "root:component/store, an interface the world imports, which only a component of the default "
+						+ "backend imports for an export (--component without --no-gc): "
+						+ (backend.isNoGc() ? "the scalar backend exports the flat types alone"
+								: "a core module imports no resource type"));
+		}
+		String worldOnly = importing.replace("  export files;\n", "");
+		assertThatThrownBy(() -> lower(worldOnly, Backend.WASM_GC, keeping))
+			.hasMessage("world.wit:15: export 'keep': the WIT type of s holds a handle of the resource 'stored' of "
+					+ "root:component/store, an interface the world imports, which only a component of the default "
+					+ "backend imports for an export (--component without --no-gc): a core module imports no "
+					+ "resource type");
+		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), importing, WIT))
+			.hasMessage("world.wit:15: interface 'root:component/files' uses the resource 'blob' of "
+					+ "root:component/store, an interface the world imports, which this language takes in no export "
+					+ "(a Common Lisp program does: the integer handle rontolisp:wit-import calls the interface with)");
+		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), worldOnly, WIT))
+			.hasMessageStartingWith("world.wit:15: export 'keep': the WIT type of s holds a handle of the resource "
+					+ "'stored' of root:component/store, an interface the world imports, which this language takes in "
+					+ "no export");
+		// What a use clause of the world names of an interface the world exports is the
+		// imported interface's, which no function of the world can mean; a resource the
+		// world declares has functions no rontolisp:wit-import binds.
+		assertThatThrownBy(
+				() -> lower(importing.replace("export files;", "export store;"), Backend.WASM_COMPONENT, keeping))
+			.hasMessageStartingWith("world.wit:16: export 'keep': the WIT type of s holds a handle of the resource "
+					+ "'stored' of root:component/store, which a use clause of the world imports although the world "
+					+ "exports that interface (a function of the world takes the imported resource: export the "
+					+ "function from an interface to take the world's own), which an export does not carry");
 		assertThatThrownBy(() -> lower(
 				clock.formatted("duration", "func(d: duration) -> u64")
 					.replace("export count-vowels", "resource thing;\n  export count-vowels")
 					.replace("func(d: duration)", "func(d: borrow<thing>)"),
 				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"))))
 			.hasMessageStartingWith("world.wit:20: export 'count-vowels': the WIT type of d holds a handle of the "
-					+ "resource 'thing' (no interface the world exports declares it), which an export does not carry");
+					+ "resource 'thing' the world declares, whose functions are imports of the world that "
+					+ "rontolisp:wit-import does not bind (declare the resource in an interface the world imports, and "
+					+ "name it with use), which an export does not carry");
 		// A world that exports types alone exports nothing, a resource of no function
 		// among them.
 		assertThatThrownBy(

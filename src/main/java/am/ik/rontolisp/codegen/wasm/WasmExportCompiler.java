@@ -855,8 +855,11 @@ final class WasmExportCompiler {
 		}
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
 		// (A callback-lifted export cannot reach here: it exists only under asyncMode,
-		// where the callbackDriven branch above returned.)
+		// where the callbackDriven branch above returned.) A handle lent to the call of
+		// a resource another component implements is one more in this instance's table,
+		// which the task may not end holding: released once the function has answered.
 		if (marshal != null) {
+			marshal.releaseBorrows();
 			marshal.lowerResult();
 		}
 		else {

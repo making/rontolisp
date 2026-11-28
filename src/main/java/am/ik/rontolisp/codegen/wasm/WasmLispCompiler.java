@@ -4582,6 +4582,21 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ componentImports.get(0).ifaceId()
 							+ "' (rontolisp:wit-import); drop --no-wasi or the import");
 		}
+		// A resource of an interface the world does not export, which its exports name,
+		// is the component's import -- of that interface, for the type -- and its handle
+		// the integer a wit-import binding takes: the interface joins the imports, an
+		// interface the program binds nothing of as its types alone.
+		List<WitExportSignature.Imported> exportImports = WitExportSignature.importedResources(exportDecls);
+		if (!exportImports.isEmpty() && (!this.component || this.noWasi || this.serve)) {
+			WitExportSignature.Imported first = exportImports.get(0);
+			throw new UnsupportedOperationException(
+					first.at() + ": the world's exports name the resource '" + first.types().get(0) + "' of "
+							+ first.ifaceId() + ", which the component imports with that interface: "
+							+ (this.component && this.noWasi
+									? "--no-wasi asks for a component that imports nothing; drop --no-wasi"
+									: "only a component carries it (--component)"));
+		}
+		componentImports = WasmComponentImportCompiler.withExportUses(componentImports, exportImports);
 		// Whether a literal :string argument may be staged straight into linear memory
 		// at its call site (see emitsLitStage): asked of the DIRECTIVES, in front of
 		// pass 2, because the helper's presence shifts userFuncBase().
@@ -6431,6 +6446,23 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 					return helper.callIndex();
 				});
+		// The drop of each resource the component imports that an export borrows: the
+		// export releases what it was lent through the built-in a binding's
+		// <resource>-drop imports, one slot shared. Last, so a program whose exports
+		// borrow nothing keeps every ordinal it had.
+		final Map<String, Integer> exportDrops = new LinkedHashMap<>();
+		for (WasmComponentImportCompiler.Import imported : componentImports) {
+			for (String resource : imported.exportUses().borrowed()) {
+				String field = WasmComponentImportCompiler.DROP_PREFIX + resource;
+				Integer ordinal = importSlotIndex.putIfAbsent(imported.ifaceId() + "\0" + field, importSlots.size());
+				if (ordinal == null) {
+					ordinal = importSlots.size();
+					importSlots.add(new ImportSlot(imported.ifaceId(), field,
+							WasmComponentImportCompiler.dropParamTypes(), new Type[] {}));
+				}
+				exportDrops.put(imported.ifaceId() + "#" + resource, ordinal);
+			}
+		}
 		// Fill in the deferred import wrapper bodies now that the helper indices are
 		// known (their positions in userFunctionBodies were reserved in Pass 2a). Each
 		// wrapper calls its (module, field) slot's ordinal, so duplicate bindings
@@ -6585,7 +6617,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// from, sized by what its types' nesting measured.
 				WasmComponentImportCompiler.ExportPools pools = wit == null ? null
 						: WasmComponentImportCompiler.measureExport(ctxBuilder, decl, allocFuncIndex,
-								strFromMemFuncIndex, bytesFromMemFuncIndex, exportHandles);
+								strFromMemFuncIndex, bytesFromMemFuncIndex, exportHandles, exportDrops);
 				ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 				WasmWriter bodyWriter = new WasmWriter(bodyStream);
 				Ctx wrapperCtx = ctxBuilder.writer(bodyWriter).bodyStream(bodyStream).build();
@@ -6615,7 +6647,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						: WasmComponentImportCompiler.exportMarshal(wrapperCtx, decl, pools, allocFuncIndex,
 								strFromMemFuncIndex, bytesFromMemFuncIndex,
 								this.component ? exportHelperBase + helperFuncCount + exportDecls.size() : -1,
-								exportHandles);
+								exportHandles, exportDrops);
 				// (the marshalling counts its pools alone)
 				wrapperCtx.nextLocal = paramSlots + scratch.size();
 				WasmExportCompiler.emitBody(wrapperCtx, decl, target.callIndex(), strFromMemFuncIndex,

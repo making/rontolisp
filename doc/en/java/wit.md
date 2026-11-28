@@ -623,7 +623,7 @@ compiles, on every target, at the Java declaration, naming the WIT member's line
 | `result<T, E>` | yes | yes, or its ok arm with the error arm thrown | yes | yes, or its ok arm with the error arm thrown | yes, as a `WitResult` |
 | a tuple in an error arm thrown as a `WitException` | | refused: no type is written for it (answer the `WitResult`) | | refused, likewise | |
 | a resource of the interface | yes; an `own` handed over closes the object | yes | not yet: a Java class does not export a resource (a Common Lisp program does) | not yet | yes in an import (a record's field, a list's element) |
-| a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | not yet | not yet | yes in an import |
+| a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | not yet (a Common Lisp program takes one the component imports) | not yet | yes in an import |
 | `stream<u8>` | yes, `Consumer<OutputStream>`, but not to an `async func`: the call waits while the host reads what the program writes after it | yes, `InputStream` | refused: an export carries no stream | refused | in an import result; in a parameter only as an `option` of its own |
 | `stream<T>` of values or of resources | refused: the guest cannot write one | yes, `WitStream<T>` | refused | refused | in an import result |
 | `future<T>` | yes, a `WitFuture<T>` the program made | yes, but not of a `bool`, a `list`, `flags` or an `option`: its value is a future its writer dropped too | refused: an export carries no future | refused | in an import result; in a parameter refused |
@@ -632,9 +632,10 @@ compiles, on every target, at the Java declaration, naming the WIT member's line
 An exported interface that declares a resource, or whose `use` clause names one or a type
 holding a handle, is refused at the world's `export` line whether or not a function takes
 it. A `use` of a resource in the world itself is left out, and a function of the world
-naming it is refused. A Common Lisp program exports a resource from a component
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)), and a
-Java program imports it from that component as any resource.
+naming it is refused. A Common Lisp program exports a resource from a component, and takes a
+handle of one the component imports
+([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)); a Java
+program imports the exported one from that component as any resource.
 
 ## What each output takes
 

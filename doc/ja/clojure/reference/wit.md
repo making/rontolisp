@@ -168,7 +168,7 @@ error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (para
 エクスポートはハンドルを除くすべての行を渡せ、型がハンドル、ストリーム、
 フューチャーに届く world は WIT の行で拒否します。リソースを宣言するインタフェース、
 または `use` 句でリソースを取り込むインタフェースのエクスポートも拒否します（Common Lisp の
-プログラムはエクスポートできます:
+プログラムはリソースをエクスポートでき、コンポーネントがインポートするリソースも受け取れます:
 [リソース](../../reference/functions/rontolisp-wit-export.md#resources)）。
 `--no-wasi` のモジュールのエクスポートも、`--emit-js-glue` のグルーを通して同じ型を渡せます（フラグは真偽値のオブジェクトになります）。
 WASI モジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です

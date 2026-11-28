@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
-# Lisp calls Lisp over a resource: build both components, compose them with wac,
-# run the result.
+# Lisp calls Lisp over a resource: build the components, compose them with wac,
+# run the result -- once with the component that exports the resource answering
+# both interfaces, once with a third component answering `report` over the
+# counters the first one keeps.
 #
 # Prerequisites on PATH: a rontolisp binary (or set RONTOLISP), wac
 # (cargo install wac-cli) and wasmtime 46+.
@@ -24,3 +26,16 @@ wac plug app.wasm --plug counters.wasm -o composed.wasm
 
 echo "== 4. run =="
 wasmtime run composed.wasm
+
+echo "== 5. the component that takes the resource it imports (a reactor) =="
+"$RONTOLISP" reporter.lisp -o reporter.wasm --component
+
+echo "== 6. compose all three: report from the reporter, registry from counters =="
+wac compose composition.wac \
+  --dep example:app=app.wasm \
+  --dep example:counters=counters.wasm \
+  --dep example:reporter=reporter.wasm \
+  -o reported.wasm
+
+echo "== 7. run =="
+wasmtime run reported.wasm

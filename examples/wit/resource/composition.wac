@@ -1,0 +1,31 @@
+// composition.wac -- the command, the component that keeps the counters, and the
+// one that reports on them, wired in one shot.
+//
+//   wac compose composition.wac \
+//     --dep example:app=app.wasm \
+//     --dep example:counters=counters.wasm \
+//     --dep example:reporter=reporter.wasm \
+//     -o reported.wasm
+//
+// The reporter and the app import registry from the SAME counters instance: a
+// counter's handle is an index into that instance's resource, so the two must
+// agree on it. `wac plug` cannot say so (it fills one socket from plugs that are
+// not wired to each other). The `...` lets the WASI interfaces fall through as
+// imports of the composition.
+
+package example:reported;
+
+let counters = new example:counters { ... };
+
+let reporter = new example:reporter {
+  "example:counters/registry@0.1.0": counters["example:counters/registry@0.1.0"],
+  ...
+};
+
+let app = new example:app {
+  "example:counters/registry@0.1.0": counters["example:counters/registry@0.1.0"],
+  "example:counters/report@0.1.0": reporter["example:counters/report@0.1.0"],
+  ...
+};
+
+export app...;

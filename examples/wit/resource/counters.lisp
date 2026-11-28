@@ -71,4 +71,4 @@
 (defun summary (c)
   (format nil "~a is at ~d" (counter-name c) (counter-value c)))
 
-(rontolisp:wit-export "wit/counters.wit" :reactor t)
+(rontolisp:wit-export "wit/counters.wit" :world counters :reactor t)

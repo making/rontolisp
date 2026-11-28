@@ -215,7 +215,7 @@ gives another type is refused at the clause; rename it there
 (`point as corner`).
 
 Not carried, each a compile error at the export's WIT line: a `stream`, a
-`future` and a handle of a resource the world does not export
+`future` and a handle of a resource the world declares
 ([Resources](#resources)). An
 `async func` carries the same types as any other. A WASI
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
@@ -306,16 +306,78 @@ world counters {
   garbage.
 - A second exported interface may name the resource in a `use` clause
   (`use registry.{counter};`) and take or answer it: it is the same resource,
-  and the component exports the declaring interface first. A resource of an
-  interface the world does not export is refused -- at the clause, whether or
-  not a function names it --, as is a type of another interface that holds a
-  handle (name the resource in the clause and define the type where it is
-  used). A world's own `use` of a resource, and a `resource` the world
-  declares, are imports of the component: a function of the world carries no
-  handle of them.
+  and the component exports the declaring interface first. A type of another
+  interface that holds a handle is refused (name the resource in the clause and
+  define the type where it is used).
 - Two exports that one `defun` would implement (a method `counter.add` and a
   function `counter-add`) are refused; under a `:names` table a resource's
   function is named by its member name (`"counter-add"`).
+
+#### A resource the component imports
+
+A resource of an interface the world does not export, named in a `use` clause
+of an exported interface or of the world itself, is one the component
+**imports**: the component imports that interface for it, and a handle is the
+integer [`rontolisp:wit-import`](rontolisp-wit-import.md) gives one. The
+program calls the resource through a `wit-import` of the interface, which shares
+the one import.
+
+```console
+// wit/auditor.wit
+package example:counters@0.1.0;
+
+interface registry {
+  resource counter {
+    add: func(by: u32) -> u32;
+  }
+}
+
+interface audit {
+  use registry.{counter};
+
+  bump: func(c: borrow<counter>, by: u32) -> u32;
+}
+
+world auditor {
+  import registry;
+  export audit;
+}
+```
+
+```console
+(rontolisp:wit-import "wit/auditor.wit"
+                      :interface "example:counters/registry"
+                      :package reg)
+
+(defun bump (c by) (reg:counter-add c by))
+
+(rontolisp:wit-export "wit/auditor.wit" :reactor t)
+```
+
+Composed with the component above, which exports `registry`, `bump` adds to a
+counter that component keeps.
+
+- A **borrowed** handle is lent for the call: the export releases it once the
+  function has answered (the component model traps a call that returns still
+  holding one), so the program does not drop it. An **owned** one is the program's: it keeps it,
+  hands it on, or releases it with the binding's `counter-drop`. Every owned
+  handle answered goes to the caller.
+- An exported interface's `use` clause imports the interface whether or not a
+  function names the resource: the interface exports the type. A clause of the
+  world imports it only where a function of the world names a resource it
+  brings.
+- Refused at the WIT line: a `resource` the world itself declares (its
+  functions are imports of the world, which no `wit-import` binds: declare it in
+  an interface and name it with `use`), and a world's own `use` of a resource
+  of an interface the world exports (the clause imports that interface, so a
+  function of the world would take the imported resource, not the world's own:
+  export the function from an interface).
+- `--component --no-wasi` refuses such a world, since that component imports
+  nothing, and so does any component for a resource of an interface it imports
+  as part of its own WASI surface (`wasi:filesystem/types`'s `descriptor`).
+- [`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)'s
+  `reporter.lisp` implements an interface of this kind, composed between the
+  command and the component that keeps the counters.
 
 On the interpreter and the JVM the directive checks these functions like any
 other and exports nothing; bound as the
@@ -325,8 +387,8 @@ other and exports nothing; bound as the
 runs one program both ways.
 
 A core module (`-o out.wasm` alone, `--no-wasi` without `--component`) and
-`--no-gc` refuse an interface that declares a resource, and so do the Clojure
-and the Java front ends.
+`--no-gc` refuse an interface that declares a resource or uses one the
+component imports, and so do the Clojure and the Java front ends.
 
 ## What it checks
 
@@ -341,15 +403,15 @@ offending export:
   `&key` are rejected)
 - a WIT type the export does not carry: beyond the flat types on a WASI module
   or under `--no-gc`, and a `stream`, a `future` or a handle of a resource the
-  world does not export anywhere
+  world declares anywhere
 - a resource's function with no matching `defun` (`counter-new`, `counter-add`)
   or another arity, a `counter-drop` that does not take the one value, and an
-  exported interface that declares a `resource` where the output is no component
-  of the default backend
-- a `use` clause of an exported interface that names a resource of an interface
-  the world does not export, or a type that holds a handle; and one whose type
-  the scope has no name for (a world's) or whose name the scope gives another
-  type
+  exported interface that declares a `resource`, or names one the component
+  imports, where the output is no component of the default backend
+- a `use` clause of an exported interface that names a type that holds a
+  handle; one whose type the scope has no name for (a world's) or whose name the
+  scope gives another type; and one of the world naming a resource of an
+  interface the world exports, where a function of the world takes it
 - an export name that is not a component-model label (lower-kebab-case words), a
   duplicate export (refused by the WIT reader first, in `wasm-tools component
   wit`'s words: `` export `a` conflicts with prior func of same name ``), or

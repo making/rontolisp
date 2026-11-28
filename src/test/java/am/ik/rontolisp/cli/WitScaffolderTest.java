@@ -350,7 +350,7 @@ class WitScaffolderTest {
 		Files.copy(Path.of("examples/wit/resource/wit/counters.wit"), counters);
 		List<String> skipped = new ArrayList<>();
 		WitScaffolder.scaffoldJava(Files.readString(counters), counters.toString(), "counters.wit",
-				this.tempDir.resolve("Counters.java").toString(), null, "Counters", skipped::add);
+				this.tempDir.resolve("Counters.java").toString(), "counters", "Counters", skipped::add);
 		assertThat(skipped).containsExactly(
 				"counters.wit:37: interface 'example:counters/registry@0.1.0' declares the resource 'counter', which "
 						+ "this language does not export (a Common Lisp program does: the representation of a handle "

@@ -409,8 +409,58 @@ final class WasmComponentImportCompiler {
 	record WaitOrdinals(int setNew, int setWait, int setDrop, int join, int subtaskDrop) {
 	}
 
+	/**
+	 * The field the core module imports a resource's {@code canon resource.drop} under,
+	 * before the resource's name, from the module of the interface that declares it.
+	 */
+	static final String DROP_PREFIX = "[resource-drop]";
+
+	/**
+	 * What the exports of a world name of an interface the component imports
+	 * ({@code rontolisp:wit-export}, {@link WitExportSignature#importedResources}): the
+	 * resources their types name, which the instance type exports and the component
+	 * aliases out for them, and those an export borrows, whose
+	 * {@code canon resource.drop} the core module imports under
+	 * {@code [resource-drop]<name>} -- the field a binding's {@code <resource>-drop}
+	 * imports, so the two share it.
+	 *
+	 * @param types the resources' names, in the order the world names them
+	 * @param borrowed the names of those an export borrows
+	 */
+	record ExportUses(List<String> types, List<String> borrowed) {
+
+		/** What an interface the exports name nothing of has. */
+		static final ExportUses NONE = new ExportUses(List.of(), List.of());
+
+		ExportUses merged(ExportUses other) {
+			if (other.types().isEmpty()) {
+				return this;
+			}
+			java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>(this.types);
+			types.addAll(other.types());
+			java.util.LinkedHashSet<String> borrowed = new java.util.LinkedHashSet<>(this.borrowed);
+			borrowed.addAll(other.borrowed());
+			return new ExportUses(List.copyOf(types), List.copyOf(borrowed));
+		}
+
+	}
+
+	/**
+	 * An interface the component imports.
+	 *
+	 * @param ifaceId the interface's canonical id
+	 * @param iface the interface
+	 * @param resolver the resolver over the document defining it
+	 * @param decls the functions the program binds
+	 * @param drops the resource drops the program binds
+	 * @param asyncs the stream and future built-ins the program binds
+	 * @param calls the async funcs the program binds
+	 * @param taskReturns the task-return built-ins the program binds
+	 * @param exportUses what the world's exports name of the interface: an interface the
+	 * program binds nothing of is imported for that alone
+	 */
 	record Import(String ifaceId, WitItem.InterfaceDef iface, WitResolver resolver, List<Decl> decls, List<Drop> drops,
-			List<Async> asyncs, List<AsyncCall> calls, List<TaskReturn> taskReturns) {
+			List<Async> asyncs, List<AsyncCall> calls, List<TaskReturn> taskReturns, ExportUses exportUses) {
 
 		/**
 		 * The bound functions the component instance declares: the first binding of each
@@ -500,7 +550,7 @@ final class WasmComponentImportCompiler {
 			// lowering
 			// reads.
 			byId.put(imported.ifaceId(), new Import(prev.ifaceId(), prev.iface(), prev.resolver(), decls, drops, asyncs,
-					calls, taskReturns));
+					calls, taskReturns, prev.exportUses().merged(imported.exportUses())));
 		}
 		return new ArrayList<>(byId.values());
 	}
@@ -666,8 +716,8 @@ final class WasmComponentImportCompiler {
 					throw new UnsupportedOperationException(
 							"Malformed internal component-import member: " + items.get(i).print());
 				}
-				drops.add(new Drop(dropName.value(), ifaceId.value(), "[resource-drop]" + resource.value(),
-						resource.value()));
+				drops
+					.add(new Drop(dropName.value(), ifaceId.value(), DROP_PREFIX + resource.value(), resource.value()));
 				continue;
 			}
 			if (!(pair.car() instanceof LispString member) || !(rest.car() instanceof LispString lispName)) {
@@ -682,7 +732,37 @@ final class WasmComponentImportCompiler {
 			decls.add(new Decl(lispName.value(), ifaceId.value(), cabiFieldName(func), func, abi, abi.flatSig(func),
 					octets));
 		}
-		return new Import(ifaceId.value(), iface, resolver, decls, drops, asyncs, calls, taskReturns);
+		return new Import(ifaceId.value(), iface, resolver, decls, drops, asyncs, calls, taskReturns, ExportUses.NONE);
+	}
+
+	/**
+	 * Adds to the interfaces a program imports what its world's exports name of the
+	 * interfaces the component imports ({@link ExportUses}): an interface the program
+	 * binds nothing of becomes an import of its types alone, ordered before an interface
+	 * that uses them ({@link #inDependencyOrder}).
+	 * @param imports the imports, in dependency order
+	 * @param named what the exports name, by interface
+	 * @return the imports, unchanged when the exports name nothing
+	 */
+	static List<Import> withExportUses(List<Import> imports, List<WitExportSignature.Imported> named) {
+		if (named.isEmpty()) {
+			return imports;
+		}
+		final java.util.Map<String, Import> byId = new java.util.LinkedHashMap<>();
+		for (Import imported : imports) {
+			byId.put(imported.ifaceId(), imported);
+		}
+		for (WitExportSignature.Imported used : named) {
+			ExportUses uses = new ExportUses(used.types(), used.borrowed());
+			Import prev = byId.get(used.ifaceId());
+			byId.put(used.ifaceId(),
+					prev == null
+							? new Import(used.ifaceId(), used.iface(), used.resolver(), List.of(), List.of(), List.of(),
+									List.of(), List.of(), uses)
+							: new Import(prev.ifaceId(), prev.iface(), prev.resolver(), prev.decls(), prev.drops(),
+									prev.asyncs(), prev.calls(), prev.taskReturns(), prev.exportUses().merged(uses)));
+		}
+		return inDependencyOrder(new ArrayList<>(byId.values()));
 	}
 
 	/**
@@ -1233,6 +1313,15 @@ final class WasmComponentImportCompiler {
 			this.gen.emitExportLowerResult(this.signature, this.cabiReallocFuncIndex);
 		}
 
+		/**
+		 * Releases every handle the lift was lent of a resource the component imports,
+		 * once the function has answered: the task may not end holding one. Leaves the
+		 * stack as it is.
+		 */
+		void releaseBorrows() {
+			this.gen.emitReleaseBorrows();
+		}
+
 	}
 
 	/**
@@ -1249,16 +1338,22 @@ final class WasmComponentImportCompiler {
 	 * host brackets the call
 	 * @param handles what crosses a handle of a resource the world exports, or
 	 * {@code null} when it exports none
+	 * @param drops the placeholder ordinal of the {@code canon resource.drop} of each
+	 * resource the component imports that an export borrows, by
+	 * {@code <interface id>#<resource>} ({@link ExportUses})
 	 * @return the marshalling
 	 */
 	static ExportMarshal exportMarshal(WasmLispCompiler.Ctx ctx, WasmExportCompiler.Decl decl, ExportPools pools,
 			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, int cabiReallocFuncIndex,
-			@Nullable ExportHandles handles) {
+			@Nullable ExportHandles handles, java.util.Map<String, Integer> drops) {
 		WitExportSignature signature = java.util.Objects.requireNonNull(decl.wit());
 		Gen gen = new Gen(ctx, decl.exportName(), signature.coreParams().length, -1, allocFuncIndex,
 				strFromMemFuncIndex, pools.i32(), pools.i64(), true);
 		gen.octetsFromMemFuncIndex = octetsLift(signature.liftsOctets(), bytesFromMemFuncIndex, decl.exportName());
-		gen.exportHandles = handles;
+		// a function of the world names only resources the component imports: a use
+		// clause of the world imports the interface it names
+		gen.exportHandles = signature.ofWorld() ? null : handles;
+		gen.importedDrops = drops;
 		return new ExportMarshal(gen, signature, cabiReallocFuncIndex);
 	}
 
@@ -1273,17 +1368,21 @@ final class WasmComponentImportCompiler {
 	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}, or -1
 	 * @param handles what crosses a handle of a resource the world exports, or
 	 * {@code null}
+	 * @param drops the {@code canon resource.drop} ordinal of each imported resource an
+	 * export borrows
 	 * @return the pools' sizes
 	 */
 	static ExportPools measureExport(WasmLispCompiler.Ctx.Builder ctxBuilder, WasmExportCompiler.Decl decl,
-			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, @Nullable ExportHandles handles) {
+			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex, @Nullable ExportHandles handles,
+			java.util.Map<String, Integer> drops) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		ExportMarshal marshal = exportMarshal(ctx, decl, new ExportPools(MAX_SCRATCH, MAX_SCRATCH), allocFuncIndex,
-				strFromMemFuncIndex, bytesFromMemFuncIndex, 0, handles);
+				strFromMemFuncIndex, bytesFromMemFuncIndex, 0, handles, drops);
 		marshal.liftParams();
 		marshal.lowerResult();
+		marshal.releaseBorrows();
 		return new ExportPools(marshal.gen.i32High, marshal.gen.i64High);
 	}
 
@@ -1366,6 +1465,14 @@ final class WasmComponentImportCompiler {
 		// What crosses a handle of a resource the export's component defines; null in an
 		// import's wrapper and in an export of a world that exports no resource.
 		private @Nullable ExportHandles exportHandles;
+
+		// The canon resource.drop ordinal of each resource the component imports that an
+		// export borrows, by <interface id>#<resource>; empty in an import's wrapper.
+		private java.util.Map<String, Integer> importedDrops = java.util.Map.of();
+
+		// What an export's lift was lent of such a resource: for each drop ordinal, the
+		// eq local the handles are consed onto as they are lifted.
+		private final java.util.Map<Integer, Integer> borrowLists = new java.util.LinkedHashMap<>();
 
 		// _bytes_from_mem again, as the lift of every list<u8> of an :octets binding's
 		// result (a packed (unsigned-byte 8) vector, the octets as the host wrote them);
@@ -2815,6 +2922,9 @@ final class WasmComponentImportCompiler {
 		private void emitLiftHandle(WitCanonicalAbi abi, String resource, boolean borrowed) {
 			ExportHandles.Resource builtins = exported(abi, resource);
 			if (builtins == null) {
+				if (this.export && borrowed) {
+					emitRecordBorrow(abi, resource);
+				}
 				boxI31();
 				return;
 			}
@@ -2847,6 +2957,58 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.CALL);
 			this.w.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + builtins.resourceDrop());
 			this.i32Cursor = save;
+		}
+
+		// --- handles of a resource the component imports, lent to an export ---
+
+		// Conses the i32 on the stack -- a borrowed handle of a resource another
+		// component implements, which the host put in this instance's table for the
+		// call -- onto the list of its resource's drop, leaving it on the stack.
+		private void emitRecordBorrow(WitCanonicalAbi abi, String resource) {
+			WitResolver.Owned owned = abi.resolveOwned(new WitType.Named(resource));
+			String key = abi.resolver().canonicalId(owned.owner()) + "#"
+					+ WitComponentTypeEncoder.definedNameOf(owned.item());
+			Integer drop = this.importedDrops.get(key);
+			if (drop == null) {
+				throw new IllegalStateException("'" + this.lispName + "' borrows the resource '" + key
+						+ "', whose drop the component does not import");
+			}
+			int list = this.borrowLists.computeIfAbsent(drop, ordinal -> this.ctx.allocTemp());
+			int save = this.i32Cursor;
+			int handle = allocI32();
+			setLocal(handle);
+			getLocal(handle);
+			boxI31();
+			getLocal(list);
+			newCons();
+			setLocal(list);
+			getLocal(handle);
+			this.i32Cursor = save;
+		}
+
+		// Drops every handle the lift recorded, through its resource's drop: a loop per
+		// list, which the locals alone drive.
+		void emitReleaseBorrows() {
+			for (java.util.Map.Entry<Integer, Integer> borrows : this.borrowLists.entrySet()) {
+				int list = borrows.getValue();
+				this.w.write(Instruction.BLOCK, 0x40);
+				this.w.write(Instruction.LOOP, 0x40);
+				getLocal(list);
+				this.w.write(Instruction.REF_IS_NULL);
+				this.w.write(Instruction.BR_IF);
+				this.w.writeUnsignedLeb128(1);
+				getLocal(list);
+				structGet(WasmLispCompiler.TYPE_CONS, 0);
+				WasmEmitHelper.castI31GetS(this.ctx);
+				callOrdinal(borrows.getKey());
+				getLocal(list);
+				structGet(WasmLispCompiler.TYPE_CONS, 1);
+				setLocal(list);
+				this.w.write(Instruction.BR);
+				this.w.writeUnsignedLeb128(0);
+				this.w.write(Instruction.END);
+				this.w.write(Instruction.END);
+			}
 		}
 
 		// Flags: a list of keywords, one per label that is set, against the i32 whose

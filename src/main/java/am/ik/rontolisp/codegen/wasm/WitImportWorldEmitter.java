@@ -111,6 +111,11 @@ final class WitImportWorldEmitter {
 			for (WasmComponentImportCompiler.Drop drop : imported.drops()) {
 				provides.computeIfAbsent(imported.ifaceId(), id -> new LinkedHashSet<>()).add(drop.resource());
 			}
+			// A resource the world's exports name is exported by the instance type too,
+			// the interface imported for it whatever the program binds of it.
+			for (String resource : imported.exportUses().types()) {
+				provides.computeIfAbsent(imported.ifaceId(), id -> new LinkedHashSet<>()).add(resource);
+			}
 		}
 		Set<String> importedIds = new LinkedHashSet<>();
 		imports.forEach(imported -> importedIds.add(imported.ifaceId()));

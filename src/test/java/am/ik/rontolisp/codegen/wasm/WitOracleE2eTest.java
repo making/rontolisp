@@ -348,16 +348,151 @@ class WitOracleE2eTest {
 					.contains("  interface report {\n    use registry.{counter};\n\n"
 							+ "    summary: func(c: borrow<counter>) -> string;\n  }");
 				if (shape.contains("--no-wasi")) {
-					Process targets = new ProcessBuilder("wasm-tools", "component", "targets",
-							source.resolveSibling("wit/counters.wit").toString(), "--world", "counters",
-							this.tempDir.resolve("counters.wasm").toString())
-						.redirectErrorStream(true)
-						.start();
-					String said = new String(targets.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-					assertThat(targets.waitFor()).as(source + said).isZero();
+					assertTargets(source.resolveSibling("wit/counters.wit"), "counters",
+							this.tempDir.resolve("counters.wasm"));
 				}
 			}
 		}
+		// A resource of an interface the world does not export is one the component
+		// imports: the interface is an instance import -- of what the program binds of
+		// it and of the resource --, the type is aliased out for the exports, and the
+		// world's own use clause is a type import equal to it. The world emitted is the
+		// tool's reading, and a component importing nothing else is the world's. A
+		// clause no function reaches imports nothing.
+		byte[] reporter = compileFileViaCli(example.resolve("reporter.lisp"), "reporter", List.of("--component"));
+		assertThat(Files.readString(this.tempDir.resolve("reporter.wit"))).isEqualTo(oracle(reporter))
+			.contains("  import example:counters/registry@0.1.0;\n\n  export example:counters/report@0.1.0;")
+			.contains("  interface report {\n    use registry.{counter};\n\n"
+					+ "    summary: func(c: borrow<counter>) -> string;\n  }");
+		Files.writeString(this.tempDir.resolve("wit/relaying.wit"),
+				Files.readString(example.resolve("wit/counters.wit")) + RELAYING);
+		Path relay = Files.writeString(this.tempDir.resolve("relay.lisp"), RELAY.formatted("peeking"));
+		for (List<String> shape : List.of(List.of("--component"), List.of("--component", "--optimize"))) {
+			byte[] relaying = compileFileViaCli(relay, "relay", shape);
+			assertThat(Files.readString(this.tempDir.resolve("relay.wit"))).as(shape.toString())
+				.isEqualTo(oracle(relaying))
+				.contains("  import example:counters/registry@0.1.0;\n"
+						+ "  use example:counters/registry@0.1.0.{counter as held};\n\n"
+						+ "  export peek: func(c: borrow<held>) -> u32;\n  export example:counters/relay@0.1.0;")
+				.contains("  interface relay {\n    use registry.{counter};\n\n    record tagged {");
+		}
+		assertTargets(this.tempDir.resolve("wit/relaying.wit"), "peeking", this.tempDir.resolve("relay.wasm"));
+		Path untouched = Files.writeString(this.tempDir.resolve("untouched.lisp"),
+				"(defun twice (x) (* 2 x))\n(rontolisp:wit-export \"wit/relaying.wit\" :world untouched)\n");
+		byte[] flat = compileFileViaCli(untouched, "untouched", List.of("--component", "--no-wasi"));
+		assertThat(Files.readString(this.tempDir.resolve("untouched.wit"))).isEqualTo(oracle(flat))
+			.isEqualTo("package root:component;\n\nworld root {\n  export twice: func(x: u32) -> u32;\n}\n");
+		assertTargets(this.tempDir.resolve("wit/relaying.wit"), "untouched", this.tempDir.resolve("untouched.wasm"));
+	}
+
+	// Worlds over the example's registry, implemented by RELAY: an exported interface
+	// takes the counters another component keeps, lent and owned, alone and inside a
+	// list, a record and an option, and so does a function of the world. (`wasm-tools
+	// compose` 1.263.0 panics on a component whose function of the world names a
+	// resource its world's use clause imports, the tool's own component too.)
+	private static final String RELAYING = """
+
+			interface relay {
+			  use registry.{counter};
+			  record tagged { tag: string, c: borrow<counter> }
+			  bump-all: func(cs: list<borrow<counter>>, by: u32) -> u32;
+			  label: func(t: tagged) -> string;
+			  fresh: func(name: string) -> counter;
+			  pick: func(cs: list<counter>) -> option<counter>;
+			}
+
+			world relaying {
+			  export relay;
+			}
+
+			world peeking {
+			  use registry.{counter as held};
+			  export relay;
+			  export peek: func(c: borrow<held>) -> u32;
+			}
+
+			world untouched {
+			  use registry.{counter};
+			  export twice: func(x: u32) -> u32;
+			}
+			""";
+
+	// Loops rather than the sequence functions, so an --optimize component of it
+	// imports nothing of WASI.
+	private static final String RELAY = """
+			(rontolisp:wit-import "wit/relaying.wit" :interface "example:counters/registry" :package reg)
+			(defun bump-all (cs by)
+			  (let ((n 0)) (dolist (c cs n) (setq n (+ n (reg:counter-add c by))))))
+			(defun label (tagged) (getf (reg:counter-read (getf tagged :c)) :name))
+			(defun fresh (name) (reg:counter-new name 1))
+			(defun pick (cs) (dolist (c (rest cs)) (reg:counter-drop c)) (car cs))
+			(defun peek (c) (getf (reg:counter-read c) :value))
+			(rontolisp:wit-export "wit/relaying.wit" :world %s :reactor t)
+			""";
+
+	// RELAY's caller: the counters it makes, lent to the relay and handed over both
+	// ways, and none left at the end.
+	private static final String RELAY_CALLER = """
+			(rontolisp:wit-import "wit/relaying.wit" :interface "example:counters/registry" :package reg)
+			(rontolisp:wit-import "wit/relaying.wit" :interface "example:counters/relay" :package relay)
+			(let ((a (reg:counter-new "a" 1))
+			      (b (reg:counter-new "b" 5)))
+			  (format t "bump-all ~s~%" (relay:bump-all (list a b) 10))
+			  (format t "label    ~s~%" (relay:label (list :tag "t" :c b)))
+			  (let ((f (relay:fresh "f")))
+			    (format t "fresh    ~s~%" (reg:counter-read f))
+			    (reg:counter-drop f))
+			  (let ((p (relay:pick (list (reg:counter-new "x" 3) (reg:counter-new "y" 9)))))
+			    (format t "pick     ~s~%" (reg:counter-read p))
+			    (reg:counter-drop p))
+			  (format t "pick     ~s~%" (relay:pick nil))
+			  (format t "live     ~s~%" (reg:live))
+			  (reg:counter-drop a)
+			  (reg:counter-drop b)
+			  (format t "live     ~s~%" (reg:live)))
+			""";
+
+	// Composes the root component with a provider and a middle one that imports the
+	// provider's interface too -- from the same instance, which wasm-tools wires
+	// through instantiations of its own, the plain compose wiring a dependency's
+	// imports to nothing -- and answers what the composition prints.
+	private String composedRun(String root, String provider, String providerIface, String middle, String middleIface)
+			throws Exception {
+		Path config = Files.writeString(this.tempDir.resolve("compose.yml"), """
+				dependencies:
+				  provider: %s
+				  middle: %s
+				instantiations:
+				  root:
+				    arguments:
+				      %s: provider
+				      %s: middle
+				  middle:
+				    dependency: middle
+				    arguments:
+				      %s: provider
+				""".formatted(this.tempDir.resolve(provider + ".wasm"), this.tempDir.resolve(middle + ".wasm"),
+				providerIface, middleIface, providerIface));
+		Path composed = this.tempDir.resolve("composed.wasm");
+		Process compose = new ProcessBuilder("wasm-tools", "compose", this.tempDir.resolve(root + ".wasm").toString(),
+				"-c", config.toString(), "-o", composed.toString())
+			.redirectErrorStream(true)
+			.start();
+		String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(compose.waitFor()).as(composing).isZero();
+		Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true).start();
+		String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(run.waitFor()).as(printed).isZero();
+		return printed;
+	}
+
+	private void assertTargets(Path wit, String world, Path wasm) throws Exception {
+		Process targets = new ProcessBuilder("wasm-tools", "component", "targets", wit.toString(), "--world", world,
+				wasm.toString())
+			.redirectErrorStream(true)
+			.start();
+		String said = new String(targets.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(targets.waitFor()).as(world + " " + said).isZero();
 	}
 
 	@Test
@@ -388,12 +523,14 @@ class WitOracleE2eTest {
 				List.of("read     (:NAME \"apples\" :VALUE 7)", "summary  \"pears is at 10\"",
 						"merged   (:NAME \"apples+pears\" :VALUE 17)", "leader   \"apples+pears is at 17\"",
 						"live     1\nlive     0\nleader   \"no counter to lead\""));
+		Map<Path, String> printedBy = new java.util.HashMap<>();
 		for (Map.Entry<Path, List<Map.Entry<String, List<String>>>> example : examples.entrySet()) {
 			Path dir = example.getKey();
 			java.io.ByteArrayOutputStream interpreted = new java.io.ByteArrayOutputStream();
 			new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
 					new java.io.PrintStream(interpreted, true, StandardCharsets.UTF_8))
 				.run(new String[] { dir.resolve("app.lisp").toString() });
+			printedBy.put(dir, interpreted.toString(StandardCharsets.UTF_8));
 			compileFileViaCli(dir.resolve("app.lisp"), "app", List.of("--component"));
 			for (Map.Entry<String, List<String>> exporter : example.getValue()) {
 				compileFileViaCli(dir.resolve(exporter.getKey()), "exporting", exporter.getValue());
@@ -414,6 +551,30 @@ class WitOracleE2eTest {
 					.contains(lines.get(dir));
 			}
 		}
+		// A component that takes a resource it imports: the reporter answers report
+		// over the counters the exporting component keeps -- the command and the
+		// reporter import registry from its one instance, a dependency's import the
+		// composition's own instantiations wire --, and the command prints what it
+		// prints on the interpreter. A handle lent to an export is released once the
+		// function has answered (wasmtime traps a task that ends holding one), alone, in
+		// a list and in a record; one handed over or answered is the receiver's.
+		Path resource = Path.of("examples/wit/resource");
+		compileFileViaCli(resource.resolve("counters.lisp"), "counters", List.of("--component"));
+		compileFileViaCli(resource.resolve("reporter.lisp"), "reporter", List.of("--component"));
+		compileFileViaCli(resource.resolve("app.lisp"), "app", List.of("--component"));
+		String registry = "example:counters/registry@0.1.0";
+		assertThat(composedRun("app", "counters", registry, "reporter", "example:counters/report@0.1.0"))
+			.isEqualTo(printedBy.get(resource));
+		Files.createDirectories(this.tempDir.resolve("wit"));
+		Files.writeString(this.tempDir.resolve("wit/relaying.wit"),
+				Files.readString(resource.resolve("wit/counters.wit")) + RELAYING);
+		compileFileViaCli(Files.writeString(this.tempDir.resolve("relay.lisp"), RELAY.formatted("relaying")), "relay",
+				List.of("--component"));
+		compileFileViaCli(Files.writeString(this.tempDir.resolve("caller.lisp"), RELAY_CALLER), "caller",
+				List.of("--component"));
+		assertThat(composedRun("caller", "counters", registry, "relay", "example:counters/relay@0.1.0").lines())
+			.containsExactly("bump-all 26", "label    \"b\"", "fresh    (:NAME \"f\" :VALUE 1)",
+					"pick     (:NAME \"x\" :VALUE 3)", "pick     NIL", "live     2", "live     0");
 		// A call made while another waits: an async func's call is a task that waits
 		// inside the component, and the host runs a plain func of the same instance
 		// meanwhile. What the waiting call holds in memory -- here the place its own
