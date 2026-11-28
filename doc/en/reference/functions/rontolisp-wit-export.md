@@ -390,8 +390,11 @@ runs one program both ways.
 A core module (`-o out.wasm` alone, `--no-wasi` or `--no-gc` without
 `--component`) refuses an interface that declares a resource or uses one the
 component imports. `--no-gc --component` refuses one that uses a resource the
-component imports, since its `wit-import` binds no resource. The Clojure and
-the Java front ends refuse both.
+component imports, since its `wit-import` binds no resource. The Java front end
+exports a resource as a class
+([Resources of an export](../../java/wit.md#resources-of-an-export)), the Clojure
+one as vars named like these `defun`s
+([Resources](../../clojure/reference/wit.md#resources)).
 
 #### On the scalar backend
 

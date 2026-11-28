@@ -51,6 +51,25 @@ RONTOLISP=../../../target/rontolisp ./build.sh
 It needs [`wac`](https://github.com/bytecodealliance/wac) (`cargo install wac-cli`)
 and `wasmtime` 46+.
 
+## In Java and in Clojure
+
+[`Counters.java`](Counters.java) implements the same world as a Java class
+([Exporting a WIT world](../../../doc/en/java/wit.md#exporting-a-wit-world)): the
+interface `registry` is its member class `Registry`, and the resource `counter` the
+class `Registry.Counter`, whose constructor, instance methods and static method are
+the resource's and whose `close()` is the destructor. A handle is the object.
+[`counters.clj`](counters.clj) implements it with a var per function, each named by
+its member name as the Lisp `defun`s are; a counter is an atom
+([`rontolisp.wit`](../../../doc/en/clojure/reference/wit.md)).
+
+Either one replaces `counters.lisp` in `build.sh`, and the command prints the same
+lines:
+
+```bash
+RONTOLISP=../../../target/rontolisp COUNTERS=Counters.java ./build.sh
+RONTOLISP=../../../target/rontolisp COUNTERS=counters.clj ./build.sh
+```
+
 ## A component that takes a resource it imports
 
 `reporter.lisp` exports `report` and imports `registry`, so its `counter` is a

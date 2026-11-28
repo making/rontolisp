@@ -175,8 +175,9 @@ exported interface's. Each is checked against its definition, once.
 | `flags` | a `Set` of an enum, a label a constant | a member of the scope's class |
 | an alias (`type id = u32`) | the type it names | |
 | a record, a variant, an enum or flags taken with `use` | as above, under the name the clause gives it | a member of the class of the scope taking it |
-| a resource, `own<R>`, `borrow<R>` | an interface, its methods the resource's, `close()` its release | a member of the `@WitImport` interface |
-| a resource taken with `use` | the interface standing for it in the other scope | a member of the `@WitImport` interface standing for the interface that defines it |
+| a resource of an imported interface, `own<R>`, `borrow<R>` | an interface, its methods the resource's, `close()` its release | a member of the `@WitImport` interface |
+| a resource of an exported interface, `own<R>`, `borrow<R>` | a class, its constructor, instance methods and static methods the resource's, `close()` its destructor; a handle is the object | a static member of the interface's member class |
+| a resource taken with `use` | what stands for it in the scope that defines it | a member of the type standing for the interface that defines it: the `@WitImport` interface of an interface the program imports, the member class of one the world exports |
 | `stream<u8>` the host answers | `java.io.InputStream` | |
 | `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end; in an `option`, `Optional<Consumer<OutputStream>>` | |
 | `stream<T>` of values or of resources | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
@@ -192,8 +193,10 @@ integer, a `u64` past `Long.MAX_VALUE`, `null` or a closed resource does
 The worked examples: the key-value `Store` at the top (a resource, an `option`, a record, a
 `result` thrown), the `QueryAsync` rows and the socket's `send`
 ([What the host answers in pieces](#what-the-host-answers-in-pieces)), the HTTP request
-([A future the program hands the host](#a-future-the-program-hands-the-host)), and the
-`Shapes` world and its `pause` ([The types of an export](#the-types-of-an-export)).
+([A future the program hands the host](#a-future-the-program-hands-the-host)), the
+`Shapes` world and its `pause` ([The types of an export](#the-types-of-an-export)), and the
+`Counters` world's resource and the `Reporter` that takes it
+([Resources of an export](#resources-of-an-export)).
 
 `result<T, E>` is an `am.ik.rontolisp.wit.WitResult<T, E>` wherever the WIT has one: a
 parameter, a list's element, an option's value, a record's field, a variant's payload, an
@@ -442,9 +445,9 @@ is s32, which is int in Java, not long
 An export's types are [the table's](#the-types), named the same way: a type of the world is
 a member type of the annotated class, a type of an exported interface one of the
 interface's member class, a type taken with `use` one of the class of the scope taking it,
-under the clause's name, and a tuple any record of the program's. A resource, a `stream`
-and a `future` are refused at their WIT line
-([Where each type crosses](#where-each-type-crosses)).
+under the clause's name, and a tuple any record of the program's. A resource is a class
+([Resources of an export](#resources-of-an-export)). A `stream` and a `future` are refused at
+their WIT line ([Where each type crosses](#where-each-type-crosses)).
 
 ```console
 interface geometry {
@@ -547,6 +550,133 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 `async func` that sleeps and answers a `WitResult`; the Lisp command beside it binds the
 interface with `:blocking t` and waits for the answer.
 
+### Resources of an export
+
+A resource an exported interface declares is a static member class of the interface's
+class, named after the resource in upper camel case. Its constructor is the WIT
+constructor, an instance method a method, called on the object a handle stands for, and a
+static method a static function. `close()`, where the class has one, is the destructor: the
+component calls it when a holder releases a handle, and the class may implement
+`AutoCloseable` for it. The object the constructor makes is the resource: wherever the WIT
+says `counter`, `own<counter>` or `borrow<counter>` (a parameter, a result, a record's
+field, a list's element) the method takes or answers that object.
+
+```console
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+```
+
+```console
+@WitExport(value = "counters", wit = "wit/counters.wit")
+public class Counters {
+
+    public static class Registry {
+
+        public static class Counter implements AutoCloseable {
+
+            String name;
+
+            int value;
+
+            public Counter(String name, int start) {
+                this.name = name;
+                this.value = start;
+            }
+
+            public int add(int by) {
+                this.value += by;
+                return this.value;
+            }
+
+            public static Counter merge(Counter a, Counter b) {
+                a.value += b.value;
+                return a;
+            }
+
+            @Override
+            public void close() {
+            }
+        }
+
+        public static int total(List<Counter> counters) {
+            ...
+        }
+    }
+}
+```
+
+- A borrowed handle (`borrow<counter>`, a method's own object) lends the object for the
+  call. An owned one (`counter`, `own<counter>`) hands it over: the caller's handle is gone,
+  and the method keeps the object, changes it or answers it again. Each time the object is
+  answered as an owned handle, the host gets a new handle of it.
+- `close()` is not called for a handle handed over to an export, which released nothing.
+  An object with no handle left is ordinary garbage.
+- A second exported interface may name the resource in a `use` clause: in its class the
+  type is the class of the interface that declares it (`Registry.Counter`).
+- `null` is no resource: an export answering it traps, after writing a
+  `NullPointerException`.
+
+[`examples/wit/resource/Counters.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+implements the world of the Lisp example beside it; the Lisp command of that example calls
+it, composed with it, and prints the same lines.
+
+A resource of an interface the world does not export, which an exported interface or the
+world names with `use`, is one the component imports: the member interface of the
+`@WitImport` interface standing for the interface that defines it, as in an import, and a
+handle of it an object of that interface's binding.
+
+```console
+world reporter {
+  import registry;
+  export report;
+}
+```
+
+```console
+@WitExport(value = "reporter", wit = "wit/counters.wit")
+public class Reporter {
+
+    @WitImport(value = "example:counters/registry", wit = "wit/counters.wit")
+    public interface Registry {
+
+        interface Counter {
+
+            Reading read();
+        }
+
+        record Reading(String name, int value) {
+        }
+    }
+
+    public static class Report {
+
+        public static String summary(Registry.Counter c) {
+            Registry.Reading reading = c.read();
+            return reading.name() + " is at " + reading.value();
+        }
+    }
+}
+```
+
+- A borrowed handle is lent for the call: the export releases it once the method has
+  answered, and the object is closed then, so one kept beyond the call throws
+  `IllegalStateException`. Its `close()` within the call releases nothing.
+- An owned one is the program's: it keeps it, hands it on or closes it. One the method
+  answers passes to the caller, and the object is closed.
+- A lent object handed on where the WIT takes an owned handle traps (wasmtime: `cannot
+  lift own resource from a borrow`).
+
 ### Generating the skeleton
 
 `--scaffold-wit` writes the class from the world when its output is a `.java` file, or
@@ -585,12 +715,13 @@ Each export is a static method that throws until it is filled in, the WIT's `///
 comments and its signature its Javadoc. Each type is declared where
 [The types](#the-types) declares it: a `result` is a `WitResult`, a tuple a record named
 after where it stands (`BoundsResult`), or after its alias (`type ipv4-address = tuple<...>`
-is `Ipv4Address`), its components `v0`, `v1` and so on. Each interface the world imports is
-a `@WitImport` member interface of the class, with its resources and types, and so is
-each interface whose resource one of them takes with `use`; a method finds it with
-`ServiceLoader.load(Shapes.Store.class)`. The class is named after the file, or after the
-world when printed. The file compiles unchanged, so the exports can be filled in one at a
-time.
+is `Ipv4Address`), its components `v0`, `v1` and so on. A resource the world exports is a
+class whose constructor and methods throw, with a `close()` that does nothing. Each
+interface the world imports is a `@WitImport` member interface of the class, with its
+resources and types, and so is each interface whose resource one of them, or an export,
+takes with `use`; a method finds it with `ServiceLoader.load(Shapes.Store.class)`. The
+class is named after the file, or after the world when printed. The file compiles
+unchanged, so the exports can be filled in one at a time.
 
 The annotations name the WIT from the Java file's directory, so the WIT goes below it: a
 path climbing above it is refused when the program compiles, and the generator warns.
@@ -605,9 +736,8 @@ cannot tell from none
 ```
 
 An imported function left out is absent from its interface, which declares what the
-program calls. An export left out (a world exporting a resource, importing a function of
-its own, or exporting a type refused here) leaves a class the check refuses until the WIT
-changes.
+program calls. An export left out (a world importing a function of its own, or exporting a
+type refused here) leaves a class the check refuses until the WIT changes.
 
 ## Where each type crosses
 
@@ -622,32 +752,30 @@ compiles, on every target, at the Java declaration, naming the WIT member's line
 | `option` of a `bool`, a `list`, `flags` or an `option` | refused: its none is a value too | refused | refused | refused | refused |
 | `result<T, E>` | yes | yes, or its ok arm with the error arm thrown | yes | yes, or its ok arm with the error arm thrown | yes, as a `WitResult` |
 | a tuple in an error arm thrown as a `WitException` | | refused: no type is written for it (answer the `WitResult`) | | refused, likewise | |
-| a resource of the interface | yes; an `own` handed over closes the object | yes | not yet: a Java class does not export a resource (a Common Lisp program does) | not yet | yes in an import (a record's field, a list's element) |
-| a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | not yet (a Common Lisp program takes one the component imports) | not yet | yes in an import |
+| a resource of the interface | yes; an `own` handed over closes the object | yes | yes, the object: a `borrow` lent for the call, an `own` handed over | yes, the object, but no `borrow` | yes (a record's field, a list's element) |
+| a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | yes: of an exported interface the object; of one the component imports an object of its binding, closed when the call ends where it is lent | yes, likewise, but no `borrow` | yes |
 | `stream<u8>` | yes, `Consumer<OutputStream>`, but not to an `async func`: the call waits while the host reads what the program writes after it | yes, `InputStream` | refused: an export carries no stream | refused | in an import result; in a parameter only as an `option` of its own |
 | `stream<T>` of values or of resources | refused: the guest cannot write one | yes, `WitStream<T>` | refused | refused | in an import result |
 | `future<T>` | yes, a `WitFuture<T>` the program made | yes, but not of a `bool`, a `list`, `flags` or an `option`: its value is a future its writer dropped too | refused: an export carries no future | refused | in an import result; in a parameter refused |
 | `error-context` | refused: the WIT is refused as naming a type it does not define | | | | |
 
-An exported interface that declares a resource, or whose `use` clause names one or a type
-holding a handle, is refused at the world's `export` line whether or not a function takes
-it. A `use` of a resource in the world itself is left out, and a function of the world
-naming it is refused. A Common Lisp program exports a resource from a component (on
-`--no-gc --component` too, as the integer its constructor answers), and takes a handle of one
-the component imports
-([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)); a Java
-program imports the exported one from that component as any resource.
+An exported interface whose `use` clause names a type holding a handle is refused at the
+world's `export` line whether or not a function takes it, and so is a function of the
+world naming a resource the world itself declares. A handle of a resource the component
+imports crosses a component of the default backend alone
+([What each output takes](#what-each-output-takes)). The Common Lisp side of the same
+boundary: [`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources).
 
 ## What each output takes
 
 | Output | `@WitImport` | `@WitExport` (a program with no `main`) | An `async func` export | An exception an export leaves uncaught |
 | --- | --- | --- | --- | --- |
 | `--component` | every type of [Where each type crosses](#where-each-type-crosses) | a reactor component exporting the worlds | lifted async: the call may wait where the method blocks | written to standard error as a JDK writes it, then the call traps |
-| `--component --no-wasi` | refused: such a component imports nothing | as `--component` | lifted async, but the component imports no clock: a method that sleeps traps | the call traps, writing nothing |
+| `--component --no-wasi` | refused: such a component imports nothing | as `--component`, but no handle of a resource the component imports, which it would import | lifted async, but the component imports no clock: a method that sleeps traps | the call traps, writing nothing |
 | `--no-wasi` module, its host the `--emit-js-glue` glue | through the canonical ABI, every type but a `stream` and a `future`; no `async func`. Not reached from `main`: a JavaScript host may answer with a promise | refused: a world is exported by a component | | |
 | Preview 1 module (`-o out.wasm`) | the flat set: the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`, handles; an `async func` of those a call | refused | | |
 | `--no-gc` module | of `bool`, the integers, `f64` and `string`, imported as a Preview 1 module imports them, through the lookup of [The implementation](#the-implementation); an `async func` of those a call | refused | | |
-| `--no-gc --component` | of `bool`, the integers, `f64` and `string` alone, through that lookup; anything else refused at its WIT line. An `async func` is a call that waits, refused where an export that is no `async func` reaches it | of those types alone; anything else refused at its WIT line | lifted async, of those types: the call may wait where an import does | the call traps, writing nothing |
+| `--no-gc --component` | of `bool`, the integers, `f64` and `string` alone, through that lookup; anything else refused at its WIT line. An `async func` is a call that waits, refused where an export that is no `async func` reaches it | of those types alone; anything else refused at its WIT line. No resource: its object is one the scalar backend cannot read, refused where it reads one | lifted async, of those types: the call may wait where an import does | the call traps, writing nothing |
 | `--native` | none: its runner provides no WIT interface, so a program calling a member of the flat set does not start, and any other member is refused | refused | | |
 | a JDK, the interpreter, the JVM | the program's own provider, every type; nothing is converted | the annotation does nothing: ordinary static methods, and a program with no `main` is refused | the method, called as any other | as any exception |
 
@@ -669,8 +797,8 @@ refuses it.
   `Optional`, a `List`, a record or a `WitResult`. Under a JDK, on the interpreter and on
   the JVM the provider is handed the `null`.
 - A closed resource throws `IllegalStateException` (`tcp-socket of wasi:sockets/types@0.3.0
-  is closed`), and a second `close()` does nothing. A read of a closed `InputStream` throws
-  `IOException`.
+  is closed`), and a second `close()` does nothing; so does one lent to an export once the
+  call has ended. A read of a closed `InputStream` throws `IOException`.
 
 ## Limitations
 
@@ -684,3 +812,6 @@ refuses it.
   traps and writes nothing.
 - Two exports of one label (a function of the world and an interface's, or two
   interfaces') are two methods, each of its own class.
+- A program with no `main` exports every `@WitExport` class of its source tree, so the
+  classes of two worlds (the `Counters` and the `Reporter` above) are two programs, each in
+  a directory of its own.

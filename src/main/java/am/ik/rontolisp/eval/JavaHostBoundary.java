@@ -176,11 +176,21 @@ public final class JavaHostBoundary implements JavaBoundary {
 			}
 			WitTypeMapper.Shape result = export.result();
 			canonical |= result != null && !flat(result);
+			Kind kind = export.resource() == null ? Kind.FUNCTION : switch (export.kind()) {
+				case CONSTRUCTOR -> Kind.CONSTRUCTOR;
+				case STATIC -> Kind.STATIC;
+				case PLAIN -> Kind.METHOD;
+			};
 			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params), type(result),
-					export.async(), export.at(), canonical));
+					export.async(), export.at(), canonical, kind, export.resource(), export.function(),
+					export.member()));
+		}
+		List<Resource> resources = new ArrayList<>();
+		for (WitExportDirective.Resource resource : described.resources()) {
+			resources.add(new Resource(resource.name(), resource.iface(), resource.key(), resource.at()));
 		}
 		return new WitWorld(described.name(), source.path(), List.copyOf(exports), described.imports(),
-				described.refused());
+				described.refused(), List.copyOf(resources));
 	}
 
 	// Whether a described type is one the flat boundary carries: the directive describes
@@ -272,7 +282,7 @@ public final class JavaHostBoundary implements JavaBoundary {
 			parts.add(new Part(part.label(), type(part.shape())));
 		}
 		return new Type(Rep.valueOf(shape.rep().name()), type(shape.element()), shape.wit(), type(shape.error()),
-				List.copyOf(parts), shape.definition(), shape.borrow());
+				List.copyOf(parts), shape.definition(), shape.borrow(), shape.home());
 	}
 
 }

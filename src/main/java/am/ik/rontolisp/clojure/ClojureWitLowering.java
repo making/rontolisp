@@ -145,10 +145,12 @@ final class ClojureWitLowering {
 	 * @param reactor whether the exports are the program's entry points
 	 * ({@code :reactor true}): the top level runs at the first export call
 	 * @param exports the world's exports
+	 * @param drops the destructors of the resources it exports, each calling the var its
+	 * name names where the namespace has one
 	 * @param at where the declaration sits, for a refusal
 	 */
 	record PendingWorld(String ns, String path, @Nullable String world, boolean reactor,
-			List<ClojureBoundary.Function> exports, @Nullable SourceLocation at) {
+			List<ClojureBoundary.Function> exports, List<ClojureBoundary.Function> drops, @Nullable SourceLocation at) {
 	}
 
 	/** The WIT state one lowering keeps (a session: across its buffers). */
@@ -932,7 +934,7 @@ final class ClojureWitLowering {
 			}
 		}
 		ctx.wit.worlds.add(new PendingWorld(ctx.currentNs, directivePath, world, reactor, described.exports(),
-				ClojureWasmLowering.locate(ctx, form)));
+				described.drops(), ClojureWasmLowering.locate(ctx, form)));
 		ctx.wit.implemented = true;
 		return ClojureLowering.NIL_CONST;
 	}
@@ -967,9 +969,11 @@ final class ClojureWitLowering {
 
 	/**
 	 * The worlds the program implements, as the forms implementing them: each export's
-	 * label resolved to a var of the namespace the declaration sits in, its wrapper (when
-	 * one is needed) ahead of the {@code rontolisp:wit-export} whose {@code :names} table
-	 * names every implementing function.
+	 * label -- a resource's function's member name ({@code counter-add}) -- resolved to a
+	 * var of the namespace the declaration sits in, its wrapper (when one is needed)
+	 * ahead of the {@code rontolisp:wit-export} whose {@code :names} table names every
+	 * implementing function, and a resource's destructor's var ({@code counter-drop})
+	 * where the namespace has one.
 	 * @param ctx the hub
 	 * @param worlds the worlds declared since the last flush
 	 * @return the forms
@@ -985,6 +989,25 @@ final class ClojureWitLowering {
 						ClojureWasmLowering.implementation(ctx, world.ns(), export.name(), export.name(),
 								export.params().size(), exportConversion(ctx, crossings(export)),
 								NAMESPACE + "/export (" + export.at() + ")", world.at(), out));
+			}
+			for (ClojureBoundary.Function drop : world.drops()) {
+				// optional: a resource whose namespace defines none has no destructor of
+				// the program's
+				String outerNs = ctx.currentNs;
+				ctx.currentNs = world.ns();
+				String defined;
+				try {
+					defined = ctx.resolveVar(drop.name());
+				}
+				finally {
+					ctx.currentNs = outerNs;
+				}
+				if (defined != null) {
+					names.put(drop.key(),
+							ClojureWasmLowering.implementation(ctx, world.ns(), drop.name(), drop.name(), 1,
+									exportConversion(ctx, crossings(drop)), NAMESPACE + "/export (" + drop.at() + ")",
+									world.at(), out));
+				}
 			}
 			List<LispVal> table = new ArrayList<>();
 			for (Map.Entry<String, String> entry : names.entrySet()) {

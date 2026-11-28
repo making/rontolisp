@@ -196,14 +196,35 @@ class WitScaffolderTest {
 				  export add;
 				}
 				""");
+		// A resource's functions are stubbed too, named as an import binds them.
+		Files.writeString(this.tempDir.resolve("res.wit"), """
+				package docs:res@0.1.0;
+
+				interface counters {
+				  resource counter {
+				    constructor(start: u32);
+				    add: func(n: u32) -> u32;
+				    merge: static func(a: counter, b: borrow<counter>) -> counter;
+				  }
+				}
+
+				world res {
+				  export counters;
+				}
+				""");
 		// And end-to-end through the CLI, which is how a user meets it.
-		for (String name : List.of("analyzer", "adder")) {
+		for (String name : List.of("analyzer", "adder", "res")) {
 			Path source = this.tempDir.resolve(name + ".lisp");
 			runCli("--scaffold-wit", this.tempDir.resolve(name + ".wit").toString(), "-o", source.toString());
 			Path wasm = this.tempDir.resolve(name + ".wasm");
 			runCli(source.toString(), "-o", wasm.toString(), "--component");
 			assertThat(Files.readAllBytes(wasm)).startsWith(new byte[] { 0x00, 0x61, 0x73, 0x6D });
 		}
+		assertThat(Files.readString(this.tempDir.resolve("res.lisp")))
+			.contains(";;; WIT: constructor(start: u32)\n(defun counter-new (start)\n")
+			.contains(";;; WIT: add: func(n: u32) -> u32\n(defun counter-add (self n)\n")
+			.contains(";;; WIT: merge: static func(a: counter, b: borrow<counter>) -> counter\n"
+					+ "(defun counter-merge (a b)\n");
 	}
 
 	private static final String API = "rontolisp-java-api/src/main/java";
@@ -215,6 +236,8 @@ class WitScaffolderTest {
 					examples/wit/keyvalue/wit/keyvalue.wit | PageHits | world page-hits { import store; export hits: func(page: string) -> u32; } | WitResult<Optional<byte[]>, Error> get(String key);
 					examples/wit/sockets/wit/sockets.wit   | Echo     | world echo { import types; export echo: func(port: u16) -> string; }      | record Ipv4Address(byte v0, byte v1, byte v2, byte v3) {
 					examples/wit/resource/wit/counters.wit | Client   | world client { import report; export lead: func() -> string; }            | String summary(Registry.Counter c);
+					examples/wit/resource/wit/counters.wit | Counters | counters                                                                  | public static class Counter implements AutoCloseable {
+					examples/wit/resource/wit/counters.wit | Reporter | reporter                                                                  | public static String summary(Registry.Counter c) {
 					""")
 	void aJavaSkeletonPassesTheCheckAndCompilesToTheWorld(String example, String className, String world,
 			String declared) throws Exception {
@@ -222,12 +245,16 @@ class WitScaffolderTest {
 		// the generated class compiles unchanged, every @WitImport interface checked,
 		// to a component exporting what the world exports. report takes registry's
 		// counter with use, so registry's interface is generated too; an alias of a
-		// tuple is a record of its name.
+		// tuple is a record of its name. A resource the world exports is a class, its
+		// constructor, methods and static methods the resource's, one the component
+		// imports the member interface standing for it.
 		Path wit = this.tempDir.resolve("wit").resolve(Path.of(example).getFileName());
 		Files.createDirectories(wit.getParent());
-		Files.writeString(wit, Files.readString(Path.of(example)) + (world == null ? "" : "\n" + world + "\n"));
+		// a world written beside the file's, or one of the file's named
+		boolean written = world != null && world.contains(" ");
+		Files.writeString(wit, Files.readString(Path.of(example)) + (written ? "\n" + world + "\n" : ""));
 		String worldName = world == null ? WitScaffolder.worldName(Files.readString(wit), null, wit.toString())
-				: world.split(" ")[1];
+				: world.split(" ")[written ? 1 : 0];
 		Path java = this.tempDir.resolve(className + ".java");
 		runCli("--scaffold-wit", wit.toString(), "--world", worldName, "-o", java.toString());
 		assertThat(Files.readString(java)).doesNotContain("Left out").contains(declared);
@@ -344,20 +371,36 @@ class WitScaffolderTest {
 					this.tempDir.resolve("app.wasm").toString(), "--component"))
 				.hasMessageEndingWith(refusals.get(0));
 		}
-		// an export item the boundary refuses whole: the world's interface of a
-		// resource, and what names the resource
-		Path counters = this.tempDir.resolve("counters.wit");
-		Files.copy(Path.of("examples/wit/resource/wit/counters.wit"), counters);
+		// an export item the boundary refuses whole, with every export it holds: an
+		// interface naming a type of another that holds a handle
+		Path held = this.tempDir.resolve("held.wit");
+		Files.writeString(held, """
+				package test:held;
+
+				interface store {
+				  resource blob;
+				  record pair { b: borrow<blob> }
+				  make: func() -> blob;
+				}
+
+				interface files {
+				  use store.{pair};
+				  size: func(p: pair) -> u32;
+				}
+
+				world held {
+				  import store;
+				  export files;
+				  export fine: func() -> u32;
+				}
+				""");
 		List<String> skipped = new ArrayList<>();
-		WitScaffolder.scaffoldJava(Files.readString(counters), counters.toString(), "counters.wit",
-				this.tempDir.resolve("Counters.java").toString(), "counters", "Counters", skipped::add);
-		assertThat(skipped).containsExactly(
-				"counters.wit:37: interface 'example:counters/registry@0.1.0' declares the resource 'counter', which "
-						+ "this language does not export (a Common Lisp program does: the representation of a handle "
-						+ "is any value its constructor answers)",
-				"counters.wit:38: export 'summary' names the resource 'counter', which this language does not "
-						+ "export (a Common Lisp program does: the representation of a handle is any value its "
-						+ "constructor answers)");
+		String source = WitScaffolder.scaffoldJava(Files.readString(held), held.toString(), "held.wit",
+				this.tempDir.resolve("Held.java").toString(), "held", "Held", skipped::add);
+		assertThat(skipped)
+			.containsExactly("held.wit:16: interface 'test:held/files' uses 'pair' of test:held/store, a type "
+					+ "that holds a handle: name the resource in the use clause and define the type in the interface");
+		assertThat(source).contains("public static int fine() {").doesNotContain("size(");
 	}
 
 	// The exports of a world, each function with its signature: what a component
@@ -381,6 +424,15 @@ class WitScaffolderTest {
 					for (WitItem member : iface.items()) {
 						if (member instanceof WitItem.FuncDef func) {
 							exports.add(id + "#" + func.name() + ": " + WitScaffolder.signature(func.func()));
+						}
+						// a resource's functions, with it
+						if (member instanceof WitItem.ResourceDef resource && resource.body() != null) {
+							for (WitItem inner : resource.body()) {
+								if (inner instanceof WitItem.FuncDef func) {
+									exports.add(id + "#" + resource.name() + "." + func.kind() + " " + func.name()
+											+ ": " + WitScaffolder.signature(func.func()));
+								}
+							}
 						}
 					}
 				}

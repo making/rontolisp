@@ -1600,16 +1600,54 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   after, 12 outputs: the counter (GC, `--no-gc`, `--no-wasi` components), `JavaWitImportTest`'s
   `Kinds`, `PageHits` (component and class), the Lisp shapes pair and counter, the Clojure
   greeter, the Worker.
+- **A resource of an exported interface**: a static member class of the
+  interface's class named after it -- the constructor the WIT constructor, an instance
+  method a method (the receiver the object `self` stands for), a static method a static
+  function, a declared or inherited instance `close()` the destructor, optional; a handle is
+  the object, cast where it arrives, `null` answered an NPE. Decided as the mirror of
+  `@WitImport`'s member interface: `new`, a receiver and `AutoCloseable` are what Java has for
+  the WIT's constructor, `self` and release. The wrappers stay `<Holder>$WitExport`'s, grouped
+  by the interface's class (`Bound.holder`; the method is the resource class's), named by the
+  member (`counterAdd`), `counterDrop(Object)` calling `close()`. A handle of another exported
+  interface's resource (`use`) is that interface's class; of one the component imports, the
+  member interface of a `@WitImport` interface standing for its `home`, told by the type
+  written (`Types.matches`, as the import's `Checker.matches`), an object of its binding.
+- **A handle lent to an export is closed when the call ends** (`JavaWitImports.lend`): the
+  binding's `R<n>` of a resource an export lends gets `boolean[] lent`, the call's flag the
+  in-converter hands it (`Converters.lends`, a converter taking the flag) and the wrapper
+  clears in a `finally`; `live()` then throws, and `close()` releases nothing (the export
+  releases the loan). Registered in `wrappers()` before any binding is written, so no other
+  binding's text moves. Measured 2026-11-28 (wasmtime 51) without it: an object kept from one
+  call read ANOTHER counter in the next (the handle index reused), and a lent object's
+  `close()` trapped the call's end (`unknown handle index 1`, dropped twice). One handed on as
+  owned traps in wasmtime, unchecked (`cannot lift own resource from a borrow`).
+- `--no-gc --component` refuses a resource where the scalar backend reads the object
+  (`reads a structure`, at the generated wrapper): the front end knows no `--no-gc`, both it
+  and `--component --no-wasi` being reactor components.
+- The skeleton writes the class (the constructor and methods throwing, an empty `close()`)
+  and imports each interface whose resource an export takes (`JavaWitScaffold.importedHomes`).
+  A Java source tree exports every `@WitExport` class it holds, so two worlds' classes are two
+  directories (`WitOracleE2eTest.beside`).
+- Measured 2026-11-28 (raw / gzip): `examples/wit/resource/Counters.java` 78,754 / 29,077 B
+  (`--no-wasi` 72,795 / 26,791) against `counters.lisp`'s 58,921 / 21,971; the Java reporter
+  58,852 / 23,636 against `reporter.lisp`'s 11,570 / 5,656 (the uncaught report, the binding).
+  Byte-identical before and after, 18 outputs (the Java counter on three shapes, `Shapes` on
+  two, `PageHits` component and class, `Echo`, `Worker`, the Clojure greeter and page-hits,
+  the Lisp counters, reporter, app, shapes and page-hits) and four Java skeletons.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
   an interface, static state, an `async func` that sleeps, each refusal, no `wasi:cli/exit`; JDK,
   interpreter, JVM, component, the `--no-gc` component and its bare trap; a world of every
   compound kind, an `async func` of them that sleeps, both spellings of a `result`, its
-  refusals) and `examples.yaml`'s
-  `java/rust-calls-java` and `wit/shapes/Shapes.java` (`totalArea`: an `async func` that
+  refusals; a resource's class and its refusals, a mistyped imported handle, a resource on
+  `--no-gc`) and `examples.yaml`'s
+  `java/rust-calls-java`, `wit/shapes/Shapes.java` (`totalArea`: an `async func` that
   sleeps and answers a `WitResult`, `app.lisp` binding it with `:blocking t`; the component
-  174,323 -> 194,659 B with it, measured 2026-11-27, the Lisp one 71,410 -> 72,532),
+  174,323 -> 194,659 B with it, measured 2026-11-27, the Lisp one 71,410 -> 72,532) and
+  `wit/resource/Counters.java`,
   `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes` (the Lisp command
-  composed with the Java component); by hand, the example's `CounterTest` under
+  composed with the Java component; the reporter and the relay, lent handles closed with
+  their call), `WitScaffolderTest.aJavaSkeletonPassesTheCheckAndCompilesToTheWorld` (the
+  counters and reporter worlds); by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
 ### The skeleton (`--scaffold-wit`)

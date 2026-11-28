@@ -357,13 +357,13 @@ public final class WitExportDirective {
 		Set<String> destructors = new java.util.HashSet<>();
 		ScalarHandles handles = backend == Backend.WASM_NO_GC_COMPONENT ? new ScalarHandles(implemented) : null;
 		boolean[] exports = new boolean[1];
-		walk(implemented, witPath, true, false, new ExportVisitor() {
+		walk(implemented, witPath, false, new ExportVisitor() {
 			@Override
-			public void visit(String name, String defun, WitFunc func, WitItem item, @Nullable String ifaceId,
+			public void visit(Callee callee, WitFunc func, WitItem item, @Nullable String ifaceId,
 					WitItem.InterfaceDef scope) {
 				exports[0] = true;
-				forms.addAll(exportForms(name, defun, func, witPath, locations, item, defuns, backend, ifaceId,
-						directive, implemented, scope, document, typed, handles));
+				forms.addAll(exportForms(callee.label(), callee.defun(), func, witPath, locations, item, defuns,
+						backend, ifaceId, directive, implemented, scope, document, typed, handles));
 			}
 
 			@Override
@@ -395,19 +395,15 @@ public final class WitExportDirective {
 	}
 
 	/**
-	 * One world export, as the walk hands it over: its label, the function implementing
-	 * it, its WIT function, the world item declaring it, the interface it belongs to
+	 * One world export, as the walk hands it over: what it is called and implemented by,
+	 * its WIT function, the world item declaring it, the interface it belongs to
 	 * ({@code null} for a freestanding function), and the scope its type names resolve in
 	 * -- that interface, or the world's own type definitions.
 	 */
 	@FunctionalInterface
 	private interface ExportVisitor {
 
-		// `defun` is the function the program implements the export by: the label
-		// itself, or the member name a resource's function binds on the import side
-		// too (`counter-new`, `counter-add`: WitNamingHook.memberName).
-		void visit(String name, String defun, WitFunc func, WitItem item, @Nullable String ifaceId,
-				WitItem.InterfaceDef scope);
+		void visit(Callee callee, WitFunc func, WitItem item, @Nullable String ifaceId, WitItem.InterfaceDef scope);
 
 		// A resource of an exported interface, ahead of its functions.
 		default void resource(String ifaceId, WitItem.ResourceDef resource, WitItem item) {
@@ -422,6 +418,20 @@ public final class WitExportDirective {
 		// A world item a lenient walk refused, after whatever of it was visited.
 		default void refused(WitItem item, UnsupportedOperationException refusal) {
 			throw refusal;
+		}
+
+	}
+
+	// An export's label; `defun`, the function the program implements it by: the label
+	// itself, or the member name a resource's function binds on the import side too
+	// (`counter-new`, `counter-add`: WitNamingHook.memberName); the resource a function
+	// of one belongs to, its kind and its own name (`add`).
+	private record Callee(String label, String defun, @Nullable String resource, WitItem.FuncKind kind,
+			String function) {
+
+		// A function of no resource, its label its own name.
+		Callee(String label) {
+			this(label, label, null, WitItem.FuncKind.PLAIN, label);
 		}
 
 	}
@@ -586,23 +596,57 @@ public final class WitExportDirective {
 	 * A world export described for a front end that resolves the function implementing it
 	 * before the lowering runs ({@link #describe}).
 	 *
-	 * @param name the export's label (an interface member's own label)
-	 * @param params its parameters: the WIT name and type of each
-	 * @param result its result type, or {@code null} for none
+	 * @param name the export's label (an interface member's own label; a resource's
+	 * function's the canonical ABI's, {@code [method]counter.add})
+	 * @param params its parameters: the WIT name and type of each, a method's handle
+	 * first ({@code self})
+	 * @param result its result type ({@code own<r>} for a constructor), or {@code null}
+	 * for none
 	 * @param async whether it is an {@code async func}
 	 * @param iface the exported interface it belongs to, or {@code null} for a
 	 * freestanding function
 	 * @param at the WIT file and line declaring it ({@code path:line})
+	 * @param resource the resource of the interface a constructor, a method or a static
+	 * function belongs to, or {@code null}
+	 * @param kind what the WIT declares it as: a method is a {@code PLAIN} function of a
+	 * resource
+	 * @param function the WIT function's own name ({@code add}; {@code constructor})
+	 * @param member the name of the function implementing it: its label, a resource's
+	 * function's the member name an import of the interface binds ({@code counter-add})
 	 */
 	public record Export(String name, List<WitTypeMapper.Param> params, WitTypeMapper.@Nullable Shape result,
-			boolean async, @Nullable String iface, String at) {
+			boolean async, @Nullable String iface, String at, @Nullable String resource, WitItem.FuncKind kind,
+			String function, String member) {
 
 		/**
 		 * {@return the key the directive's {@code :names} table names this export by}
-		 * ({@link WitExportDirective#namesKey})
+		 * ({@link WitExportDirective#namesKey}, of its member name)
 		 */
 		public String key() {
-			return namesKey(this.name, this.iface);
+			return namesKey(this.member, this.iface);
+		}
+
+	}
+
+	/**
+	 * A resource an exported interface declares, which the component exports: what each
+	 * handle of it stands for is the value its constructor answers, which the destructor
+	 * is handed when a holder releases the handle.
+	 *
+	 * @param name its name
+	 * @param iface the exported interface declaring it
+	 * @param drop the name of the function the destructor calls when the program defines
+	 * it ({@code counter-drop})
+	 * @param at the WIT file and line of the world's export of the interface
+	 */
+	public record Resource(String name, String iface, String drop, String at) {
+
+		/**
+		 * {@return the key the directive's {@code :names} table names the destructor's
+		 * function by} ({@link WitExportDirective#namesKey})
+		 */
+		public String key() {
+			return namesKey(this.drop, this.iface);
 		}
 
 	}
@@ -611,13 +655,16 @@ public final class WitExportDirective {
 	 * A world, described for a front end ({@link #describe}, {@link #outline}).
 	 *
 	 * @param name the world's name
-	 * @param exports its exports, in world order
+	 * @param exports its exports, in world order: a resource's functions after the
+	 * resource, ahead of the functions its interface declares after it
 	 * @param imports the interfaces it imports, in world order: the canonical id of each
 	 * the WIT defines, the reference as written of any other
 	 * @param refused the refusal of each export {@link #outline} left out, in world
 	 * order, worded as {@link #describe} throws it; empty from {@link #describe}
+	 * @param resources the resources the exported interfaces declare, in world order
 	 */
-	public record WorldDescription(String name, List<Export> exports, List<String> imports, List<String> refused) {
+	public record WorldDescription(String name, List<Export> exports, List<String> imports, List<String> refused,
+			List<Resource> resources) {
 	}
 
 	/**
@@ -628,7 +675,11 @@ public final class WitExportDirective {
 	 * the file defines, every type is one the export boundary carries. What is left is
 	 * the function implementing each export, which {@link #lower} reads from the program;
 	 * the Clojure lowering resolves it first, from a label to a var
-	 * ({@code rontolisp.wit/export}).
+	 * ({@code rontolisp.wit/export}). A resource an exported interface declares is
+	 * described with its functions, a handle by the interface defining its resource
+	 * ({@link WitTypeMapper.Shape#home}): the value its constructor answers where the
+	 * world exports that interface, the integer a {@code rontolisp:wit-import} binding
+	 * takes where the component imports it.
 	 * @param directive the parsed directive
 	 * @param witSource the WIT text
 	 * @param witPath the WIT file path, for error messages
@@ -655,9 +706,9 @@ public final class WitExportDirective {
 	 * Like {@link #describe(Directive, WitSource)}, for a generator writing the skeleton
 	 * of an implementation ({@code --scaffold-wit}): an export {@link #describe} refuses
 	 * is left out and its refusal listed instead -- a function of a type the boundary
-	 * does not carry alone, a world item refused as a whole (an interface declaring a
-	 * resource, an inline import) with every export it holds -- and a world left with no
-	 * export is described as one.
+	 * does not carry alone, a world item refused as a whole (an inline import, a use
+	 * clause naming a type that holds a handle) with every export it holds -- and a world
+	 * left with no export is described as one.
 	 * @param directive the parsed directive
 	 * @param source the WIT
 	 * @return the world's name, the exports {@link #describe} accepts, and the refusals
@@ -667,62 +718,34 @@ public final class WitExportDirective {
 		return describe(directive, source, true);
 	}
 
-	/** Why a front end binding its own names exports no resource. */
-	private static final String NOT_EXPORTED = "which this language does not export (a Common Lisp program does: the "
-			+ "representation of a handle is any value its constructor answers)";
-
-	// The first resource a shape holds a handle of, or null.
-	private static @Nullable String handleIn(WitTypeMapper.@Nullable Shape shape) {
-		if (shape == null) {
-			return null;
-		}
-		if (shape.rep() == WitTypeMapper.Rep.HANDLE) {
-			return shape.definition();
-		}
-		String held = handleIn(shape.element());
-		held = held != null ? held : handleIn(shape.error());
-		for (WitTypeMapper.Part part : shape.parts()) {
-			held = held != null ? held : handleIn(part.shape());
-		}
-		return held;
-	}
-
 	private static WorldDescription describe(Directive directive, WitSource source, boolean lenient) {
 		String witPath = source.path();
 		Implemented implemented = implemented(directive, source);
 		WitLocations locations = implemented.locations();
-		// each export with the world item declaring it, which a refusal of the whole
-		// item takes out again
+		// each export and each resource with the world item declaring it, which a
+		// refusal of the whole item takes out again
 		List<Map.Entry<WitItem, Export>> exports = new ArrayList<>();
+		List<Map.Entry<WitItem, Resource>> resources = new ArrayList<>();
 		List<String> refused = new ArrayList<>();
-		walk(implemented, witPath, false, lenient, new ExportVisitor() {
+		walk(implemented, witPath, lenient, new ExportVisitor() {
 			@Override
-			public void visit(String name, String defun, WitFunc func, WitItem item, @Nullable String ifaceId,
+			public void visit(Callee callee, WitFunc func, WitItem item, @Nullable String ifaceId,
 					WitItem.InterfaceDef scope) {
+				String name = callee.label();
 				try {
 					checkLabel(name, witPath, locations, item);
 					List<WitTypeMapper.Param> params = new ArrayList<>();
 					for (WitFunc.Param param : func.params()) {
 						params.add(new WitTypeMapper.Param(param.name(), shapeOf(param.type(), name, param.name(),
-								witPath, locations, item, implemented, scope)));
+								witPath, locations, item, implemented, scope, ifaceId)));
 					}
 					WitType result = func.result();
-					WitTypeMapper.Shape answer = result == null ? null
-							: shapeOf(result, name, "the result", witPath, locations, item, implemented, scope);
-					// a handle of a resource the outline left out: a front end binding
-					// its own names exports no resource (walk, `resources`), which
-					// describe refuses before any function naming one
-					String handle = null;
-					for (WitTypeMapper.Param param : params) {
-						handle = handle != null ? handle : handleIn(param.shape());
-					}
-					handle = handle != null || answer == null ? handle : handleIn(answer);
-					if (handle != null && lenient) {
-						throw error(witPath, locations, item,
-								"export '" + name + "' names the resource '" + handle + "', " + NOT_EXPORTED);
-					}
-					exports.add(Map.entry(item, new Export(name, List.copyOf(params), answer, func.async(), ifaceId,
-							WitSource.at(witPath, locations, item))));
+					WitTypeMapper.Shape answer = result == null ? null : shapeOf(result, name, "the result", witPath,
+							locations, item, implemented, scope, ifaceId);
+					exports.add(Map.entry(item,
+							new Export(name, List.copyOf(params), answer, func.async(), ifaceId,
+									WitSource.at(witPath, locations, item), callee.resource(), callee.kind(),
+									callee.function(), callee.defun())));
 				}
 				catch (UnsupportedOperationException ex) {
 					if (!lenient) {
@@ -733,8 +756,15 @@ public final class WitExportDirective {
 			}
 
 			@Override
+			public void resource(String ifaceId, WitItem.ResourceDef resource, WitItem item) {
+				resources.add(Map.entry(item, new Resource(resource.name(), ifaceId, resource.name() + "-drop",
+						WitSource.at(witPath, locations, item))));
+			}
+
+			@Override
 			public void refused(WitItem item, UnsupportedOperationException refusal) {
 				exports.removeIf(export -> export.getKey() == item);
+				resources.removeIf(resource -> resource.getKey() == item);
 				refused.add(String.valueOf(refusal.getMessage()));
 			}
 		});
@@ -751,16 +781,19 @@ public final class WitExportDirective {
 			}
 		}
 		return new WorldDescription(implemented.world().name(), exports.stream().map(Map.Entry::getValue).toList(),
-				List.copyOf(imports), List.copyOf(refused));
+				List.copyOf(imports), List.copyOf(refused), resources.stream().map(Map.Entry::getValue).toList());
 	}
 
 	// The shape of an export's type for a front end that binds its own names: a type the
 	// flat boundary carries as that primitive, any other whole (aliases followed, every
 	// nested type resolved, as an import's member is: WitTypeMapper.shape) once the
 	// refusals every backend makes have passed -- lower's, but --no-gc's and a core
-	// module's, which it makes knowing the output.
+	// module's, which it makes knowing the output. A handle's home is the exported
+	// interface's id where the scope declares its resource: the scope is the interface
+	// with its use clauses written out, in no package of the document.
 	private static WitTypeMapper.Shape shapeOf(WitType type, String exportName, String what, String witPath,
-			WitLocations locations, WitItem item, Implemented implemented, WitItem.InterfaceDef scope) {
+			WitLocations locations, WitItem item, Implemented implemented, WitItem.InterfaceDef scope,
+			@Nullable String ifaceId) {
 		WitResolver resolver = implemented.resolver();
 		BoundaryType boundary = flatDesignator(type, resolver, scope);
 		if (boundary != null) {
@@ -769,8 +802,9 @@ public final class WitExportDirective {
 			return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit, null, List.of(), wit,
 					false);
 		}
-		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, implemented, scope, false);
-		return WitTypeMapper.shape(type, resolver, scope);
+		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, implemented, scope);
+		return WitTypeMapper.shape(type, resolver, scope,
+				owner -> owner == scope ? ifaceId : resolver.canonicalId(owner));
 	}
 
 	/**
@@ -809,8 +843,8 @@ public final class WitExportDirective {
 	public static Signature signature(String witText, String world, @Nullable String ifaceId, String label) {
 		Implemented implemented = read(witText, world);
 		Signature[] found = new Signature[1];
-		walk(implemented, "the world", true, false, (name, defun, func, item, id, scope) -> {
-			if (name.equals(label) && java.util.Objects.equals(id, ifaceId)) {
+		walk(implemented, "the world", false, (callee, func, item, id, scope) -> {
+			if (callee.label().equals(label) && java.util.Objects.equals(id, ifaceId)) {
 				found[0] = new Signature(implemented.resolver(), scope, id == null, func);
 			}
 		});
@@ -924,7 +958,7 @@ public final class WitExportDirective {
 			}
 		}
 		boolean[] compound = new boolean[1];
-		walk(implemented, witPath, true, false, (name, defun, func, item, ifaceId, scope) -> {
+		walk(implemented, witPath, false, (callee, func, item, ifaceId, scope) -> {
 			for (WitFunc.Param param : func.params()) {
 				compound[0] |= flatDesignator(param.type(), implemented.resolver(), scope) == null;
 			}
@@ -969,18 +1003,15 @@ public final class WitExportDirective {
 
 	// Walks the world's exports in world order, handing each to the visitor right after
 	// the structural checks lower() has always made before it: a freestanding function
-	// export or an interface's members, a duplicate refused as it is met, an interface
-	// the file does not define and an inline import refused where they stand.
-	// `resources`: whether a resource of an exported interface is walked -- the resource,
-	// then its functions as exports -- or refused: a front end that binds its own names
-	// (describe) has no value for one. `lenient`: an item refused is handed to the
+	// export or an interface's members -- a resource of one, then its functions --, a
+	// duplicate refused as it is met, an interface the file does not define and an inline
+	// import refused where they stand. `lenient`: an item refused is handed to the
 	// visitor's refused, and the walk goes on (outline).
-	private static void walk(Implemented implemented, String witPath, boolean resources, boolean lenient,
-			ExportVisitor visitor) {
+	private static void walk(Implemented implemented, String witPath, boolean lenient, ExportVisitor visitor) {
 		Set<String> seen = new LinkedHashSet<>();
 		for (WitItem item : implemented.world().items()) {
 			try {
-				walkItem(implemented, witPath, resources, visitor, seen, item);
+				walkItem(implemented, witPath, visitor, seen, item);
 			}
 			catch (UnsupportedOperationException ex) {
 				if (!lenient) {
@@ -991,8 +1022,8 @@ public final class WitExportDirective {
 		}
 	}
 
-	private static void walkItem(Implemented implemented, String witPath, boolean resources, ExportVisitor visitor,
-			Set<String> seen, WitItem item) {
+	private static void walkItem(Implemented implemented, String witPath, ExportVisitor visitor, Set<String> seen,
+			WitItem item) {
 		WitLocations locations = implemented.locations();
 		WitResolver resolver = implemented.resolver();
 		WitItem.InterfaceDef worldScope = implemented.worldScope();
@@ -1003,7 +1034,7 @@ public final class WitExportDirective {
 						if (!seen.add(export.name())) {
 							throw error(witPath, locations, item, "duplicate export '" + export.name() + "'");
 						}
-						visitor.visit(export.name(), export.name(), func.func(), item, null, worldScope);
+						visitor.visit(new Callee(export.name()), func.func(), item, null, worldScope);
 					}
 					// An inline interface export (`export add: interface { ... }`):
 					// its
@@ -1011,7 +1042,7 @@ public final class WitExportDirective {
 					// functions
 					// is a member the program must implement.
 					case WitItem.Extern.ExternInterface inline -> lowerInterfaceMembers(export.name(), inline.items(),
-							seen, witPath, locations, item, visitor, implemented.scope(item), resources, implemented);
+							seen, witPath, locations, item, visitor, implemented.scope(item), implemented);
 				}
 			}
 			case WitItem.ExportRef ref -> {
@@ -1043,7 +1074,7 @@ public final class WitExportDirective {
 				// resolver.
 				String ifaceId = java.util.Objects.requireNonNull(resolver.canonicalId(iface));
 				lowerInterfaceMembers(ifaceId, iface.items(), seen, witPath, locations, item, visitor,
-						implemented.scope(iface), resources, implemented);
+						implemented.scope(iface), implemented);
 			}
 			case WitItem.ImportNamed named -> throw error(witPath, locations, item,
 					"import '" + named.name()
@@ -1112,7 +1143,7 @@ public final class WitExportDirective {
 	// exported component instance. `ifaceId` is the instance's export id (the interface's
 	// fully-qualified id for a reference, its plain name for an inline interface).
 	private static void lowerInterfaceMembers(String ifaceId, List<WitItem> members, Set<String> seen, String witPath,
-			WitLocations locations, WitItem item, ExportVisitor visitor, WitItem.InterfaceDef scope, boolean resources,
+			WitLocations locations, WitItem item, ExportVisitor visitor, WitItem.InterfaceDef scope,
 			Implemented implemented) {
 		boolean any = false;
 		// What is still a use clause is nominal: a resource, or a type that holds a
@@ -1134,12 +1165,8 @@ public final class WitExportDirective {
 										+ "use clause and define the type in the interface");
 					}
 					if (implemented.exportedId(owned.owner()) == null) {
-						String imported = "interface '" + ifaceId + "' uses the resource '" + name.name() + "' of "
-								+ use.path() + ", an interface the world imports, ";
-						if (!resources) {
-							throw error(witPath, locations, item, imported + NOT_IMPORTED);
-						}
-						visitor.imported(imported, item);
+						visitor.imported("interface '" + ifaceId + "' uses the resource '" + name.name() + "' of "
+								+ use.path() + ", an interface the world imports, ", item);
 					}
 				}
 			}
@@ -1151,19 +1178,18 @@ public final class WitExportDirective {
 			// A resource's functions and its handles are exports of the interface too,
 			// and a component that left them out would not be the world's.
 			if (member instanceof WitItem.ResourceDef resource) {
-				if (!resources) {
-					throw error(witPath, locations, item, "interface '" + ifaceId + "' declares the resource '"
-							+ resource.name() + "', " + NOT_EXPORTED);
-				}
 				visitor.resource(ifaceId, resource, item);
+				// the destructor calls the program's <resource>-drop
+				implementedOnce(implementing, resource.name() + "-drop", DESTRUCTOR_PREFIX + resource.name(), ifaceId,
+						witPath, locations, item);
 				List<WitItem> body = resource.body();
 				for (WitItem inner : body == null ? List.<WitItem>of() : body) {
 					if (inner instanceof WitItem.FuncDef func) {
 						String label = resourceLabel(resource.name(), func);
 						String defun = WitNamingHook.memberName(new WitResolver.Func(resource.name(), func));
 						implementedOnce(implementing, defun, label, ifaceId, witPath, locations, item);
-						visitor.visit(label, defun, resourceFunc(resource, func, label, witPath, locations, item), item,
-								ifaceId, scope);
+						visitor.visit(new Callee(label, defun, resource.name(), func.kind(), func.name()),
+								resourceFunc(resource, func, label, witPath, locations, item), item, ifaceId, scope);
 					}
 				}
 			}
@@ -1173,7 +1199,7 @@ public final class WitExportDirective {
 							"duplicate export '" + func.name() + "' in interface '" + ifaceId + "'");
 				}
 				implementedOnce(implementing, func.name(), func.name(), ifaceId, witPath, locations, item);
-				visitor.visit(func.name(), func.name(), func.func(), item, ifaceId, scope);
+				visitor.visit(new Callee(func.name()), func.func(), item, ifaceId, scope);
 				any = true;
 			}
 		}
@@ -1184,7 +1210,7 @@ public final class WitExportDirective {
 	}
 
 	// Two exports of one interface that one defun would implement: a resource's
-	// function and a function whose label is its member name.
+	// function, or its destructor, and a function whose label is its member name.
 	private static void implementedOnce(Map<String, String> implementing, String defun, String label, String ifaceId,
 			String witPath, WitLocations locations, WitItem item) {
 		String other = implementing.putIfAbsent(defun, label);
@@ -1343,7 +1369,7 @@ public final class WitExportDirective {
 			if (boundary == null) {
 				flat = false;
 				requireCanonical(param.type(), name, param.name(), witPath, locations, item, backend, implemented,
-						scope, true);
+						scope);
 			}
 			else {
 				params.add(new LispSymbol(boundary.designator()));
@@ -1363,8 +1389,7 @@ public final class WitExportDirective {
 			BoundaryType boundary = handle != null ? ScalarHandles.CARRIER : flatDesignator(result, resolver, scope);
 			if (boundary == null) {
 				flat = false;
-				requireCanonical(result, name, "the result", witPath, locations, item, backend, implemented, scope,
-						true);
+				requireCanonical(result, name, "the result", witPath, locations, item, backend, implemented, scope);
 			}
 			else {
 				returns = boundary.designator();
@@ -1876,13 +1901,10 @@ public final class WitExportDirective {
 	// could be. What is carried is everything but a stream and a future, wherever it
 	// nests; a handle of a resource the component imports only where the component can
 	// import it (a component of the default backend; the interpreter and the JVM, which
-	// export nothing, check the contract alone).
-	// `resources`: whether the program is one that exports a resource (walk), which
-	// the list of what is carried then names; a front end binding its own names
-	// (describe) takes no handle.
+	// export nothing, check the contract alone, and so does a front end's describe).
 	private static void requireCanonical(WitType type, String exportName, String what, String witPath,
-			WitLocations locations, WitItem item, Backend backend, Implemented implemented, WitItem.InterfaceDef scope,
-			boolean resources) {
+			WitLocations locations, WitItem item, Backend backend, Implemented implemented,
+			WitItem.InterfaceDef scope) {
 		if (backend.isNoGc()) {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "': the WIT type of " + what + " is not one --no-gc can carry ("
@@ -1891,28 +1913,24 @@ public final class WitExportDirective {
 							+ "where the canonical ABI marshals it");
 		}
 		Walk walk = new Walk(implemented, "the result".equals(what),
-				resources && (backend == Backend.WASM_COMPONENT || backend == Backend.OTHER), new boolean[1]);
+				backend == Backend.WASM_COMPONENT || backend == Backend.OTHER, new boolean[1]);
 		String refused = refusedCanonical(type, scope, new java.util.HashSet<>(), walk);
 		if (refused != null && walk.imported()[0]) {
-			throw error(witPath, locations, item,
-					"export '" + exportName + "': the WIT type of " + what + " holds " + refused + ", " + (resources
-							? IMPORTED_BY_A_COMPONENT + ": a core module imports no resource type" : NOT_IMPORTED));
+			throw error(witPath, locations, item, "export '" + exportName + "': the WIT type of " + what + " holds "
+					+ refused + ", " + IMPORTED_BY_A_COMPONENT + ": a core module imports no resource type");
 		}
 		if (refused != null) {
-			throw error(witPath, locations, item, "export '" + exportName + "': the WIT type of " + what + " holds "
-					+ refused + ", which an export does not carry (carried: every primitive type, "
-					+ (resources ? "a handle of a resource the world exports or the component imports, " : "")
-					+ "and a list, an option, a result, a tuple, a record, a variant, an enum or flags " + "of them)");
+			throw error(witPath, locations, item,
+					"export '" + exportName + "': the WIT type of " + what + " holds " + refused
+							+ ", which an export does not carry (carried: every primitive type, a handle of a "
+							+ "resource the world exports or the component imports, and a list, an option, a result, a "
+							+ "tuple, a record, a variant, an enum or flags of them)");
 		}
 	}
 
 	/** Where a handle of a resource the component imports crosses an export. */
 	private static final String IMPORTED_BY_A_COMPONENT = "which only a component of the default backend imports "
 			+ "for an export (--component without --no-gc)";
-
-	/** Why a front end binding its own names takes no handle of an imported resource. */
-	private static final String NOT_IMPORTED = "which this language takes in no export (a Common Lisp program does: "
-			+ "the integer handle rontolisp:wit-import calls the interface with)";
 
 	// What a walk of refusedCanonical carries: the world, whether the type is a
 	// function's result (where no handle is borrowed), whether a handle of a resource

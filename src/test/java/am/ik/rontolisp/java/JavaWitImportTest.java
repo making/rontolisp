@@ -1138,8 +1138,9 @@ class JavaWitImportTest {
 				SHAPES_WIT.replace("export remembered: func() -> string;", "export remembered: func() -> stream<u8>;"));
 		assertThatThrownBy(() -> read(shapes, true)).hasMessageEndingWith(
 				"Shapes.java:9:1: @WitExport: shapes.wit:50: export 'remembered': the WIT type of the result holds a "
-						+ "stream, which an export does not carry (carried: every primitive type, and a list, an "
-						+ "option, a result, a tuple, a record, a variant, an enum or flags of them)");
+						+ "stream, which an export does not carry (carried: every primitive type, a handle of a "
+						+ "resource the world exports or the component imports, and a list, an option, a result, a "
+						+ "tuple, a record, a variant, an enum or flags of them)");
 		write("shapes/shapes.wit", SHAPES_WIT.replace("export remembered: func() -> string;",
 				"export remembered: func() -> option<bool>;"));
 		assertThatThrownBy(() -> read(shapes, true)).hasMessageContaining(
@@ -1149,6 +1150,108 @@ class JavaWitImportTest {
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o",
 				this.dir.resolve("shapes-scalar.wasm").toString(), "--component", "--no-gc"))
 			.hasMessageContaining("shapes.wit:46: export 'flip': the WIT type of p is not one --no-gc can carry");
+		// A resource of an exported interface is a static member class of the
+		// interface's class: its constructor the WIT constructor, its instance methods
+		// the methods, its static methods the static functions, close() the destructor,
+		// a handle of it the object (examples/wit/resource/Counters.java). A handle of
+		// one the component imports is the member interface of the @WitImport interface
+		// standing for its interface. Each is checked at the declaration.
+		String counting = Files.readString(Path.of("examples/wit/resource/Counters.java"));
+		write("resource/wit/counters.wit", Files.readString(Path.of("examples/wit/resource/wit/counters.wit")));
+		Path counters = write("resource/Counters.java", counting);
+		assertThat(read(counters, true).getLast())
+			.contains("(\"example:counters/registry@0.1.0#counter-add\" "
+					+ "\"Counters$Registry$WitExport.counterAdd(Object,Object)\")")
+			.endsWith("(\"example:counters/registry@0.1.0#counter-drop\" "
+					+ "\"Counters$Registry$WitExport.counterDrop(Object)\")) :REACTOR T :OCTETS T :ENVELOPE T)");
+		String registry = "of example:counters/registry@0.1.0, wit/counters.wit:37";
+		exportRefused("resource/Counters.java", counting, "public int add(int by)", "public static int add(int by)",
+				"Counters.java:51:31: add ([method]counter.add " + registry + ") is an instance method in Java, which "
+						+ "the host calls on the object a handle stands for");
+		exportRefused("resource/Counters.java", counting, "public Reading read()", "public Reading peek()",
+				"Counters.java:37:29: Counter declares no method read for [method]counter.read of "
+						+ "example:counters/registry@0.1.0 (wit/counters.wit:37): Registry.Reading read()");
+		exportRefused("resource/Counters.java", counting, "merge(Counter a, Counter b)", "merge(Counter a, String b)",
+				"Counters.java:64:35: merge ([static]counter.merge " + registry + "): its parameter b is "
+						+ "borrow<counter>, which is Registry.Counter in Java, not String");
+		exportRefused("resource/Counters.java", counting, "public static class Counter", "public class Counter",
+				"Counters.java:37:22: Registry.Counter (counter " + registry + ") is a static member class in Java, "
+						+ "which the host makes with no instance of Registry");
+		exportRefused("resource/Counters.java", counting, "public void close()", "public static void close()",
+				"Counters.java:37:29: Registry.Counter's close() is the destructor of the resource counter "
+						+ "of example:counters/registry@0.1.0 (wit/counters.wit:37): an instance method in Java, which "
+						+ "the component calls on the object a handle stood for");
+		write("resource/Counters.java", counting);
+		Path reporter = write("reporter/Reporter.java", """
+				import am.ik.rontolisp.wit.WitExport;
+				import am.ik.rontolisp.wit.WitImport;
+
+				@WitExport(value = "reporter", wit = "wit/counters.wit")
+				public class Reporter {
+
+				    @WitImport(value = "example:counters/registry", wit = "wit/counters.wit")
+				    public interface Registry {
+
+				        interface Counter {
+				        }
+				    }
+
+				    public static class Report {
+
+				        public static String summary(String c) {
+				            return c;
+				        }
+				    }
+				}
+				""");
+		write("reporter/wit/counters.wit", Files.readString(Path.of("examples/wit/resource/wit/counters.wit")));
+		assertThatThrownBy(() -> read(reporter, true)).hasMessageEndingWith("Reporter.java:16:30: summary (summary of "
+				+ "example:counters/report@0.1.0, wit/counters.wit:44): its parameter c is borrow<counter>, the "
+				+ "resource counter of example:counters/registry@0.1.0, which the component imports: in Java the member "
+				+ "interface Counter of the @WitImport interface standing for example:counters/registry@0.1.0, not "
+				+ "String");
+		// The scalar backend has no object that is read: an object of the class is none.
+		write("cells/cells.wit", """
+				package test:cells@0.1.0;
+
+				interface cells {
+				  resource cell {
+				    constructor(v: u32);
+				    get: func() -> u32;
+				  }
+				}
+
+				world provider {
+				  export cells;
+				}
+				""");
+		Path cells = write("cells/Provider.java", """
+				import am.ik.rontolisp.wit.WitExport;
+
+				@WitExport(value = "provider", wit = "cells.wit")
+				public class Provider {
+
+				    public static class Cells {
+
+				        public static class Cell {
+
+				            final int v;
+
+				            public Cell(int v) {
+				                this.v = v;
+				            }
+
+				            public int get() {
+				                return this.v;
+				            }
+				        }
+				    }
+				}
+				""");
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, cells.toString(), "-o",
+				this.dir.resolve("cells.wasm").toString(), "--component", "--no-gc"))
+			.hasMessageContaining("--no-gc: ")
+			.hasMessageContaining("reads a structure (Provider$Cells$Cell)");
 		Path shapesModule = this.dir.resolve("shapes.wasm");
 		HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o", shapesModule.toString(),
 				"--component");

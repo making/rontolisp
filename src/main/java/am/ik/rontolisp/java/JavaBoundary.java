@@ -174,9 +174,11 @@ public interface JavaBoundary {
 	 * @param definition the definition a named type or a handle resolves to, else
 	 * {@code null}
 	 * @param borrow whether it is a {@code borrow<R>} handle
+	 * @param home the canonical id of the interface whose resource a handle is, else
+	 * {@code null}
 	 */
 	record Type(Rep rep, @Nullable Type element, String wit, @Nullable Type error, List<Part> parts,
-			@Nullable String definition, boolean borrow) {
+			@Nullable String definition, boolean borrow, @Nullable String home) {
 	}
 
 	/**
@@ -254,23 +256,46 @@ public interface JavaBoundary {
 	/**
 	 * A function a world exports.
 	 *
-	 * @param name its label ({@code vowel-count}), an interface member's own
+	 * @param name its label ({@code vowel-count}), an interface member's own; a
+	 * resource's function's the canonical ABI's ({@code [method]counter.add})
 	 * @param iface the exported interface it is a member of, or {@code null} for a
 	 * function of the world: the interface's canonical id ({@code docs:adder/add@0.1.0}),
 	 * or the plain name of one the world declares inline
 	 * @param key what the {@code :names} table of the {@code rontolisp:wit-export} the
 	 * lowering emits names it by: its label, {@code <iface>#<label>} of an interface's
-	 * member
-	 * @param params its parameters
+	 * member, {@code <iface>#<member>} of a resource's function
+	 * ({@code <iface>#counter-add})
+	 * @param params its parameters, a method's handle first
 	 * @param result its result, or {@code null} for none
 	 * @param async whether it is an {@code async func}
 	 * @param at the WIT file and line declaring it ({@code path:line})
 	 * @param canonical whether a type of it is outside the flat set (a record, a list, a
-	 * variant ...), so that the directive lowers it through the canonical ABI and its
-	 * function takes and answers the values of the settled mapping
+	 * variant, a handle ...), so that the directive lowers it through the canonical ABI
+	 * and its function takes and answers the values of the settled mapping
+	 * @param kind what it is: a function, or a resource's constructor, method or static
+	 * function
+	 * @param resource the resource a constructor, a method or a static function belongs
+	 * to, else {@code null}
+	 * @param function the WIT function's own name ({@code add})
+	 * @param member the function's member name ({@code counter-add}), its label for a
+	 * function of no resource
 	 */
 	record Export(String name, @Nullable String iface, String key, List<Param> params, @Nullable Type result,
-			boolean async, String at, boolean canonical) {
+			boolean async, String at, boolean canonical, Kind kind, @Nullable String resource, String function,
+			String member) {
+	}
+
+	/**
+	 * A resource an exported interface declares, which the component exports.
+	 *
+	 * @param name its WIT name
+	 * @param iface the interface's canonical id, or the plain name of one the world
+	 * declares inline
+	 * @param key what the {@code :names} table names the function its destructor calls by
+	 * ({@code <iface>#counter-drop})
+	 * @param at the WIT file and line of the world's export of the interface
+	 */
+	record Resource(String name, String iface, String key, String at) {
 	}
 
 	/**
@@ -284,8 +309,10 @@ public interface JavaBoundary {
 	 * the WIT defines, the reference as written of any other
 	 * @param refused the refusal of each export {@link #outlineWorld} left out, worded as
 	 * {@link #exportWorld} throws it; empty from {@link #exportWorld}
+	 * @param resources the resources its exported interfaces declare, in world order
 	 */
-	record WitWorld(String name, String path, List<Export> exports, List<String> imports, List<String> refused) {
+	record WitWorld(String name, String path, List<Export> exports, List<String> imports, List<String> refused,
+			List<Resource> resources) {
 	}
 
 }

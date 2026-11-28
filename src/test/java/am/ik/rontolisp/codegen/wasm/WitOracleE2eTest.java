@@ -489,6 +489,140 @@ class WitOracleE2eTest {
 			}
 			""";
 
+	// Where the Java API's annotations are.
+	private static final String API = "rontolisp-java-api/src/main/java";
+
+	// The program written into a directory of its own with the WIT beside it under
+	// wit/: a Java program's source tree is its directory, every @WitExport class of
+	// which it exports.
+	private Path beside(Path wit, String file, String text) throws Exception {
+		Path program = this.tempDir.resolve(file);
+		Files.createDirectories(program.resolveSibling("wit"));
+		Files.copy(wit, program.resolveSibling("wit").resolve(wit.getFileName()),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+		return Files.writeString(program, text);
+	}
+
+	// reporter.lisp in Java: the counter is an object of the binding of the
+	// @WitImport interface standing for registry.
+	private static final String REPORTER_JAVA = """
+			import am.ik.rontolisp.wit.WitExport;
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitExport(value = "reporter", wit = "wit/counters.wit")
+			public class Reporter {
+
+			    @WitImport(value = "example:counters/registry", wit = "wit/counters.wit")
+			    public interface Registry {
+
+			        interface Counter {
+
+			            Reading read();
+			        }
+
+			        record Reading(String name, int value) {
+			        }
+			    }
+
+			    public static class Report {
+
+			        public static String summary(Registry.Counter c) {
+			            Registry.Reading reading = c.read();
+			            return reading.name() + " is at " + reading.value();
+			        }
+			    }
+			}
+			""";
+
+	// reporter.lisp in Clojure: the counter is the integer handle.
+	private static final String REPORTER_CLOJURE = """
+			(ns reporter
+			  (:require [rontolisp.wit :as wit]))
+
+			(wit/import "wit/counters.wit" {:interface "example:counters/registry" :as reg})
+
+			(defn summary [c]
+			  (let [{:keys [name value]} (reg/counter-read c)]
+			    (str name " is at " value)))
+
+			(wit/export "wit/counters.wit" {:world "reporter" :reactor true})
+			""";
+
+	// RELAY in Java. A counter lent to a call is closed when the call ends -- label
+	// finds bump-all's kept one closed -- and its close() releases nothing: the export
+	// releases the loan. One handed over is the method's, one answered the caller's.
+	private static final String RELAY_JAVA = """
+			import java.util.List;
+			import java.util.Optional;
+			import java.util.ServiceLoader;
+
+			import am.ik.rontolisp.wit.WitExport;
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitExport(value = "relaying", wit = "wit/relaying.wit")
+			public class Relaying {
+
+			    @WitImport(value = "example:counters/registry", wit = "wit/relaying.wit")
+			    public interface Registry {
+
+			        Counter counterNew(String name, int start);
+
+			        interface Counter extends AutoCloseable {
+
+			            int add(int by);
+
+			            Reading read();
+
+			            @Override
+			            void close();
+			        }
+
+			        record Reading(String name, int value) {
+			        }
+			    }
+
+			    static Registry.Counter kept;
+
+			    public static class Relay {
+
+			        public record Tagged(String tag, Registry.Counter c) {
+			        }
+
+			        public static int bumpAll(List<Registry.Counter> cs, int by) {
+			            int n = 0;
+			            for (Registry.Counter c : cs) {
+			                n += c.add(by);
+			                kept = c;
+			            }
+			            return n;
+			        }
+
+			        public static String label(Tagged t) {
+			            String name = t.c().read().name();
+			            t.c().close();
+			            try {
+			                kept.read();
+			                return "a loan outlived its call";
+			            }
+			            catch (IllegalStateException e) {
+			                return name;
+			            }
+			        }
+
+			        public static Registry.Counter fresh(String name) {
+			            return ServiceLoader.load(Registry.class).findFirst().orElseThrow().counterNew(name, 1);
+			        }
+
+			        public static Optional<Registry.Counter> pick(List<Registry.Counter> cs) {
+			            for (int i = 1; i < cs.size(); i++) {
+			                cs.get(i).close();
+			            }
+			            return cs.isEmpty() ? Optional.empty() : Optional.of(cs.get(0));
+			        }
+			    }
+			}
+			""";
+
 	// Loops rather than the sequence functions, so an --optimize component of it
 	// imports nothing of WASI.
 	private static final String RELAY = """
@@ -581,12 +715,16 @@ class WitOracleE2eTest {
 		// A resource crosses the same way: the exporting component's handles stand for
 		// the values its functions made, lent or handed over as the WIT says, alone and
 		// inside a list or a result, and a second interface's function takes the first
-		// one's resource.
+		// one's resource -- in Java the objects of the class standing for it, in Clojure
+		// any value its constructor's var answers.
 		Map<Path, List<Map.Entry<String, List<String>>>> examples = new java.util.LinkedHashMap<>();
-		examples.put(Path.of("examples/wit/shapes"), List.of(Map.entry("shapes.lisp", List.of("--component")), Map
-			.entry("Shapes.java", List.of("--component", "--java-source-path", "rontolisp-java-api/src/main/java"))));
-		examples.put(Path.of("examples/wit/resource"), List.of(Map.entry("counters.lisp", List.of("--component")),
-				Map.entry("counters.lisp", List.of("--component", "--no-wasi"))));
+		examples.put(Path.of("examples/wit/shapes"), List.of(Map.entry("shapes.lisp", List.of("--component")),
+				Map.entry("Shapes.java", List.of("--component", "--java-source-path", API))));
+		examples.put(Path.of("examples/wit/resource"),
+				List.of(Map.entry("counters.lisp", List.of("--component")),
+						Map.entry("counters.lisp", List.of("--component", "--no-wasi")),
+						Map.entry("Counters.java", List.of("--component", "--java-source-path", API)),
+						Map.entry("counters.clj", List.of("--component"))));
 		Map<Path, List<String>> lines = Map.of(Path.of("examples/wit/shapes"),
 				List.of("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))", "area     \"a dot has no area\"",
 						"caption  \"a filled bold green dot called origin\"", "embolden (:DASHED :BOLD)",
@@ -630,23 +768,41 @@ class WitOracleE2eTest {
 		// prints on the interpreter. A handle lent to an export is released once the
 		// function has answered (wasmtime traps a task that ends holding one), alone, in
 		// a list and in a record; one handed over or answered is the receiver's.
+		// The Java reporter's counter is an object of the @WitImport interface standing
+		// for registry, the Clojure one's the integer.
 		Path resource = Path.of("examples/wit/resource");
 		compileFileViaCli(resource.resolve("counters.lisp"), "counters", List.of("--component"));
-		compileFileViaCli(resource.resolve("reporter.lisp"), "reporter", List.of("--component"));
 		compileFileViaCli(resource.resolve("app.lisp"), "app", List.of("--component"));
 		String registry = "example:counters/registry@0.1.0";
-		assertThat(composedRun("app", "counters", registry, "reporter", "example:counters/report@0.1.0"))
-			.isEqualTo(printedBy.get(resource));
+		Map<Path, List<String>> reporters = new java.util.LinkedHashMap<>();
+		reporters.put(resource.resolve("reporter.lisp"), List.of("--component"));
+		reporters.put(beside(resource.resolve("wit/counters.wit"), "reporter-java/Reporter.java", REPORTER_JAVA),
+				List.of("--component", "--java-source-path", API));
+		reporters.put(beside(resource.resolve("wit/counters.wit"), "reporter-clj/reporter.clj", REPORTER_CLOJURE),
+				List.of("--component"));
+		for (Map.Entry<Path, List<String>> reporter : reporters.entrySet()) {
+			compileFileViaCli(reporter.getKey(), "reporter", reporter.getValue());
+			assertThat(composedRun("app", "counters", registry, "reporter", "example:counters/report@0.1.0"))
+				.as(reporter.getKey().toString())
+				.isEqualTo(printedBy.get(resource));
+		}
 		Files.createDirectories(this.tempDir.resolve("wit"));
 		Files.writeString(this.tempDir.resolve("wit/relaying.wit"),
 				Files.readString(resource.resolve("wit/counters.wit")) + RELAYING);
-		compileFileViaCli(Files.writeString(this.tempDir.resolve("relay.lisp"), RELAY.formatted("relaying")), "relay",
-				List.of("--component"));
 		compileFileViaCli(Files.writeString(this.tempDir.resolve("caller.lisp"), RELAY_CALLER), "caller",
 				List.of("--component"));
-		assertThat(composedRun("caller", "counters", registry, "relay", "example:counters/relay@0.1.0").lines())
-			.containsExactly("bump-all 26", "label    \"b\"", "fresh    (:NAME \"f\" :VALUE 1)",
-					"pick     (:NAME \"x\" :VALUE 3)", "pick     NIL", "live     2", "live     0");
+		Map<Path, List<String>> relays = new java.util.LinkedHashMap<>();
+		relays.put(Files.writeString(this.tempDir.resolve("relay.lisp"), RELAY.formatted("relaying")),
+				List.of("--component"));
+		relays.put(beside(this.tempDir.resolve("wit/relaying.wit"), "relay-java/Relaying.java", RELAY_JAVA),
+				List.of("--component", "--java-source-path", API));
+		for (Map.Entry<Path, List<String>> relay : relays.entrySet()) {
+			compileFileViaCli(relay.getKey(), "relay", relay.getValue());
+			assertThat(composedRun("caller", "counters", registry, "relay", "example:counters/relay@0.1.0").lines())
+				.as(relay.getKey().toString())
+				.containsExactly("bump-all 26", "label    \"b\"", "fresh    (:NAME \"f\" :VALUE 1)",
+						"pick     (:NAME \"x\" :VALUE 3)", "pick     NIL", "live     2", "live     0");
+		}
 		// The scalar backend's resource, called by the default backend's command: what
 		// plus takes over is not released, what it answers is a new handle.
 		Files.writeString(this.tempDir.resolve("cells.wit"), CELLS);

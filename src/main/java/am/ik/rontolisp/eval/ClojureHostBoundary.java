@@ -89,10 +89,16 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 		}
 		List<Function> exports = new ArrayList<>();
 		for (WitExportDirective.Export export : described.exports()) {
-			exports.add(new Function(export.name(), export.key(), Origin.FUNCTION, params(export.params()),
+			exports.add(new Function(export.member(), export.key(), Origin.FUNCTION, params(export.params()),
 					type(export.result()), export.async(), export.at()));
 		}
-		return new WitWorld(described.name(), List.copyOf(exports));
+		List<Function> drops = new ArrayList<>();
+		for (WitExportDirective.Resource resource : described.resources()) {
+			drops.add(new Function(resource.drop(), resource.key(), Origin.DROP,
+					List.of(new Param("self", new Type(Rep.HANDLE, null, resource.name(), null, List.of()))), null,
+					false, resource.at()));
+		}
+		return new WitWorld(described.name(), List.copyOf(exports), List.copyOf(drops));
 	}
 
 	// The WIT through the one reader every directive reads it with (a file, or a

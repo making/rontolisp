@@ -1100,7 +1100,7 @@ public final class WitImportDirective {
 			}
 			List<WitTypeMapper.Param> params = new ArrayList<>();
 			if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
-				params.add(new WitTypeMapper.Param("self", handleShape(func.resource(), true)));
+				params.add(new WitTypeMapper.Param("self", handleShape(func.resource(), true, ifaceId)));
 			}
 			for (var param : func.def().func().params()) {
 				params.add(new WitTypeMapper.Param(param.name(), shapeOf(param.type(), resolver, iface, witPath,
@@ -1109,7 +1109,7 @@ public final class WitImportDirective {
 			WitType result = func.def().func().result();
 			WitTypeMapper.Shape resultShape;
 			if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
-				resultShape = handleShape(Objects.requireNonNull(func.resource()), false);
+				resultShape = handleShape(Objects.requireNonNull(func.resource()), false, ifaceId);
 			}
 			else {
 				resultShape = result == null ? null
@@ -1129,7 +1129,7 @@ public final class WitImportDirective {
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
 			members.add(new Member(member, Origin.DROP,
-					List.of(new WitTypeMapper.Param("self", handleShape(resource.name(), false))), null, false,
+					List.of(new WitTypeMapper.Param("self", handleShape(resource.name(), false, ifaceId))), null, false,
 					WitSource.at(witPath, locations, item), resource.name(), member, WitItem.FuncKind.PLAIN));
 		}
 		for (WitItem item : iface.items()) {
@@ -1180,10 +1180,11 @@ public final class WitImportDirective {
 		return new Description(ifaceId, List.copyOf(members), java.util.Collections.unmodifiableMap(used));
 	}
 
-	// The shape of a resource handle: the `self` a method borrows, the one a constructor
-	// answers and a drop takes.
-	private static WitTypeMapper.Shape handleShape(String resource, boolean borrow) {
-		return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, resource, null, List.of(), resource, borrow);
+	// The shape of a resource handle of the interface: the `self` a method borrows, the
+	// one a constructor answers and a drop takes.
+	private static WitTypeMapper.Shape handleShape(String resource, boolean borrow, String ifaceId) {
+		return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, resource, null, List.of(), resource, borrow,
+				ifaceId);
 	}
 
 	// A WIT type use resolved to its house representation: aliases followed (across

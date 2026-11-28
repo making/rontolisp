@@ -74,7 +74,7 @@ WIT の値は、下の表の Clojure の値として渡ります。変換は渡�
 | `char` | 文字 |
 | `string` | 文字列 |
 | `list<u8>` | [バイト配列](byte-array.md) |
-| リソースのハンドル（`own`、`borrow`） | 不透明な整数 |
+| リソースのハンドル（`own`、`borrow`） | 不透明な整数。world のエクスポートでは、world がエクスポートするリソースのハンドルは、そのコンストラクタが返した値（[リソース](#resources)） |
 | `option<T>` | 値か `nil` |
 | `record` | 各フィールドをそのキーワードの下に持つマップ: `{:port 0 :address [127 0 0 1]}` |
 | `enum` | ケースのキーワード: `:ipv4` |
@@ -165,11 +165,72 @@ error: app.clj:4:1: feed of example:geo/api@0.1.0 takes option<stream<u8>> (para
 インポートを渡れる型は 32 ビットまでの整数、浮動小数点数、`bool`、`string`、`list<u8>`、
 ハンドルで、それを越えるメンバーはプログラムが呼ぶところで拒否します。コンポーネントの
 インポートは `u8` 以外のリストの引数を除くすべての行を渡せます。コンポーネントの
-エクスポートはハンドルを除くすべての行を渡せ、型がハンドル、ストリーム、
-フューチャーに届く world は WIT の行で拒否します。リソースを宣言するインタフェース、
-または `use` 句でリソースを取り込むインタフェースのエクスポートも拒否します（Common Lisp の
-プログラムはリソースをエクスポートでき、コンポーネントがインポートするリソースも受け取れます:
-[リソース](../../reference/functions/rontolisp-wit-export.md#resources)）。
-`--no-wasi` のモジュールのエクスポートも、`--emit-js-glue` のグルーを通して同じ型を渡せます（フラグは真偽値のオブジェクトになります）。
-WASI モジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、`bool`、`string` です
+エクスポートはすべての行を渡せます。ただし、コンポーネントがインポートするリソースのハンドルは、
+インポートするコンポーネントでだけ渡せます（`--no-wasi` では不可）。型がストリームか
+フューチャーに届く world は WIT の行で拒否します。`--no-wasi` のモジュールのエクスポートも、
+`--emit-js-glue` のグルーを通して同じ型を渡せます（フラグは真偽値のオブジェクトになります）。
+ただしハンドルは渡せません。WASI モジュールと `--no-gc` のエクスポートを渡れる型は整数、`f64`、
+`bool`、`string` です
 （[`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)）。
+
+## リソース
+
+エクスポートするインタフェースが宣言するリソースは、メンバー名を名前に持つ var で実装します。
+名前は、もう一方の側で `import` が付ける名前と同じです。コンストラクタは `counter-new`、
+メソッドは `counter-add`（最初の引数がリソース）、static 関数は `counter-merge` です。
+名前空間が `counter-drop` を定義していれば、保持者がハンドルを解放するたびに、値を引数に
+呼ばれます。エクスポートに引き渡されたハンドルは解放されません。コンストラクタの var が返す値が
+リソースで、どんな値でもかまいません（ここではアトム）。WIT がリソースを書く場所（引数、
+戻り値、レコードのフィールド、リストの要素）では、var はその値を受け取り、返します。
+
+```console
+$ cat counters.wit
+package example:counters@0.1.0;
+
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+$ cat counters.clj
+(ns counters (:require [rontolisp.wit :as wit]))
+
+(wit/export "counters.wit" {:reactor true})
+
+(defn counter-new [name start] (atom {:name name :value start}))
+(defn counter-add [self by] (:value (swap! self update :value + by)))
+(defn counter-merge [a b] (swap! a update :value + (:value @b)) a)
+(defn total [counters] (reduce + (map (comp :value deref) counters)))
+$ rontolisp counters.clj -o counters.wasm --component
+```
+
+world がエクスポートしないインタフェースのリソースを、エクスポートするインタフェースか world が
+`use` で取り込む場合、それはコンポーネントがインポートするリソースです。そのハンドルは、その
+インタフェースの `import` が受け取る整数です。下の `reg/counter-read` もこれを受け取ります。借用の
+ハンドルは var が答えたところで解放されるので、プログラムは解放しません。所有のハンドルは
+プログラムのものです。
+
+```console
+$ cat reporter.clj
+(ns reporter (:require [rontolisp.wit :as wit]))
+
+(wit/import "wit/counters.wit" {:interface "example:counters/registry" :as reg})
+
+(defn summary [c]
+  (let [{:keys [name value]} (reg/counter-read c)]
+    (str name " is at " value)))
+
+(wit/export "wit/counters.wit" {:world "reporter" :reactor true})
+```
+
+[`examples/wit/resource/counters.clj`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+は、隣の Lisp の例と同じ world を実装します。合成すると、その例のコマンドがこれを呼びます。
+Common Lisp 側は[リソース](../../reference/functions/rontolisp-wit-export.md#resources)にあります。

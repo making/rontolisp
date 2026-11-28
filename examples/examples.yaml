@@ -1389,6 +1389,25 @@ examples:
       exporting nothing. Called by app.wasm once composed with counters.wasm
       (build.sh, composition.wac; WitOracleE2eTest composes and compares), so the
       harness only compiles
+  - path: wit/resource/Counters.java
+    backends: [wasm-component]
+    javaSourcePath: rontolisp-java-api/src/main/java
+    note: >-
+      the world counters in Java: a class annotated @WitExport whose member class
+      Registry is the interface and Registry.Counter the resource -- its
+      constructor, instance methods and static method the WIT's, close() the
+      destructor, a handle the object. wasm-component pins that the world lowers
+      through the canonical ABI with the wrappers the front end writes; no main, so
+      the interpreter and the JVM refuse it. Composed with app.wasm it prints
+      app.lisp's lines (WitOracleE2eTest)
+  - path: wit/resource/counters.clj
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the world counters in Clojure: a var per function, named by its member name
+      (counter-new, counter-add, ..., counter-drop), the value the constructor's
+      var answers the resource (an atom). wasm-component pins that the world
+      lowers; jvm-compile that the contract check runs on a backend exporting
+      nothing. Composed with app.wasm it prints app.lisp's lines (WitOracleE2eTest)
   - path: wit/resource/app.lisp
     backends: [interpreter, jvm, wasm-component]
     note: >-

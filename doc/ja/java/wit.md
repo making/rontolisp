@@ -175,8 +175,9 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 | `flags` | enum の `Set`。ラベルが定数 | スコープのクラスのメンバー |
 | 別名（`type id = u32`） | 別名が指す型 | |
 | `use` で取り込んだ record、variant、enum、flags | 上と同じ。名前は `use` 句が与えたもの | 取り込む側のスコープのクラスのメンバー |
-| リソース、`own<R>`、`borrow<R>` | インタフェース。メソッドがリソースのメソッドで、`close()` が解放 | `@WitImport` インタフェースのメンバー |
-| `use` で取り込んだリソース | 定義する側のスコープでそのリソースを表すインタフェース | 定義するインタフェースを表す `@WitImport` インタフェースのメンバー |
+| インポートするインタフェースのリソース、`own<R>`、`borrow<R>` | インタフェース。メソッドがリソースのメソッドで、`close()` が解放 | `@WitImport` インタフェースのメンバー |
+| エクスポートするインタフェースのリソース、`own<R>`、`borrow<R>` | クラス。コンストラクタ、インスタンスメソッド、static メソッドがリソースのもので、`close()` がデストラクタ。ハンドルはそのオブジェクト | インタフェースのメンバークラスの static メンバー |
+| `use` で取り込んだリソース | 定義する側のスコープでそのリソースを表すもの | 定義するインタフェースを表す型のメンバー。プログラムがインポートするインタフェースなら `@WitImport` インタフェース、world がエクスポートするインタフェースならそのメンバークラス |
 | ホストが返す `stream<u8>` | `java.io.InputStream` | |
 | プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る）。`option` の中なら `Optional<Consumer<OutputStream>>` | |
 | 値の `stream<T>`、リソースの `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
@@ -191,7 +192,9 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 実例は、冒頭のキーバリューの `Store`（リソース、`option`、レコード、投げる `result`）、
 `QueryAsync` の行とソケットの `send`（[ホストが少しずつ返すもの](#what-the-host-answers-in-pieces)）、
 HTTP のリクエスト（[プログラムがホストに渡す future](#a-future-the-program-hands-the-host)）、
-`Shapes` の world とその `pause`（[エクスポートの型](#the-types-of-an-export)）です。
+`Shapes` の world とその `pause`（[エクスポートの型](#the-types-of-an-export)）、
+`Counters` の world のリソースと、それを受け取る `Reporter`
+（[エクスポートのリソース](#resources-of-an-export)）です。
 
 `result<T, E>` は、WIT のどこにあっても `am.ik.rontolisp.wit.WitResult<T, E>` です。引数、
 リストの要素、option の値、record のフィールド、variant のペイロード、戻り値のいずれでも同じです。
@@ -437,8 +440,9 @@ is s32, which is int in Java, not long
 エクスポートの型は[表](#the-types)のとおりで、名前の付け方も同じです。world の型は
 アノテーションを付けたクラスのメンバー型、エクスポートするインタフェースの型はそのメンバー
 クラスのメンバー型、`use` で取り込んだ型は取り込む側のスコープのクラスのメンバー型（名前は
-`use` 句が与えたもの）で、tuple はプログラムのどの record でもかまいません。リソース、
-`stream`、`future` は WIT の行で拒否されます（[型を置ける位置](#where-each-type-crosses)）。
+`use` 句が与えたもの）で、tuple はプログラムのどの record でもかまいません。リソースはクラスです
+（[エクスポートのリソース](#resources-of-an-export)）。`stream` と `future` は WIT の行で
+拒否されます（[型を置ける位置](#where-each-type-crosses)）。
 
 ```console
 interface geometry {
@@ -542,6 +546,134 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 sleep してから `WitResult` を返す `async func` です。隣の Lisp のコマンドはインタフェースを
 `:blocking t` でバインドし、答えを待ちます。
 
+### エクスポートのリソース
+
+エクスポートするインタフェースが宣言するリソースは、インタフェースのクラスの static
+メンバークラスで、名前はリソース名をアッパーキャメルケースにしたものです。そのコンストラクタが
+WIT のコンストラクタ、インスタンスメソッドがメソッド（ハンドルが表すオブジェクトに対して
+呼ばれます）、static メソッドが static 関数です。クラスに `close()` があれば、それが
+デストラクタです。保持者がハンドルを解放すると、コンポーネントがこれを呼びます。そのために
+クラスは `AutoCloseable` を実装してもかまいません。コンストラクタが作るオブジェクトがリソースで、
+WIT が `counter`、`own<counter>`、`borrow<counter>` と書く場所（引数、戻り値、レコードの
+フィールド、リストの要素）では、メソッドはそのオブジェクトを受け取り、返します。
+
+```console
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+```
+
+```console
+@WitExport(value = "counters", wit = "wit/counters.wit")
+public class Counters {
+
+    public static class Registry {
+
+        public static class Counter implements AutoCloseable {
+
+            String name;
+
+            int value;
+
+            public Counter(String name, int start) {
+                this.name = name;
+                this.value = start;
+            }
+
+            public int add(int by) {
+                this.value += by;
+                return this.value;
+            }
+
+            public static Counter merge(Counter a, Counter b) {
+                a.value += b.value;
+                return a;
+            }
+
+            @Override
+            public void close() {
+            }
+        }
+
+        public static int total(List<Counter> counters) {
+            ...
+        }
+    }
+}
+```
+
+- 借用のハンドル（`borrow<counter>`、メソッド自身のオブジェクト）は、呼び出しの間だけ
+  オブジェクトを貸します。所有のハンドル（`counter`、`own<counter>`）はオブジェクトを
+  引き渡します。呼び出し側のハンドルはなくなり、メソッドはオブジェクトを持ち続けても、変えても、
+  また返してもかまいません。所有のハンドルとして返したオブジェクトには、そのたびに新しい
+  ハンドルができます。
+- エクスポートに引き渡されたハンドルについては `close()` は呼ばれません。そのハンドルは
+  解放されていないからです。ハンドルが 1 つも残っていないオブジェクトは、通常のガベージです。
+- エクスポートする 2 つめのインタフェースは、`use` 句でこのリソースを取り込めます。そのクラスの
+  中では、型はリソースを宣言するインタフェースのクラスのもの（`Registry.Counter`）です。
+- `null` はリソースではありません。それを返すエクスポートは、`NullPointerException` を書いてから
+  トラップになります。
+
+[`examples/wit/resource/Counters.java`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+は、隣の Lisp の例と同じ world を実装します。その例の Lisp のコマンドは、これと合成すると
+これを呼び、同じ行を出力します。
+
+world がエクスポートしないインタフェースのリソースを、エクスポートするインタフェースか world
+自身が `use` で取り込む場合、それはコンポーネントがインポートするリソースです。Java では、
+インポートの場合と同じく、そのリソースを定義するインタフェースを表す `@WitImport` インタフェースの
+メンバーインタフェースになり、そのハンドルはインタフェースのバインディングのオブジェクトです。
+
+```console
+world reporter {
+  import registry;
+  export report;
+}
+```
+
+```console
+@WitExport(value = "reporter", wit = "wit/counters.wit")
+public class Reporter {
+
+    @WitImport(value = "example:counters/registry", wit = "wit/counters.wit")
+    public interface Registry {
+
+        interface Counter {
+
+            Reading read();
+        }
+
+        record Reading(String name, int value) {
+        }
+    }
+
+    public static class Report {
+
+        public static String summary(Registry.Counter c) {
+            Registry.Reading reading = c.read();
+            return reading.name() + " is at " + reading.value();
+        }
+    }
+}
+```
+
+- 借用のハンドルは呼び出しの間だけ貸されます。メソッドが答えると、エクスポートがハンドルを
+  解放し、同時にオブジェクトも閉じられます。そのため、呼び出しの後まで持ち続けたオブジェクトは
+  `IllegalStateException` を投げます。呼び出しの中で `close()` を呼んでも、何も解放しません。
+- 所有のハンドルはプログラムのものです。持ち続けても、ほかへ渡しても、閉じてもかまいません。
+  メソッドが返したものは呼び出し側に渡り、オブジェクトは閉じられます。
+- 借りたオブジェクトを、WIT が所有のハンドルを受け取る場所に渡すとトラップになります
+  （wasmtime: `cannot lift own resource from a borrow`）。
+
 ### スケルトンの生成
 
 `--scaffold-wit` は、出力が `.java` ファイルのとき、または標準出力に書くときに
@@ -580,9 +712,11 @@ public class Shapes {
 シグネチャが Javadoc になります。各型は[型](#the-types)の表が宣言する場所に宣言されます。
 `result` は `WitResult`、タプルは置かれた場所にちなんで名付けたレコード（`BoundsResult`）、
 別名があればその名前のレコード（`type ipv4-address = tuple<...>` は `Ipv4Address`）で、
-成分は `v0`、`v1` と続きます。world がインポートする各インタフェースは、リソースと型を含めて
-クラスの `@WitImport` メンバインタフェースになります。そのいずれかが `use` でリソースを取り込む
-インタフェースも同様です。メソッドからは `ServiceLoader.load(Shapes.Store.class)` で取得します。
+成分は `v0`、`v1` と続きます。world がエクスポートするリソースは、コンストラクタとメソッドが
+例外を投げ、`close()` が何もしないクラスになります。world がインポートする各インタフェースは、
+リソースと型を含めてクラスの `@WitImport` メンバインタフェースになります。そのいずれか、または
+エクスポートが `use` でリソースを取り込むインタフェースも同様です。メソッドからは
+`ServiceLoader.load(Shapes.Store.class)` で取得します。
 クラス名はファイル名、標準出力に書くときは world 名です。生成されたファイルはそのまま
 コンパイルできるので、エクスポートを 1 つずつ埋めていけます。
 
@@ -599,9 +733,9 @@ cannot tell from none
 ```
 
 省かれたインポートの関数は、インタフェースに宣言されないだけです。インタフェースは
-プログラムが呼ぶものを宣言するからです。省かれたエクスポートがあると（リソースを
-エクスポートする world、world 自身の関数をインポートする world、ここで拒否される型を
-エクスポートする world）、WIT を変えるまで検査が拒否するクラスになります。
+プログラムが呼ぶものを宣言するからです。省かれたエクスポートがあると（world 自身の関数を
+インポートする world、ここで拒否される型をエクスポートする world）、WIT を変えるまで検査が
+拒否するクラスになります。
 
 ## 型を置ける位置
 
@@ -616,33 +750,30 @@ WIT のメンバーの行を示します。
 | `bool`、`list`、`flags`、`option` を要素とする `option` | 拒否（none と見分けられない値がある） | 拒否 | 拒否 | 拒否 | 拒否 |
 | `result<T, E>` | 可 | 可。ok 側の型にしてエラー側を投げてもよい | 可 | 可。ok 側の型にしてエラー側を投げてもよい | 可（`WitResult`） |
 | `WitException` として投げるエラー側の tuple | | 拒否（型を書く場所がない。`WitResult` を返す） | | 拒否（同じ） | |
-| インタフェースのリソース | 可。渡した `own` はオブジェクトが閉じられる | 可 | 未対応（Java のクラスはリソースをエクスポートしない。Common Lisp のプログラムはできる） | 未対応 | インポートでは可（レコードのフィールド、リストの要素） |
-| `use` で取り込んだリソース | 可。もう一方のインタフェースを表す側に宣言する | 可（同じ） | 未対応（Common Lisp のプログラムは、コンポーネントがインポートするリソースを受け取れる） | 未対応 | インポートでは可 |
+| インタフェースのリソース | 可。渡した `own` はオブジェクトが閉じられる | 可 | 可（オブジェクト。`borrow` は呼び出しの間だけ貸され、`own` は引き渡される） | 可（オブジェクト）。ただし `borrow` は不可 | 可（レコードのフィールド、リストの要素） |
+| `use` で取り込んだリソース | 可。もう一方のインタフェースを表す側に宣言する | 可（同じ） | 可。エクスポートするインタフェースのものはオブジェクト、コンポーネントがインポートするものはそのバインディングのオブジェクトで、貸されたものは呼び出しの終わりに閉じられる | 可（同じ）。ただし `borrow` は不可 | 可 |
 | `stream<u8>` | 可（`Consumer<OutputStream>`）。ただし `async func` には渡せない（呼び出しが待つ間に、ホストはプログラムが後で書くものを読むため） | 可（`InputStream`） | 拒否（エクスポートは stream を受け渡さない） | 拒否 | インポートの戻り値では可。引数では、それ自身の `option` の中だけ |
 | 値の `stream<T>`、リソースの `stream<T>` | 拒否（ゲストは書けない） | 可（`WitStream<T>`） | 拒否 | 拒否 | インポートの戻り値では可 |
 | `future<T>` | 可（プログラムが作った `WitFuture<T>`） | 可。ただし `bool`、`list`、`flags`、`option` の future は不可（その値を、書き手が捨てた future と見分けられない） | 拒否（エクスポートは future を受け渡さない） | 拒否 | インポートの戻り値では可。引数では拒否 |
 | `error-context` | 拒否（WIT が定義しない型を使うとして、WIT ごと拒否される） | | | | |
 
-エクスポートするインタフェースがリソースを宣言する場合と、その `use` 句がリソースまたは
-ハンドルを含む型を取り込む場合は、関数がその型を使うかどうかにかかわらず、world の
-`export` の行で拒否されます。world 自身の `use` で取り込んだリソースは宣言されず、それを使う
-world の関数は拒否されます。Common Lisp のプログラムはコンポーネントからリソースを
-エクスポートでき (`--no-gc --component` でも、コンストラクタが返す整数として)、
-コンポーネントがインポートするリソースのハンドルも受け取れます
-（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)）。
-Java のプログラムは、エクスポートされたリソースを、ほかのリソースと同じく
-そのコンポーネントからインポートできます。
+エクスポートするインタフェースの `use` 句がハンドルを含む型を取り込む場合は、関数がその型を
+使うかどうかにかかわらず、world の `export` の行で拒否されます。world 自身が宣言するリソースを
+使う world の関数も拒否されます。コンポーネントがインポートするリソースのハンドルを受け渡せるのは、
+デフォルトのバックエンドのコンポーネントだけです（[出力ごとに使えるもの](#what-each-output-takes)）。
+同じ境界の Common Lisp 側は
+[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources) にあります。
 
 ## 出力ごとに使えるもの
 
 | 出力 | `@WitImport` | `@WitExport`（`main` のないプログラム） | `async func` のエクスポート | エクスポートが捕まえなかった例外 |
 | --- | --- | --- | --- | --- |
 | `--component` | [型を置ける位置](#where-each-type-crosses)のすべての型 | world をエクスポートするリアクタのコンポーネント | async で lift する。メソッドがブロックする箇所で呼び出しは待てる | JDK と同じ行を標準エラー出力に書いてから、呼び出しがトラップになる |
-| `--component --no-wasi` | 拒否（このコンポーネントは何もインポートしない） | `--component` と同じ | async で lift するが、時計をインポートしないので、sleep するメソッドはトラップになる | 何も書かずにトラップになる |
+| `--component --no-wasi` | 拒否（このコンポーネントは何もインポートしない） | `--component` と同じ。ただし、コンポーネントがインポートするリソースのハンドルは不可（そのインタフェースをインポートすることになるため） | async で lift するが、時計をインポートしないので、sleep するメソッドはトラップになる | 何も書かずにトラップになる |
 | `--no-wasi` のモジュール（ホストは `--emit-js-glue` のグルー） | canonical ABI を通して、`stream` と `future` 以外のすべての型。`async func` は不可。`main` からは呼べない（JavaScript のホストが promise で応答しうるため） | 拒否（world をエクスポートするのはコンポーネント） | | |
 | Preview 1 のモジュール（`-o out.wasm`） | 平坦な型（32 ビットまでの整数、浮動小数点数、`bool`、`string`、`list<u8>`、ハンドル）。それらの型の `async func` は普通の呼び出し | 拒否 | | |
 | `--no-gc` のモジュール | `bool`、整数、`f64`、`string`。Preview 1 のモジュールと同じくインポートし、[実装](#the-implementation)の取得で得る。それらの型の `async func` は呼び出し | 拒否 | | |
-| `--no-gc --component` | `bool`、整数、`f64`、`string` だけ。同じ取得で得る。ほかの型は WIT の行で拒否。`async func` は待つ呼び出しで、`async func` でないエクスポートから届くと拒否 | それらの型だけ。ほかの型は WIT の行で拒否 | それらの型で async で lift する。インポートが待つところで呼び出しが待てる | 何も書かずにトラップになる |
+| `--no-gc --component` | `bool`、整数、`f64`、`string` だけ。同じ取得で得る。ほかの型は WIT の行で拒否。`async func` は待つ呼び出しで、`async func` でないエクスポートから届くと拒否 | それらの型だけ。ほかの型は WIT の行で拒否。リソースは不可（そのオブジェクトをスカラーのバックエンドは読めず、読む箇所で拒否される） | それらの型で async で lift する。インポートが待つところで呼び出しが待てる | 何も書かずにトラップになる |
 | `--native` | なし（ランナーが WIT インタフェースを提供しない。平坦な型のメンバーを呼ぶプログラムは起動せず、ほかのメンバーは拒否される） | 拒否 | | |
 | JDK、インタプリタ、JVM | プログラム自身のプロバイダ。すべての型を、何も変換せずに渡す | アノテーションは何もしない。普通の static メソッドで、`main` のないプログラムは拒否される | ほかと同じように呼ばれるメソッド | ほかの例外と同じ |
 
@@ -663,8 +794,8 @@ JDK 以外のすべてのターゲットで、宣言は WIT と照合されま�
   `WitResult` なら、トラップの前に `NullPointerException` を書きます。JDK、インタプリタ、JVM
   では、プロバイダがその `null` を受け取ります。
 - 閉じたリソースは `IllegalStateException` を投げ（`tcp-socket of wasi:sockets/types@0.3.0
-  is closed`）、2 度目の `close()` は何もしません。閉じた `InputStream` の読み取りは
-  `IOException` を投げます。
+  is closed`）、2 度目の `close()` は何もしません。エクスポートに貸されたリソースも、呼び出しが
+  終わった後は同じです。閉じた `InputStream` の読み取りは `IOException` を投げます。
 
 ## 制限
 
@@ -677,3 +808,6 @@ JDK 以外のすべてのターゲットで、宣言は WIT と照合されま�
   コンポーネントと、`--no-gc` のコンポーネントは、何も書かずにトラップになります。
 - 同じラベルのエクスポート 2 つ（world の関数とインタフェースの関数、または 2 つの
   インタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
+- `main` のないプログラムは、ソースツリーにある `@WitExport` のクラスをすべてエクスポートします。
+  そのため 2 つの world のクラス（上の `Counters` と `Reporter`）は 2 つのプログラムで、
+  それぞれ別のディレクトリに置きます。

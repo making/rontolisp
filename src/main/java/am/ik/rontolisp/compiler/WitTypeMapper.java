@@ -175,9 +175,27 @@ public final class WitTypeMapper {
 	 * a front end that names its types after the WIT's finds its own type by
 	 * @param borrow whether the type is a {@code borrow<R>} handle, aliases followed: one
 	 * the callee does not take from its caller
+	 * @param home the canonical id of the interface whose resource a handle is (the plain
+	 * name of a world's inline interface), what tells two resources of one name apart;
+	 * {@code null} for every other representation
 	 */
 	public record Shape(Rep rep, @Nullable Shape element, String wit, @Nullable Shape error, List<Part> parts,
-			@Nullable String definition, boolean borrow) {
+			@Nullable String definition, boolean borrow, @Nullable String home) {
+
+		/**
+		 * A shape of no home.
+		 * @param rep the house representation
+		 * @param element the element, or {@code null}
+		 * @param wit the type as the WIT spells it
+		 * @param error a result's error arm, or {@code null}
+		 * @param parts the labelled members
+		 * @param definition the name the type resolves to, or {@code null}
+		 * @param borrow whether it is a {@code borrow<R>} handle
+		 */
+		public Shape(Rep rep, @Nullable Shape element, String wit, @Nullable Shape error, List<Part> parts,
+				@Nullable String definition, boolean borrow) {
+			this(rep, element, wit, error, parts, definition, borrow, null);
+		}
 
 		/**
 		 * A shape of no definition.
@@ -293,14 +311,30 @@ public final class WitTypeMapper {
 	 * @return the shape
 	 */
 	public static Shape shape(WitType type, WitResolver resolver, WitItem.InterfaceDef scope) {
-		return shapeOf(type, resolver, scope, new ArrayList<>());
+		return shape(type, resolver, scope, resolver::canonicalId);
+	}
+
+	/**
+	 * Like {@link #shape(WitType, WitResolver, WitItem.InterfaceDef)}, a handle's home
+	 * named by the caller: a scope of its own making (an exported interface with its
+	 * {@code use} clauses written out) is in no package of the document.
+	 * @param type the type use
+	 * @param resolver the resolver over the document
+	 * @param scope the scope the type is written in
+	 * @param homes the id of the interface defining a resource, by that interface
+	 * @return the shape
+	 */
+	public static Shape shape(WitType type, WitResolver resolver, WitItem.InterfaceDef scope,
+			java.util.function.Function<WitItem.InterfaceDef, @Nullable String> homes) {
+		return shapeOf(type, resolver, scope, new ArrayList<>(), homes);
 	}
 
 	// The whole shape, every nested type described in the scope THAT type is written in
 	// (an option's element, a result's arms, a list's element, a record's fields, a
 	// variant's payloads, a tuple's elements). `path` holds the definitions being
 	// described.
-	private static Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface, List<WitItem> path) {
+	private static Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface, List<WitItem> path,
+			java.util.function.Function<WitItem.InterfaceDef, @Nullable String> homes) {
 		Scoped scoped = followAliases(type, resolver, iface);
 		WitType t = scoped.type();
 		WitItem.InterfaceDef in = scoped.iface();
@@ -317,13 +351,14 @@ public final class WitTypeMapper {
 					switch (owned.item()) {
 						case WitItem.RecordDef record -> {
 							for (WitItem.Field field : record.fields()) {
-								parts.add(new Part(field.name(), shapeOf(field.type(), resolver, owned.owner(), path)));
+								parts.add(new Part(field.name(),
+										shapeOf(field.type(), resolver, owned.owner(), path, homes)));
 							}
 						}
 						case WitItem.VariantDef variant -> {
 							for (WitItem.Case c : variant.cases()) {
 								parts.add(new Part(c.name(), c.payload() == null ? null
-										: shapeOf(c.payload(), resolver, owned.owner(), path)));
+										: shapeOf(c.payload(), resolver, owned.owner(), path, homes)));
 							}
 						}
 						case WitItem.EnumDef enumDef -> {
@@ -341,26 +376,26 @@ public final class WitTypeMapper {
 						}
 					}
 					return new Shape(repOfDefinition(owned.item()), null, wit, null, List.copyOf(parts),
-							definedName(owned.item()), false);
+							definedName(owned.item()), false,
+							owned.item() instanceof WitItem.ResourceDef ? homes.apply(owned.owner()) : null);
 				}
 				finally {
 					path.removeLast();
 				}
 			}
 			case WitType.BorrowOf borrow -> {
-				return new Shape(Rep.HANDLE, null, wit, null, List.of(), resourceName(borrow.resource(), resolver, in),
-						true);
+				return handle(borrow.resource(), wit, true, resolver, in, homes);
 			}
 			case WitType.OwnOf own -> {
-				return new Shape(Rep.HANDLE, null, wit, null, List.of(), resourceName(own.resource(), resolver, in),
-						false);
+				return handle(own.resource(), wit, false, resolver, in, homes);
 			}
 			case WitType.OptionOf option -> {
-				return new Shape(Rep.NIL_OR_VALUE, shapeOf(option.element(), resolver, in, path), wit);
+				return new Shape(Rep.NIL_OR_VALUE, shapeOf(option.element(), resolver, in, path, homes), wit);
 			}
 			case WitType.ResultOf result -> {
-				return new Shape(Rep.RESULT, result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path), wit,
-						result.err() == null ? null : shapeOf(result.err(), resolver, in, path), List.of());
+				return new Shape(Rep.RESULT,
+						result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path, homes), wit,
+						result.err() == null ? null : shapeOf(result.err(), resolver, in, path, homes), List.of());
 			}
 			case WitType.ListOf list -> {
 				// a list of bytes is a byte string whatever alias names its element, as
@@ -369,22 +404,22 @@ public final class WitTypeMapper {
 						&& "u8".equals(prim.name())) {
 					return new Shape(Rep.BYTE_STRING, null, wit);
 				}
-				return new Shape(Rep.LIST, shapeOf(list.element(), resolver, in, path), wit);
+				return new Shape(Rep.LIST, shapeOf(list.element(), resolver, in, path, homes), wit);
 			}
 			case WitType.TupleOf tuple -> {
 				List<Part> parts = new ArrayList<>();
 				for (WitType element : tuple.elements()) {
-					parts.add(new Part(Integer.toString(parts.size()), shapeOf(element, resolver, in, path)));
+					parts.add(new Part(Integer.toString(parts.size()), shapeOf(element, resolver, in, path, homes)));
 				}
 				return new Shape(Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
 			}
 			case WitType.StreamOf stream -> {
 				return new Shape(Rep.STREAM_HANDLE,
-						stream.element() == null ? null : shapeOf(stream.element(), resolver, in, path), wit);
+						stream.element() == null ? null : shapeOf(stream.element(), resolver, in, path, homes), wit);
 			}
 			case WitType.FutureOf future -> {
 				return new Shape(Rep.FUTURE_HANDLE,
-						future.element() == null ? null : shapeOf(future.element(), resolver, in, path), wit);
+						future.element() == null ? null : shapeOf(future.element(), resolver, in, path, homes), wit);
 			}
 			default -> {
 				return new Shape(rep(t), null, wit, null, List.of(),
@@ -406,16 +441,19 @@ public final class WitTypeMapper {
 		};
 	}
 
-	// The resource an own<R> or a borrow<R> names, aliases followed (R may be one).
-	private static String resourceName(String name, WitResolver resolver, WitItem.InterfaceDef in) {
+	// The handle an own<R> or a borrow<R> is: the resource R names, aliases followed (R
+	// may be one), and the interface defining it.
+	private static Shape handle(String name, String wit, boolean borrow, WitResolver resolver, WitItem.InterfaceDef in,
+			java.util.function.Function<WitItem.InterfaceDef, @Nullable String> homes) {
 		Scoped scoped = followAliases(new WitType.Named(name), resolver, in);
 		if (scoped.type() instanceof WitType.Named named) {
 			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
 			if (owned != null && owned.item() instanceof WitItem.ResourceDef resource) {
-				return resource.name();
+				return new Shape(Rep.HANDLE, null, wit, null, List.of(), resource.name(), borrow,
+						homes.apply(owned.owner()));
 			}
 		}
-		return name;
+		return new Shape(Rep.HANDLE, null, wit, null, List.of(), name, borrow);
 	}
 
 	// A type and the scope it is written in.

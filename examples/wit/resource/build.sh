@@ -9,14 +9,19 @@
 # (cargo install wac-cli) and wasmtime 46+.
 #
 #   RONTOLISP=../../../target/rontolisp ./build.sh
+#   RONTOLISP=../../../target/rontolisp COUNTERS=Counters.java ./build.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
 RONTOLISP="${RONTOLISP:-rontolisp}"
+# The file implementing the world counters: counters.lisp, Counters.java or
+# counters.clj.
+COUNTERS="${COUNTERS:-counters.lisp}"
 
 echo "== 1. the component that exports the resource (a reactor) =="
-"$RONTOLISP" counters.lisp -o counters.wasm --component
+"$RONTOLISP" "$COUNTERS" --java-source-path ../../../rontolisp-java-api/src/main/java \
+  -o counters.wasm --component
 
 echo "== 2. the command that imports its interfaces =="
 "$RONTOLISP" app.lisp -o app.wasm --component

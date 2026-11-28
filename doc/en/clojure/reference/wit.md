@@ -73,7 +73,7 @@ case `DNS-error` is the keyword `:DNS-error`.
 | `char` | a character |
 | `string` | a string |
 | `list<u8>` | a [byte array](byte-array.md) |
-| a resource handle (`own`, `borrow`) | an opaque integer |
+| a resource handle (`own`, `borrow`) | an opaque integer; in a world's export, a handle of a resource the world exports is the value its constructor answered ([Resources](#resources)) |
 | `option<T>` | the value, or `nil` |
 | `record` | a map holding each field under its keyword: `{:port 0 :address [127 0 0 1]}` |
 | `enum` | the case's keyword: `:ipv4` |
@@ -163,10 +163,71 @@ Each target narrows it further the way it does for Common Lisp. A WASM core modu
 carries the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>` and handles, and a
 member reaching beyond them is refused where the program calls it; a component's import carries
 every row but an argument list of anything but `u8`. A component's export carries
-every row but handles, and a world whose types reach one, a stream or a
-future is refused at the WIT line, as is an exported interface that declares a resource or
-names one in a `use` clause (a Common Lisp program exports one, and takes one the component
-imports: [Resources](../../reference/functions/rontolisp-wit-export.md#resources)), and a `--no-wasi` module's export carries the same through its `--emit-js-glue` glue
-(flags as an object of booleans); a WASI module's and `--no-gc`'s
+every row, a handle of a resource the component imports only where the component imports
+(not under `--no-wasi`), and a world whose types reach a stream or a future is refused at the
+WIT line; a `--no-wasi` module's export carries the same through its `--emit-js-glue` glue
+(flags as an object of booleans), but no handle; a WASI module's and `--no-gc`'s
 exports carry the integers, `f64`, `bool` and `string`
 ([`rontolisp:wit-export`](../../reference/functions/rontolisp-wit-export.md#compound-types)).
+
+## Resources
+
+A resource an exported interface declares is implemented by vars named by its member
+names, as `import` names them on the other side: `counter-new` for the constructor,
+`counter-add` for a method (the resource first), `counter-merge` for a static function.
+`counter-drop`, where the namespace defines it, is called with the value each time a holder
+releases a handle; a handle handed over to an export is not released. The value the
+constructor's var answers is the resource -- any value, an atom here -- and wherever the WIT
+names the resource (a parameter, a result, a record's field, a list's element) the var takes
+or answers that value.
+
+```console
+$ cat counters.wit
+package example:counters@0.1.0;
+
+interface registry {
+  resource counter {
+    constructor(name: string, start: u32);
+    add: func(by: u32) -> u32;
+    merge: static func(a: counter, b: borrow<counter>) -> counter;
+  }
+
+  total: func(counters: list<borrow<counter>>) -> u32;
+}
+
+world counters {
+  export registry;
+}
+$ cat counters.clj
+(ns counters (:require [rontolisp.wit :as wit]))
+
+(wit/export "counters.wit" {:reactor true})
+
+(defn counter-new [name start] (atom {:name name :value start}))
+(defn counter-add [self by] (:value (swap! self update :value + by)))
+(defn counter-merge [a b] (swap! a update :value + (:value @b)) a)
+(defn total [counters] (reduce + (map (comp :value deref) counters)))
+$ rontolisp counters.clj -o counters.wasm --component
+```
+
+A resource of an interface the world does not export, named with `use` by an exported
+interface or the world, is one the component imports: its handle is the integer an `import`
+of that interface takes, as `reg/counter-read` does below. A borrowed one is released when
+the var has answered, so the program does not drop it; an owned one is the program's.
+
+```console
+$ cat reporter.clj
+(ns reporter (:require [rontolisp.wit :as wit]))
+
+(wit/import "wit/counters.wit" {:interface "example:counters/registry" :as reg})
+
+(defn summary [c]
+  (let [{:keys [name value]} (reg/counter-read c)]
+    (str name " is at " value)))
+
+(wit/export "wit/counters.wit" {:world "reporter" :reactor true})
+```
+
+[`examples/wit/resource/counters.clj`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
+implements the world of the Lisp example beside it, which its command calls once composed;
+the Common Lisp side: [Resources](../../reference/functions/rontolisp-wit-export.md#resources).

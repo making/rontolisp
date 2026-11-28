@@ -213,6 +213,10 @@ On `--no-gc --component` the resource is the integer the constructor answers
 A resource of an interface the world only imports crosses as well, as the integer
 handle `wit-import` takes: the component imports the interface for it
 ([A resource the component imports](../reference/functions/rontolisp-wit-export.md#a-resource-the-component-imports)).
+A Java program exports a resource as a class whose constructor and methods are the
+resource's ([Resources of an export](../java/wit.md#resources-of-an-export)), a Clojure
+program as vars named like these `defun`s
+([Resources](../clojure/reference/wit.md#resources)).
 
 A WASI module (`-o out.wasm` alone) and `--no-gc` export the flat types alone:
 its host calls a function of core values, which have no type to state a record
@@ -303,8 +307,11 @@ is carried above its stub as the contract it must satisfy, and the `///` doc
 comments become `;;;` comments. The stubs signal at **run** time, not compile
 time, so the generated file compiles unchanged and the exports can be filled
 in one at a time. A world exporting an interface scaffolds one stub per
-interface function, so the separated shape above yields the same skeleton. Add
-`--world NAME` when the `.wit` declares several worlds.
+interface function, so the separated shape above yields the same skeleton, and
+one per function of a resource the interface declares, named as
+[`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md) binds it
+(`counter-new`, `counter-add` taking the resource first). Add `--world NAME` when
+the `.wit` declares several worlds.
 
 An output ending in `.java` (or `--source-language java` when printing) writes the Java
 subset's form instead: a `@WitExport` class whose static methods throw until filled in, a

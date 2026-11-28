@@ -146,9 +146,11 @@ public interface ClojureBoundary {
 	/**
 	 * An interface member or a world export.
 	 *
-	 * @param name the member's name ({@code bucket-get}) or the export's label
+	 * @param name the member's name ({@code bucket-get}) or the export's label; a
+	 * resource's function's member name ({@code counter-add}), which the var implementing
+	 * it is named by, and its destructor's ({@code counter-drop})
 	 * @param key what a {@code :names} table names it by: its name, but
-	 * {@code <iface>#<label>} of an exported interface's member
+	 * {@code <iface>#<name>} of an exported interface's member
 	 * @param origin how it comes to be bound ({@link Origin#FUNCTION} for an export)
 	 * @param params its parameters, a method's handle first
 	 * @param result its result, or {@code null} for none
@@ -172,9 +174,13 @@ public interface ClojureBoundary {
 	 * A WIT world.
 	 *
 	 * @param name its name
-	 * @param exports its exports, in world order
+	 * @param exports its exports, in world order: a resource's constructor, methods and
+	 * static functions among them
+	 * @param drops the destructor of each resource its exported interfaces declare
+	 * ({@link Origin#DROP}), which calls the function its name names where the program
+	 * defines one
 	 */
-	record WitWorld(String name, List<Function> exports) {
+	record WitWorld(String name, List<Function> exports, List<Function> drops) {
 	}
 
 }

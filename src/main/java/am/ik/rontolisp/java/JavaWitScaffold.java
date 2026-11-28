@@ -63,6 +63,9 @@ final class JavaWitScaffold {
 	/** The member interface standing for each imported interface, by canonical id. */
 	private final Map<String, Scope> imports = new LinkedHashMap<>();
 
+	/** The member class standing for each exported interface, by its id. */
+	private final Map<String, Scope> exported = new LinkedHashMap<>();
+
 	private JavaWitScaffold(JavaBoundary boundary, String wit, List<String> paths, String className,
 			Map<String, List<String>> docs) {
 		this.boundary = boundary;
@@ -86,27 +89,32 @@ final class JavaWitScaffold {
 		this.skipped.addAll(world.refused());
 		this.declared.add(this.className);
 		// the exports: the class for the world's own, a member class for each
-		// interface, each declaring the types its functions reach
+		// interface, each declaring the types its functions reach and a member class for
+		// each resource it declares
 		Scope own = new Scope(this.className, "world " + world.name(), "", null, false);
-		Map<String, Scope> exported = new LinkedHashMap<>();
+		Map<String, Scope> exported = this.exported;
 		for (JavaBoundary.Export export : world.exports()) {
-			String iface = export.iface();
-			if (iface != null && !exported.containsKey(iface)) {
-				Scope holder = new Scope(JavaWitImports.upperCamel(JavaWitExports.interfaceName(iface)), iface, iface,
-						null, false);
-				this.declared.add(holder.name);
-				exported.put(iface, holder);
-			}
+			holder(export.iface());
+		}
+		for (JavaBoundary.Resource resource : world.resources()) {
+			Objects.requireNonNull(holder(resource.iface())).resource(resource);
 		}
 		for (JavaBoundary.Export export : world.exports()) {
 			(export.iface() == null ? own : Objects.requireNonNull(exported.get(export.iface()))).reserve(export);
 		}
-		for (JavaBoundary.Export export : world.exports()) {
-			(export.iface() == null ? own : Objects.requireNonNull(exported.get(export.iface()))).export(export);
-		}
-		// the imports, with each interface whose resource one takes with use
+		// the imports, with each interface whose resource one takes with use, and each
+		// whose resource an export takes, which the component imports for it: named
+		// before an export's text names one of their resources
 		Map<String, JavaBoundary.WitInterface> described = new LinkedHashMap<>();
 		Deque<String> pending = new ArrayDeque<>(world.imports());
+		for (JavaBoundary.Export export : world.exports()) {
+			for (JavaBoundary.Param param : export.params()) {
+				importedHomes(param.type(), pending);
+			}
+			if (export.result() != null) {
+				importedHomes(export.result(), pending);
+			}
+		}
 		Set<String> asked = new HashSet<>();
 		while (!pending.isEmpty()) {
 			String id = pending.removeFirst();
@@ -135,6 +143,9 @@ final class JavaWitScaffold {
 		}
 		for (Scope scope : this.imports.values()) {
 			scope.reserveImport();
+		}
+		for (JavaBoundary.Export export : world.exports()) {
+			(export.iface() == null ? own : Objects.requireNonNull(exported.get(export.iface()))).export(export);
 		}
 		for (Scope scope : this.imports.values()) {
 			scope.importMembers();
@@ -171,6 +182,44 @@ final class JavaWitScaffold {
 		body.add("}");
 		return new JavaWitSkeleton(header(world) + simplified(String.join("\n", body) + "\n"),
 				List.copyOf(this.skipped));
+	}
+
+	/** The member class standing for an exported interface, made when first asked for. */
+	private @Nullable Scope holder(@Nullable String iface) {
+		if (iface == null) {
+			return null;
+		}
+		Scope known = this.exported.get(iface);
+		if (known != null) {
+			return known;
+		}
+		Scope holder = new Scope(JavaWitImports.upperCamel(JavaWitExports.interfaceName(iface)), iface, iface, null,
+				false);
+		this.declared.add(holder.name);
+		this.exported.put(iface, holder);
+		return holder;
+	}
+
+	/**
+	 * Adds the home of each handle a type holds of a resource no exported interface
+	 * declares: an interface the component imports.
+	 */
+	private void importedHomes(JavaBoundary.Type wit, Deque<String> pending) {
+		String home = wit.home();
+		if (wit.rep() == Rep.HANDLE && home != null && !this.exported.containsKey(home) && !pending.contains(home)) {
+			pending.add(home);
+		}
+		if (wit.element() != null) {
+			importedHomes(wit.element(), pending);
+		}
+		if (wit.error() != null) {
+			importedHomes(wit.error(), pending);
+		}
+		for (JavaBoundary.Part part : wit.parts()) {
+			if (part.type() != null) {
+				importedHomes(part.type(), pending);
+			}
+		}
 	}
 
 	private String header(JavaBoundary.WitWorld world) {
@@ -266,6 +315,12 @@ final class JavaWitScaffold {
 		/** The member interfaces of the resources, each a list of lines. */
 		final List<List<String>> resources = new ArrayList<>();
 
+		/**
+		 * The member classes of the resources an exported interface declares, by name:
+		 * each member's lines, in WIT order.
+		 */
+		final Map<String, List<List<String>>> resourceMembers = new LinkedHashMap<>();
+
 		/** The named types reached, by name, declared once each. */
 		final Map<String, JavaBoundary.Type> reached = new LinkedHashMap<>();
 
@@ -296,6 +351,13 @@ final class JavaWitScaffold {
 		}
 
 		// ---- the names, taken before any tuple is named
+
+		/** A resource the interface declares: the member class standing for it. */
+		void resource(JavaBoundary.Resource resource) {
+			this.names.add(JavaWitImports.upperCamel(resource.name()));
+			JavaWitScaffold.this.declared.addAll(this.names);
+			this.resourceMembers.put(resource.name(), new ArrayList<>());
+		}
 
 		void reserve(JavaBoundary.Export export) {
 			for (JavaBoundary.Param param : export.params()) {
@@ -424,6 +486,18 @@ final class JavaWitScaffold {
 			String definition = Objects.requireNonNull(wit.definition());
 			String member = JavaWitImports.upperCamel(definition);
 			JavaBoundary.WitInterface described = this.iface;
+			if (wit.rep() == Rep.HANDLE && described == null) {
+				// an export's: a resource of its own interface, of another the world
+				// exports, or of one the component imports
+				String home = wit.home();
+				if (home == null || home.equals(this.id)) {
+					return member;
+				}
+				Scope other = JavaWitScaffold.this.exported.get(home);
+				other = other != null ? other : JavaWitScaffold.this.imports.get(home);
+				return (other == null ? JavaWitImports.upperCamel(JavaWitExports.interfaceName(home)) : other.name)
+						+ "." + member;
+			}
 			if (wit.rep() == Rep.HANDLE) {
 				String home = described == null || this.names.contains(member) ? null
 						: described.used().get(definition);
@@ -472,16 +546,28 @@ final class JavaWitScaffold {
 
 		// ---- the members
 
-		/** The static method standing for an export, or its refusal. */
+		/**
+		 * The static method standing for an export, or its refusal; a resource's
+		 * constructor, method or static method, in the class standing for the resource.
+		 */
 		void export(JavaBoundary.Export export) {
-			String method = JavaWitImports.lowerCamel(export.name());
-			String what = method + " (" + export.name() + " of " + this.scope + ", " + export.at() + ")";
+			Kind kind = export.kind();
+			String resource = export.resource();
+			boolean constructor = kind == Kind.CONSTRUCTOR;
+			String method = JavaWitImports.lowerCamel(resource == null ? export.name() : export.function());
+			String shown = resource == null ? export.name()
+					: constructor ? "the constructor of " + resource : resource + "." + export.function();
+			String what = (constructor ? JavaWitImports.upperCamel(Objects.requireNonNull(resource)) : method) + " ("
+					+ export.name() + " of " + this.scope + ", " + export.at() + ")";
+			// a method's handle is its receiver, a constructor's answer the object made
+			List<JavaBoundary.Param> params = kind == Kind.METHOD ? export.params().subList(1, export.params().size())
+					: export.params();
+			JavaBoundary.Type result = constructor ? null : export.result();
 			String refused = null;
-			for (JavaBoundary.Param param : export.params()) {
+			for (JavaBoundary.Param param : params) {
 				refused = refused != null ? refused
 						: refusal(param.type(), false, what + ": its parameter " + param.name());
 			}
-			JavaBoundary.Type result = export.result();
 			if (refused == null && result != null) {
 				refused = refusal(result, false, what + ": its result");
 			}
@@ -489,21 +575,34 @@ final class JavaWitScaffold {
 				JavaWitScaffold.this.skipped.add(refused);
 				return;
 			}
-			String place = Character.toUpperCase(method.charAt(0)) + method.substring(1);
+			String placed = resource == null ? method : JavaWitImports.lowerCamel(export.member());
+			String place = Character.toUpperCase(placed.charAt(0)) + placed.substring(1);
 			List<String> parameters = new ArrayList<>();
-			for (JavaBoundary.Param param : export.params()) {
+			for (JavaBoundary.Param param : params) {
 				String parameter = JavaWitImports.lowerCamel(param.name());
 				parameters
 					.add(text(param.type(), false, place + JavaWitImports.upperCamel(param.name())) + " " + parameter);
 			}
 			String answer = result == null ? "void" : text(result, false, place + "Result");
 			List<String> lines = new ArrayList<>();
-			javadoc(lines, 0, docs(export.name()), signature(export.name(), export.params(), result, export.async()));
-			lines.add("public static " + answer + " " + method + "(" + String.join(", ", parameters) + ") {");
+			String head = switch (kind) {
+				case CONSTRUCTOR -> "public " + JavaWitImports.upperCamel(Objects.requireNonNull(resource));
+				case METHOD -> "public " + answer + " " + method;
+				default -> "public static " + answer + " " + method;
+			};
+			javadoc(lines, 0, docs(resource == null ? export.name() : resource + "." + export.function()),
+					resource == null ? signature(export.name(), export.params(), result, export.async())
+							: signature(export, params));
+			lines.add(head + "(" + String.join(", ", parameters) + ") {");
 			lines.add(INDENT + "throw new java.lang.UnsupportedOperationException("
-					+ literal(export.name() + " is not implemented yet") + ");");
+					+ literal(shown + " is not implemented yet") + ");");
 			lines.add("}");
-			this.methods.add(lines);
+			if (resource == null) {
+				this.methods.add(lines);
+			}
+			else {
+				Objects.requireNonNull(this.resourceMembers.get(resource)).add(lines);
+			}
 		}
 
 		/** The abstract methods of an imported interface and its resources'. */
@@ -676,6 +775,9 @@ final class JavaWitScaffold {
 			List<List<String>> order = new ArrayList<>();
 			if (this.iface == null) {
 				order.addAll(types);
+				for (Map.Entry<String, List<List<String>>> resource : this.resourceMembers.entrySet()) {
+					order.add(resourceClass(resource.getKey(), resource.getValue()));
+				}
 				order.addAll(this.methods);
 			}
 			else {
@@ -688,6 +790,31 @@ final class JavaWitScaffold {
 				out.add("");
 				member.forEach(line -> out.add(line.isEmpty() ? "" : indent + line));
 			}
+		}
+
+		/**
+		 * The class standing for a resource the world exports: its constructor, methods
+		 * and static methods, then {@code close()}, its destructor.
+		 */
+		private List<String> resourceClass(String resource, List<List<String>> members) {
+			List<String> lines = new ArrayList<>();
+			javadoc(lines, 0, docs(resource), null);
+			lines.add("public static class " + JavaWitImports.upperCamel(resource)
+					+ " implements java.lang.AutoCloseable {");
+			for (List<String> member : members) {
+				lines.add("");
+				member.forEach(line -> lines.add(line.isEmpty() ? "" : INDENT + line));
+			}
+			lines.add("");
+			lines.add(INDENT + "/**");
+			lines.add(INDENT + " * The destructor: the component calls it when a holder releases a handle of the "
+					+ resource + ".");
+			lines.add(INDENT + " */");
+			lines.add(INDENT + "@Override");
+			lines.add(INDENT + "public void close() {");
+			lines.add(INDENT + "}");
+			lines.add("}");
+			return lines;
 		}
 
 		private String modifier() {
@@ -760,6 +887,17 @@ final class JavaWitScaffold {
 			boolean async) {
 		return name + ": " + (async ? "async " : "") + "func(" + parameters(params) + ")"
 				+ (result == null ? "" : " -> " + result.wit());
+	}
+
+	/** A resource's function as the WIT writes it. */
+	private static String signature(JavaBoundary.Export export, List<JavaBoundary.Param> params) {
+		JavaBoundary.Type result = export.result();
+		return switch (export.kind()) {
+			case CONSTRUCTOR -> "constructor(" + parameters(params) + ")";
+			case STATIC -> export.function() + ": " + (export.async() ? "async " : "") + "static func("
+					+ parameters(params) + ")" + (result == null ? "" : " -> " + result.wit());
+			default -> signature(export.function(), params, result, export.async());
+		};
 	}
 
 	private static String signature(JavaBoundary.Function member, List<JavaBoundary.Param> params) {

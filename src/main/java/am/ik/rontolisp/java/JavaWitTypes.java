@@ -130,8 +130,8 @@ final class JavaWitTypes {
 				throw at(method, what + " is " + wit.wit() + ", " + refusal);
 			}
 			if (declared != null && !matches(wit, declared, boxed, method, what)) {
-				throw at(method, what + " is " + wit.wit() + ", which is "
-						+ javaText(this.owner, wit, boxed, declared, true) + " in Java, not " + declared);
+				throw at(method, what + " is " + wit.wit() + ", which is " + text(wit, boxed, declared, true)
+						+ " in Java, not " + declared);
 			}
 			definitions(wit, declared, method, what);
 		}
@@ -258,6 +258,23 @@ final class JavaWitTypes {
 		 * {@code null} for a type of the scope's own, its owner's member type.
 		 */
 		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+			return null;
+		}
+
+		/**
+		 * The Java type a WIT type is, as source names it
+		 * ({@link JavaWitTypes#javaText}): a handle by the class {@link #handleClassOf}
+		 * names, where it names one.
+		 */
+		String text(JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared, boolean simple) {
+			return javaText(this.owner, this::handleClassOf, wit, boxed, declared, simple);
+		}
+
+		/**
+		 * The class a handle is, where it is not the owner's member type of its name, or
+		 * {@code null}.
+		 */
+		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
 			return null;
 		}
 
@@ -421,6 +438,41 @@ final class JavaWitTypes {
 		/** The class a resource's handle is in the generated source, by WIT name. */
 		abstract String handleClass(String resource);
 
+		/**
+		 * Writes the body of a handle's converter where it is no handle of a class the
+		 * generated source makes ({@link #handleClass}), answering whether it did.
+		 * @param in whether the boundary's value is converted into Java
+		 * @param javaType the Java type, as source names it
+		 */
+		boolean handle(boolean in, JavaBoundary.Type wit, String javaType, StringBuilder body) {
+			return false;
+		}
+
+		/**
+		 * The Java type a WIT type is, as the generated source names it
+		 * ({@link JavaWitTypes#javaText}): a handle by the class {@link #handleClassOf}
+		 * names, where it names one.
+		 */
+		String text(JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared) {
+			return javaText(this.owner, this::handleClassOf, wit, boxed, declared, false);
+		}
+
+		/**
+		 * The class a handle is, where it is not the owner's member type of its name, or
+		 * {@code null}.
+		 */
+		@Nullable JavaClass handleClassOf(JavaBoundary.Type wit) {
+			return null;
+		}
+
+		/**
+		 * Whether a value converted into Java holds a handle lent for the call alone: its
+		 * converter takes the call's flag, {@code boolean[] lent}, besides the value.
+		 */
+		boolean lends(JavaBoundary.Type wit) {
+			return false;
+		}
+
 		/** The class reading a stream or a future the host answers. */
 		abstract String asyncClass(JavaBoundary.Type wit, @Nullable JavaType declared);
 
@@ -443,7 +495,7 @@ final class JavaWitTypes {
 				case CHARACTER -> v + ".inCodePoint(" + value + ")";
 				case STRING -> v + ".inString(" + value + ")";
 				case BYTE_STRING -> v + ".inBytes(" + value + ")";
-				default -> converter("in", wit, declared) + "(" + value + ")";
+				default -> converter("in", wit, declared) + "(" + value + (lends(wit) ? ", lent" : "") + ")";
 			};
 		}
 
@@ -482,7 +534,7 @@ final class JavaWitTypes {
 			}
 			String name = direction + this.written.size();
 			this.written.put(key, name);
-			String javaType = javaText(this.owner, wit, false, declared, false);
+			String javaType = text(wit, false, declared);
 			String v = VALUES;
 			StringBuilder body = new StringBuilder();
 			boolean in = direction.equals("in");
@@ -492,12 +544,12 @@ final class JavaWitTypes {
 				.append(name)
 				.append('(')
 				.append(in ? "Object" : javaType)
-				.append(" v) {\n");
+				.append(in && lends(wit) ? " v, boolean[] lent) {\n" : " v) {\n");
 			switch (wit.rep()) {
 				case LIST -> {
 					JavaBoundary.Type element = Objects.requireNonNull(wit.element());
 					JavaType declaredElement = argument(declared);
-					String elementText = javaText(this.owner, element, true, declaredElement, false);
+					String elementText = text(element, true, declaredElement);
 					if (in) {
 						body.append("        java.util.ArrayList<")
 							.append(elementText)
@@ -770,6 +822,9 @@ final class JavaWitTypes {
 					}
 				}
 				case HANDLE -> {
+					if (handle(in, wit, javaType, body)) {
+						break;
+					}
 					String handle = handleClass(Objects.requireNonNull(wit.definition()));
 					if (in) {
 						body.append("        return new ")
@@ -973,9 +1028,22 @@ final class JavaWitTypes {
 	 */
 	static String javaText(JavaClass owner, JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared,
 			boolean simple) {
+		return javaText(owner, handle -> null, wit, boxed, declared, simple);
+	}
+
+	/**
+	 * Like {@link #javaText(JavaClass, JavaBoundary.Type, boolean, JavaType, boolean)}, a
+	 * handle named by the class a function answers for it, where it answers one.
+	 */
+	static String javaText(JavaClass owner, java.util.function.Function<JavaBoundary.Type, @Nullable JavaClass> handles,
+			JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared, boolean simple) {
 		return javaText(new Spelling() {
 			@Override
 			public String named(JavaBoundary.Type named, @Nullable JavaType written, boolean simpleName) {
+				JavaClass known = named.rep() == Rep.HANDLE ? handles.apply(named) : null;
+				if (known != null) {
+					return simpleName ? simpleText(known) : known.name;
+				}
 				// a resource may be another interface's, which the type written for it
 				// names
 				return named.rep() == Rep.HANDLE && !simpleName && written instanceof ClassType type
@@ -1066,6 +1134,12 @@ final class JavaWitTypes {
 	static @Nullable JavaType argument(@Nullable JavaType declared, int index) {
 		return declared instanceof ClassType type && type.arguments().size() > index ? type.arguments().get(index)
 				: null;
+	}
+
+	/** A member class as a message names it: by its outer class's simple name. */
+	static String simpleText(JavaClass declaration) {
+		JavaClass outer = declaration.outer;
+		return outer == null ? declaration.simpleName() : outer.simpleName() + "." + declaration.simpleName();
 	}
 
 	/** The name of the member class a named type is. */

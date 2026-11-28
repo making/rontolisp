@@ -442,6 +442,9 @@ class WitExportDirectiveTest {
 			.of("  counter-add: func(n: u32) -> u32;\n",
 					"exports '[method]counter.add' and 'counter-add' of interface 'root:component/counters' are both "
 							+ "implemented by (defun counter-add ...); rename one in the WIT",
+					"  counter-drop: func(n: u32);\n",
+					"exports '[dtor]counter' and 'counter-drop' of interface 'root:component/counters' are both "
+							+ "implemented by (defun counter-drop ...); rename one in the WIT",
 					"  peek: func() -> option<borrow<counter>>;\n",
 					"export 'peek': the WIT type of the result holds a borrowed handle of the resource 'counter' in "
 							+ "a result, which an export does not carry")
@@ -527,9 +530,29 @@ class WitExportDirectiveTest {
 				Backend.WASM_NO_GC_COMPONENT, peeking))
 			.hasMessage("world.wit:20: export '[method]cell.peek': the WIT type of the result holds a borrowed handle "
 					+ "of the resource 'cell' in a result, which an export does not carry");
-		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), counters.formatted("", ""), WIT))
-			.hasMessageStartingWith("world.wit:20: interface 'root:component/counters' declares the resource "
-					+ "'counter', which this language does not export");
+		// A front end binding its own names is told a resource's functions -- the
+		// canonical ABI's labels, each implemented by its member name -- and the
+		// destructor of each resource; a handle by the interface its resource is of, the
+		// component's own here.
+		WitExportDirective.WorldDescription described = WitExportDirective.describe(new Directive(WIT, null),
+				counters.formatted("", ""), WIT);
+		assertThat(described.exports()
+			.stream()
+			.map(export -> export.name() + " " + export.key() + " " + export.kind() + " " + export.resource() + " "
+					+ export.function()))
+			.containsExactly("[constructor]counter root:component/counters#counter-new CONSTRUCTOR counter constructor",
+					"[method]counter.add root:component/counters#counter-add PLAIN counter add",
+					"[static]counter.merge root:component/counters#counter-merge STATIC counter merge",
+					"[static]counter.count root:component/counters#counter-count STATIC counter count",
+					"split root:component/counters#split PLAIN null split");
+		assertThat(described.resources().stream().map(WitExportDirective.Resource::key))
+			.containsExactly("root:component/counters#counter-drop", "root:component/counters#token-drop");
+		WitTypeMapper.Shape self = described.exports().get(1).params().get(0).shape();
+		WitTypeMapper.Shape made = java.util.Objects.requireNonNull(described.exports().get(0).result());
+		assertThat(List.of(self.rep(), self.borrow(), made.borrow(), String.valueOf(self.home()),
+				String.valueOf(made.home())))
+			.containsExactly(WitTypeMapper.Rep.HANDLE, true, false, "root:component/counters",
+					"root:component/counters");
 		// Two interfaces' resources of one name are two resources: with the functions
 		// named by a table, each has its own destructor.
 		Map<String, String> table = new java.util.HashMap<>();
@@ -602,14 +625,15 @@ class WitExportDirectiveTest {
 					+ "root:component/store, an interface the world imports, which only a component of the default "
 					+ "backend imports for an export (--component without --no-gc): a core module imports no "
 					+ "resource type");
-		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), importing, WIT))
-			.hasMessage("world.wit:15: interface 'root:component/files' uses the resource 'blob' of "
-					+ "root:component/store, an interface the world imports, which this language takes in no export "
-					+ "(a Common Lisp program does: the integer handle rontolisp:wit-import calls the interface with)");
-		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), worldOnly, WIT))
-			.hasMessageStartingWith("world.wit:15: export 'keep': the WIT type of s holds a handle of the resource "
-					+ "'stored' of root:component/store, an interface the world imports, which this language takes in "
-					+ "no export");
+		// A front end is told such a handle by the interface its resource is of, which
+		// the world does not export, whether a use clause names it as it is or not.
+		WitExportDirective.WorldDescription taking = WitExportDirective.describe(new Directive(WIT, null), importing,
+				WIT);
+		WitTypeMapper.Shape kept = taking.exports().get(1).params().get(0).shape();
+		assertThat(List.of(String.valueOf(
+				java.util.Objects.requireNonNull(taking.exports().get(0).params().get(1).shape().element()).home()),
+				String.valueOf(kept.definition()), String.valueOf(kept.home()), taking.resources().size()))
+			.containsExactly("root:component/store", "blob", "root:component/store", 0);
 		// What a use clause of the world names of an interface the world exports is the
 		// imported interface's, which no function of the world can mean; a resource the
 		// world declares has functions no rontolisp:wit-import binds.

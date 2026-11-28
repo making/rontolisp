@@ -127,6 +127,13 @@ final class JavaWitImports {
 	 */
 	private final Map<JavaClass, Map<String, String>> reached = new LinkedHashMap<>();
 
+	/**
+	 * The resources an export of the program is lent handles of, by interface: an object
+	 * standing for one shares a flag with the call it was lent to, which closes it when
+	 * the call ends ({@link #lend}).
+	 */
+	private final Map<JavaClass, Set<String>> lent = new IdentityHashMap<>();
+
 	JavaWitImports(JavaClasses classes) {
 		this.classes = classes;
 	}
@@ -733,6 +740,34 @@ final class JavaWitImports {
 		return made;
 	}
 
+	/**
+	 * Says that an export is lent handles of a resource the interface stands for, before
+	 * its binding is written: an object of the binding standing for one then holds the
+	 * flag {@code lent} of the call it was lent to, made by the export's wrapper and
+	 * cleared when the call ends, after which the object is closed; its {@code close()}
+	 * releases no handle the host lent.
+	 * @param declaration the {@code @WitImport} interface
+	 * @param resource the resource's WIT name
+	 */
+	void lend(JavaClass declaration, String resource) {
+		if (this.bindings.containsKey(declaration)) {
+			throw new IllegalStateException("the binding of " + declaration.name + " is written already");
+		}
+		this.lent.computeIfAbsent(declaration, key -> new java.util.HashSet<>()).add(resource);
+	}
+
+	/**
+	 * The class of a resource's handle in an interface's binding, the binding declared
+	 * when first asked for: what an object standing for one of its handles is.
+	 * @param declaration the {@code @WitImport} interface
+	 * @param resource the resource's WIT name, one the interface stands for
+	 */
+	String handleClass(JavaClass declaration, String resource) {
+		Import imported = Objects.requireNonNull(of(declaration));
+		JavaClass binding = Objects.requireNonNull(binding(declaration));
+		return binding.name + ".R" + List.copyOf(imported.resources().keySet()).indexOf(resource);
+	}
+
 	/** Starts a pass: no member reached yet. */
 	void startPass() {
 		this.reached.clear();
@@ -865,17 +900,23 @@ final class JavaWitImports {
 				method(bound, false);
 			}
 			StringBuilder resources = new StringBuilder();
+			Set<String> lending = JavaWitImports.this.lent.getOrDefault(this.imported.declaration(), Set.of());
 			for (Resource resource : this.imported.resources().values()) {
 				String handle = Objects.requireNonNull(this.handles.get(resource.name()));
 				String own = handle.substring(handle.lastIndexOf('.') + 1);
+				// a handle an export was lent: the flag of the call, false once it ended
+				boolean lends = lending.contains(resource.name());
 				resources.append("    public static final class ")
 					.append(own)
 					.append(" implements ")
 					.append(resource.declaration().name)
 					.append(" {\n        int handle;\n        ")
+					.append(lends ? "boolean[] lent;\n        " : "")
 					.append(own)
 					.append("(int handle) {\n            this.handle = handle;\n        }\n")
-					.append("        int live() {\n            if (this.handle < 0) {\n")
+					.append("        int live() {\n            if (this.handle < 0")
+					.append(lends ? " || this.lent != null && !this.lent[0]" : "")
+					.append(") {\n")
 					.append("                throw new IllegalStateException(\"")
 					.append(resource.name())
 					.append(" of ")
@@ -890,16 +931,20 @@ final class JavaWitImports {
 				this.methodsInto = this.methods;
 				JavaBoundary.Function drop = resource.drop();
 				if (drop != null) {
-					// idempotent: the handle goes back once
+					// idempotent: the handle goes back once -- a lent one to no one, the
+					// export releasing it when the call ends
 					members.append("        public void close() {\n            if (this.handle >= 0) {\n")
 						.append("                int held = this.handle;\n                this.handle = -1;\n")
+						.append(lends ? "                if (this.lent == null) {\n    " : "")
 						.append("                ")
 						.append(this.binding)
 						.append('.')
 						.append(nativeFor(drop, 1, false))
 						.append('(')
 						.append(VALUES)
-						.append(".outHandle(held));\n            }\n        }\n");
+						.append(".outHandle(held));\n")
+						.append(lends ? "                }\n" : "")
+						.append("            }\n        }\n");
 				}
 				resources.append(members).append("    }\n");
 			}
@@ -920,8 +965,7 @@ final class JavaWitImports {
 			}
 			// a resource of another interface: the class that interface's binding makes
 			Import home = Objects.requireNonNull(this.imported.used().get(resource));
-			JavaClass binding = Objects.requireNonNull(binding(home.declaration()));
-			return binding.name + ".R" + List.copyOf(home.resources().keySet()).indexOf(resource);
+			return JavaWitImports.this.handleClass(home.declaration(), resource);
 		}
 
 		/** Where a method is written: the binding's own, or a resource's class. */

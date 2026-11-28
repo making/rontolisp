@@ -192,8 +192,29 @@ final class WitScaffolder {
 		}
 	}
 
+	// An interface's functions, and a resource's: its constructor, methods and static
+	// functions, named as an import of the interface binds them (counter-new,
+	// counter-add, a method taking the resource first). A <resource>-drop is optional,
+	// so none is stubbed.
 	private static void appendInterfaceStubs(StringBuilder out, List<WitItem> members) {
 		for (WitItem member : members) {
+			if (member instanceof WitItem.ResourceDef resource) {
+				for (WitItem inner : resource.body() == null ? List.<WitItem>of() : resource.body()) {
+					if (inner instanceof WitItem.FuncDef func) {
+						out.append('\n');
+						String name = switch (func.kind()) {
+							case CONSTRUCTOR -> resource.name() + "-new";
+							case PLAIN, STATIC -> resource.name() + "-" + func.name();
+						};
+						String written = switch (func.kind()) {
+							case CONSTRUCTOR -> "constructor" + signature(func.func()).substring("func".length());
+							case STATIC -> func.name() + ": static " + signature(func.func());
+							case PLAIN -> func.name() + ": " + signature(func.func());
+						};
+						appendStub(out, name, func.meta(), written, func.kind() == WitItem.FuncKind.PLAIN, func.func());
+					}
+				}
+			}
 			if (member instanceof WitItem.FuncDef func && func.kind() == WitItem.FuncKind.PLAIN) {
 				out.append('\n');
 				appendStub(out, func.name(), func.meta(), func.func());
@@ -202,12 +223,21 @@ final class WitScaffolder {
 	}
 
 	private static void appendStub(StringBuilder out, String name, WitMeta meta, WitFunc func) {
+		appendStub(out, name, meta, name + ": " + signature(func), false, func);
+	}
+
+	// `self`: a method's, which takes the resource first.
+	private static void appendStub(StringBuilder out, String name, WitMeta meta, String written, boolean self,
+			WitFunc func) {
 		for (String doc : meta.docs()) {
 			out.append(";;;").append(doc).append('\n');
 		}
-		out.append(";;; WIT: ").append(name).append(": ").append(signature(func)).append('\n');
+		out.append(";;; WIT: ").append(written).append('\n');
 		out.append("(defun ").append(name).append(" (");
 		List<String> names = new ArrayList<>();
+		if (self) {
+			names.add("self");
+		}
 		for (WitFunc.Param param : func.params()) {
 			names.add(param.name());
 		}

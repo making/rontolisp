@@ -433,7 +433,23 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
   2026-11-27 with a `:blocking t` Lisp importer, both component shapes: async methods and a
   static async function taking an owned handle and a borrowed one of another interface.
 - **Refused**: a used type holding a handle; a core module (`--no-gc` without `--component`
-  too); `describe`, so the Java and Clojure front ends (`.todo/m97`).
+  too); a plain function named `<r>-drop` beside the resource (`implementedOnce`: one defun
+  would be both, and the import side refuses binding the name twice).
+- **The front ends** (`describe`): each resource function is an `Export` with its
+  `resource`, `kind`, own `function` name and `member`, keyed by `namesKey(member)`
+  (`<iface>#counter-add`); each resource a `WorldDescription.Resource` whose destructor's
+  function the table may name (`<iface>#counter-drop`) or leave out. A handle's shape
+  carries `home` (`WitTypeMapper.Shape.home`), the id of the interface defining its
+  resource: what tells an exported resource's handle (the value) from an imported one's
+  (the integer), and two resources of one name apart. Trap: the scope `describe` walks is
+  the interface with its use clauses written out (`WitUses.inline`), in no package, so its
+  own resource gets the export's id from `shapeOf`'s homes; `canonicalId` answers null
+  there. Java: a class (`.kb/java-frontend.md`, "WIT exports"); Clojure: a var per member
+  name (`.kb/clojure-frontend.md`, "Host boundary"). Pins:
+  `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...` (the description, the homes, the
+  drop clash), `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes`
+  (`Counters.java`, `counters.clj`, the Java and Clojure reporters and the Java relay
+  composed).
 - **`--no-gc --component`** (`WitExportDirective.ScalarHandles`): no store -- the resource is
   the integer the constructor answers, the `rep`, crossing as `:u32` (outside it the wrapper
   traps). The directive lowers to what a hand-written program would be: the built-ins are
@@ -521,7 +537,8 @@ the contract and export nothing.
   `--component --no-wasi` (it imports nothing: `WasmLispCompiler`, at the export's WIT line);
   a resource of an interface on the component's own WASI surface
   (`rejectAdapterImportCollisions`, the variant's whole world, as for a binding); a core module
-  and `--no-gc` (at the WIT line); `describe` (`NOT_IMPORTED`, `.todo/m97`).
+  and `--no-gc` (at the WIT line). A front end takes it by the handle's `home`: Java as the
+  object of its `@WitImport` member interface, Clojure as the integer.
 - Hosts measured (2026-11-28, wasmtime 51.0.0, wasm-tools 1.263.0, wac 0.12.0):
   `examples/wit/resource`'s app <- reporter <- counters, through `wasm-tools compose -c` (its
   `instantiations` wire a dependency's import to another dependency; `-d` alone wires none)
@@ -587,7 +604,9 @@ instance and *validates* -- only the WIT diff catches it. `--no-gc`'s base is `F
 - `:param-names` default `p0`, `p1`, ... (so pre-existing artifacts stay byte-identical); ignored on
   the core-export path.
 - `rontolisp --scaffold-wit world.wit` (`cli/WitScaffolder`) emits `defun` stubs with the WIT's
-  parameter names; **the `wit-export` directive comes LAST** so the interpreter's check passes.
+  parameter names, a resource's functions by member name (a method `self` first; no
+  `<r>-drop`, which is optional); **the `wit-export` directive comes LAST** so the interpreter's
+  check passes.
   `-o X.java` / `--source-language java`: the Java subset's `@WitExport` class
   (`.kb/java-frontend.md`, "WIT exports"); another language is refused.
 - **`WitExportDirective.outline`** is `describe` that leaves out what it refuses (a function

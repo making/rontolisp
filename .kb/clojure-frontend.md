@@ -1589,6 +1589,13 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
   `flip: func(point) -> point` 104,711 / 35,734. Byte-identical before and after: the old
   greeter (P1, component), host-boundary, page-hits, macros, text, `examples/wit` shapes, app and
   counter, the Java counter.
+- **A resource of an exported interface**: a var per function named by its
+  member name (`counter-new`, `counter-add` taking the value first, `counter-merge`), and
+  `counter-drop` where the namespace defines one (`WitWorld.drops`, resolved with the
+  exports after the file). The representation is any value, crossing as itself (descriptor
+  nil), as an imported resource's integer does. `examples/wit/resource/counters.clj`
+  296,160 / 91,475 B gzip against the Lisp file's 58,921 / 21,971; the reporter 93,293 B.
+  Pin: `WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes`.
 - A world's export reads the program's top level, so a command component traps under
   `wasmtime --invoke` (no top level ran) while the same program's `run` answers (measured
   2026-11-27): `Integer/parseInt` through `%clojure-decimal-digit-starts`, a `(defvar)` list the
