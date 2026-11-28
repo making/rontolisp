@@ -1380,7 +1380,8 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
 - **What the host answers in pieces** (2026-11-26, m55). Decided from what the Lisp side binds
   (`.kb/wit.md`): an `async func` is a method that WAITS, as any call -- Java has threads, not
   futures, so the directive carries `:blocking t` (a synchronous lowering) and the binding is a
-  sync member's. A `stream<T>` of values the host answers is `am.ik.rontolisp.wit.WitStream<T>`
+  sync member's -- unless its method answers the `WitFuture` of its result ("A call started"
+  below). A `stream<T>` of values the host answers is `am.ik.rontolisp.wit.WitStream<T>`
   (`read(max)`, `close()`), a `future<T>` `WitFuture<T>` (`get()`, `close()`; a
   `future<result<T, E>>` the ok arm, the error arm a `WitException`; `Void` for no ok value),
   both in `rontolisp-java-api` with providers' factories (`WitStream.of(Iterator)`,
@@ -1410,8 +1411,8 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   not write its second request); a pipe class in `rontolisp-java-api` (the binding would need
   a public hook into it). An `option<stream<u8>>` parameter is an
   `Optional<Consumer<OutputStream>>`, no pair made for none. Refused at the method: a stream
-  of values or handles handed over; a `stream<u8>` handed to an async func (the call waits
-  while the host reads what can be written only after it, as wasi:cli's `write-via-stream`)
+  of values or handles handed over; a `stream<u8>` handed to an async func that waits (the
+  call waits while the host reads what can be written only after it; a started one takes it)
   or held in another type than that option. Measured 2026-11-26: programs using neither byte-identical (`PageHits.java`,
   m55's rows program, `examples/net/echo-client.lisp`, `page-hits.lisp`); a Lisp program
   with `:blocking t` reading bytes in asyncMode 61,796 -> 61,418 B (no scheduler entry).
@@ -1452,12 +1453,35 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   (`.todo/n01`).
 - **An HTTP client over `wasi:http@0.3.0`** (measured 2026-11-27, wasmtime 51, against
   `wasmtime serve`): a GET of a Java program 304,488 B / 91,644 gzip; in a thread (asyncMode)
-  too. A request BODY is not sent: a write to the handed `OutputStream` waits for a read
-  wasmtime makes within `client.send` (the program hangs at the write; `.todo/n00`). A body
-  that ends at once is, and its trailers are then read. wasmtime answers `other("PATCH")` as
-  `patch`. Byte-identical before and after, 8 outputs: `PageHits` (component, class), the
-  Lisp `page-hits`, `echo-client.lisp`, `http-hello.lisp`, and m68's sockets, rows and stdin
-  programs.
+  too. wasmtime reads a request's BODY within `client.send`, so a body written before the
+  call waits for ever; one is sent by a started `send` ("A call started"). wasmtime answers
+  `other("PATCH")` as `patch`.
+- **A call started**: an `async func` whose method answers the `WitFuture` of its result
+  (`JavaWitImports.startedForm`; for a result that is a future itself the call's future is
+  a `WitFuture` of a `WitFuture`) answers at once. The binding names the directive's two
+  halves (`.kb/wit.md`, "`<member>-start`"), both whenever one is reached, and writes a
+  `C<n>` per member: `get()` waits once and keeps the answer, the error arm thrown as the
+  waiting form throws it; `close()` unread forgets the call, the host going on with it
+  (measured: a component ending with a call never waited for exits 0). A stream handed to
+  it is written after the start, as after a sync call's return. Refused where the WIT has
+  a member `<m>-start` / `<m>-wait`. Decided from measurements (2026-11-28, wasmtime 51,
+  an echo backend under `wasmtime serve`, the Lisp tier's async `send` + write): one write
+  pending before a sync-lowered `send` is not enough -- a response came with the writable
+  end still open only where `content-length` said the body was whole, without it nothing
+  came (20 s), and a busy end cannot be dropped, so the end could come only after `send`
+  returned. Rejected with it a buffering `OutputStream`: every later wait of every binding
+  would have to feed it, and a sync-lowered call feeds nothing. Kept: a write waits for the
+  host's read (one write of 1 MiB was taken whole), so `flush()` does nothing, `close()`
+  ends the body. The scaffold writes an imported async func handed a stream started.
+  Sizes: the test's HTTP client 300,526 -> 303,218 B (GET, waiting -> started; gzip
+  91,204 -> 91,880), 307,528 B with the POST; Lisp under `:blocking t`, a POST 45,110 B
+  against 79,358 B awaited. Byte-identical, 13 outputs: `PageHits` (component, class), the
+  Lisp and Clojure `page-hits`, `echo-client.lisp`, `http-hello.lisp`, `Echo.java`, the
+  test's sockets, rows, stdin and HTTP programs, a Lisp `send` awaited and one under
+  `:blocking t`. Pins: `JavaWitImportTest.everyKindOfValueCrossesWasmtimesOwnInterfaces`
+  (a POST the backend echoes, a future closed unread), `.aStreamAndAFutureTheHostAnswersAreReadInPieces`
+  (`upload` started on the provider legs, the directive's two halves, the refusal),
+  `WitScaffolderTest.aJavaSkeletonLeavesOutWhatTheCheckRefusesWordedAsItWordsIt`.
 - **The lookup is the binding** (`JavaLowering.hostLookup`; 2026-11-28): on a host-import target
   `ServiceLoader.load(I.class).findFirst()` then `.orElseThrow()` or `.get()` (no argument, no
   type argument) lowers to `new I$Wit()`. Exact: the binding is the loader's one provider, has no

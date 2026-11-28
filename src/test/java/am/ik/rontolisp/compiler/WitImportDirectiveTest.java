@@ -502,7 +502,27 @@ class WitImportDirectiveTest {
 			.isEqualTo("(DEFUN PULL (|url|) (RONTOLISP::%WIT-CALL \"example:app/api@0.1.0\" \"pull\" |url|))");
 		assertThat(printed(lower(iface(body), Backend.WASM_COMPONENT, blocking))).contains("(\"pull\" \"PULL\")")
 			.doesNotContain(":ASYNC-CALL")
-			.doesNotContain("ASYNC-DEFUN");
+			.doesNotContain("ASYNC-DEFUN")
+			.doesNotContain(":ASYNC-START");
+		// <member>-start / <member>-wait, the call in two halves, bind when the program
+		// names one, on a component alone: the start async-lowers the call, the wait
+		// waits where it is for the answer, a result's error arm signalled (the raw wait
+		// answers the envelope a front end reads itself)
+		String result = "  pull: async func(url: string) -> result<string, string>;";
+		Set<String> halves = Set.of("pull-start");
+		assertThat(
+				printed(WitImportDirective.lower(blocking, iface(result), WIT, Backend.WASM_COMPONENT, halves, halves)))
+			.contains("(:ASYNC-START \"pull\" \"PULL-START\" \"%PULL-WAIT\")")
+			.contains("(DEFUN PULL-WAIT (|token|) (RONTOLISP::%WIT-RESULT (%PULL-WAIT |token|)))")
+			.doesNotContain("(\"pull\" \"PULL\")");
+		assertThatThrownBy(
+				() -> WitImportDirective.lower(blocking, iface(result), WIT, Backend.WASM_GC, halves, halves))
+			.hasMessageContaining("only the --component backend");
+		Set<String> both = Set.of("pull", "pull-wait");
+		assertThatThrownBy(
+				() -> WitImportDirective.lower(blocking, iface(result), WIT, Backend.WASM_COMPONENT, both, both))
+			.hasMessage("kv.wit:4: 'pull' is bound both as a call that waits (:blocking t) and as one 'pull-start' "
+					+ "begins, which a component lowers twice");
 	}
 
 	@Test

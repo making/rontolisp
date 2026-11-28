@@ -182,7 +182,7 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 | プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る）。`option` の中なら `Optional<Consumer<OutputStream>>` | |
 | 値の `stream<T>`、リソースの `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
 | `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`）で、`get()` がエラー側を投げる | `rontolisp-java-api` |
-| `async func` | 値を返すメソッド。インポートではホストの応答を待ち、エクスポートではブロックしてよい | |
+| `async func` | 値を返すメソッド。インポートではホストの応答を待ち、エクスポートではブロックしてよい。結果の `WitFuture<T>` を返すインポートのメソッドは[呼び出しを始めるだけ](#a-call-started)ですぐに返り、`get()` が応答を待つ | |
 | `error-context` | なし。これを使う WIT は拒否される | |
 
 どの型をどこに置けるかは[型を置ける位置](#where-each-type-crosses)、どの出力で使えるかは
@@ -191,7 +191,8 @@ world なら、world 自身の型は `@WitExport` のクラス、エクスポー
 
 実例は、冒頭のキーバリューの `Store`（リソース、`option`、レコード、投げる `result`）、
 `QueryAsync` の行とソケットの `send`（[ホストが少しずつ返すもの](#what-the-host-answers-in-pieces)）、
-HTTP のリクエスト（[プログラムがホストに渡す future](#a-future-the-program-hands-the-host)）、
+HTTP のリクエスト（[プログラムがホストに渡す future](#a-future-the-program-hands-the-host)）とそのボディ
+（[待たずに始める呼び出し](#a-call-started)）、
 `Shapes` の world とその `pause`（[エクスポートの型](#the-types-of-an-export)）、
 `Counters` の world のリソースと、それを受け取る `Reporter`
 （[エクスポートのリソース](#resources-of-an-export)）です。
@@ -352,10 +353,45 @@ try (InputStream in = body.contents()) {
 ```
 
 これで、プログラムは `wasmtime run -S http=y` の下で `wasi:http@0.3.0` の HTTP クライアントに
-なります。ボディのないリクエストを送り、レスポンスを読めます。制限はリクエストのボディです。
-`OutputStream` への書き込みはホストが読むまで待ちますが、wasmtime がリクエストのボディを読むのは、
-プログラムが待っている `client.send` の中です。すぐに終わるボディ（consumer が stream を閉じる）は
-送られ、その後で trailers が future から読まれます。
+なり、リクエストを送ってレスポンスを読めます。wasmtime はリクエストのボディを `client.send` の中で
+読むので、ボディのあるリクエストでは呼び出しを待たずに始めます
+（[待たずに始める呼び出し](#a-call-started)）。
+
+### 待たずに始める呼び出し
+
+結果の `WitFuture` を返すと宣言した `async func` のメソッドは、呼び出しを始めてすぐに返ります。
+呼び出しは、プログラムがほかの処理をしている間も続きます。future の `get()` は応答を待って保持し、
+`result` のエラー側は、待つ呼び出しと同じく `WitException` として投げます。型引数は結果の Java の
+型で、`result` ならその ok 側です（何も持たなければ `Void`）。このような呼び出しに渡す stream は、
+呼び出しが続いている間に書きます。consumer が書き込み側の端を受け取るのは、呼び出しが始まった後です。
+
+```console
+// client.send: async func(request: request) -> result<response, error-code>;
+WitFuture<Types.Response> send(Types.Request request);
+```
+
+```console
+OutputStream[] body = new OutputStream[1];
+Types.Sent sent = types.requestNew(types.fieldsNew(), Optional.of(out -> body[0] = out),
+        WitFuture.of(Optional.empty()), Optional.empty());
+sent.request().setMethod(new Types.Method.Post());
+sent.request().setAuthority(Optional.of("example.com"));
+WitFuture<Types.Response> answer = client.send(sent.request());   // 始めるだけで返る
+try (OutputStream out = body[0]) {
+    out.write(json);                                                // 呼び出しの中で読まれる
+}
+Types.Response response = answer.get();                             // レスポンスを待つ
+```
+
+stream の `close()` でボディが終わり（`content-length` があってもなくても）、その後で wasmtime が
+trailers を読みます。書き込みは、書いた分をホストが読むまで待つので、`OutputStream` は何も
+溜めず、`flush()` は何もしません。まだ読んでいない呼び出しの future を `close()` すると、呼び出しは
+ホストに任されます。それを待つものはなく、応答は読まれず、その後の `get()` は
+`IllegalStateException` を投げます。JDK、インタプリタ、JVM では、プロバイダが自分の `WitFuture`
+を返します。コンポーネントでは、バインディングは `<function>-start` と `<function>-wait` で
+呼び出しを始めて待ちます。この 2 つは
+[`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md#a-call-in-two-halves)
+がコンポーネントにだけ束縛します。
 
 ## WIT world をエクスポートする
 
@@ -716,7 +752,8 @@ public class Shapes {
 例外を投げ、`close()` が何もしないクラスになります。world がインポートする各インタフェースは、
 リソースと型を含めてクラスの `@WitImport` メンバインタフェースになります。そのいずれか、または
 エクスポートが `use` でリソースを取り込むインタフェースも同様です。メソッドからは
-`ServiceLoader.load(Shapes.Store.class)` で取得します。
+`ServiceLoader.load(Shapes.Store.class)` で取得します。stream を渡すインポートの `async func` は
+[待たずに始める呼び出し](#a-call-started)として書かれ、ほかは待つ呼び出しになります。
 クラス名はファイル名、標準出力に書くときは world 名です。生成されたファイルはそのまま
 コンパイルできるので、エクスポートを 1 つずつ埋めていけます。
 
@@ -752,7 +789,7 @@ WIT のメンバーの行を示します。
 | `WitException` として投げるエラー側の tuple | | 拒否（型を書く場所がない。`WitResult` を返す） | | 拒否（同じ） | |
 | インタフェースのリソース | 可。渡した `own` はオブジェクトが閉じられる | 可 | 可（オブジェクト。`borrow` は呼び出しの間だけ貸され、`own` は引き渡される） | 可（オブジェクト）。ただし `borrow` は不可 | 可（レコードのフィールド、リストの要素） |
 | `use` で取り込んだリソース | 可。もう一方のインタフェースを表す側に宣言する | 可（同じ） | 可。エクスポートするインタフェースのものはオブジェクト、コンポーネントがインポートするものはそのバインディングのオブジェクトで、貸されたものは呼び出しの終わりに閉じられる | 可（同じ）。ただし `borrow` は不可 | 可 |
-| `stream<u8>` | 可（`Consumer<OutputStream>`）。ただし `async func` には渡せない（呼び出しが待つ間に、ホストはプログラムが後で書くものを読むため） | 可（`InputStream`） | 拒否（エクスポートは stream を受け渡さない） | 拒否 | インポートの戻り値では可。引数では、それ自身の `option` の中だけ |
+| `stream<u8>` | 可（`Consumer<OutputStream>`）。`async func` に渡せるのは[待たずに始める呼び出し](#a-call-started)だけ（待つ呼び出しでは、呼び出しが待つ間に、ホストはプログラムが後で書くものを読むため） | 可（`InputStream`） | 拒否（エクスポートは stream を受け渡さない） | 拒否 | インポートの戻り値では可。引数では、それ自身の `option` の中だけ |
 | 値の `stream<T>`、リソースの `stream<T>` | 拒否（ゲストは書けない） | 可（`WitStream<T>`） | 拒否 | 拒否 | インポートの戻り値では可 |
 | `future<T>` | 可（プログラムが作った `WitFuture<T>`） | 可。ただし `bool`、`list`、`flags`、`option` の future は不可（その値を、書き手が捨てた future と見分けられない） | 拒否（エクスポートは future を受け渡さない） | 拒否 | インポートの戻り値では可。引数では拒否 |
 | `error-context` | 拒否（WIT が定義しない型を使うとして、WIT ごと拒否される） | | | | |
@@ -779,6 +816,7 @@ WIT のメンバーの行を示します。
 
 JDK 以外のすべてのターゲットで、宣言は WIT と照合されます。ターゲットが受け渡せない型を持つ
 メンバーは、プログラムが呼ぶ場合に限り、`wit-import` と同じく WIT の行を示して拒否されます。
+[待たずに始める呼び出し](#a-call-started)は `--component` だけのものです。
 
 ## 境界での扱い
 
@@ -800,8 +838,9 @@ JDK 以外のすべてのターゲットで、宣言は WIT と照合されま�
 ## 制限
 
 - プログラムが書く stream をホストがいつ読むかは、ホストが決めます。ホストが後の呼び出しの中で
-  しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため wasmtime の下では、
-  `wasi:http` のリクエストはボディを持てません（wasmtime はボディを `client.send` の中で読みます）。
+  しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため `client.send` の前に書いた
+  `wasi:http` のリクエストのボディは送られません。呼び出しを[始めた](#a-call-started)後に書いた
+  ボディは送られます。
 - エクスポートが捕まえなかった例外と、最初の呼び出しが実行する static 初期化が捕まえなかった
   例外は、JDK が書く行（`Exception in thread "main" java.lang.IllegalStateException: ...`）を
   標準エラー出力に書いてからトラップになります。標準エラー出力を持たない `--no-wasi` の

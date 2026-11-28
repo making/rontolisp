@@ -17,7 +17,9 @@ its bracket (`emitBlockedWait`: a future read, a stream write, a read outside as
 
 1. The host completes another subtask during the wait and lowers its result through
    `cabi_realloc` (the canonical ABI lowers at the callee's return, not when the guest
-   takes the event); the scheduler lifts it after the wrapper has popped it.
+   takes the event); the scheduler lifts it after the wrapper has popped it. So does a
+   `<member>-wait` (`.kb/wit.md`): a started `client.send` answering an error with a string
+   while a body write waits.
 2. The host runs another task of the instance during the wait (wasmtime serve runs up to
    16 requests of a p3 instance at once), whose permanent allocations -- an async start's
    staging, a free-listed read buffer -- land above the mark.

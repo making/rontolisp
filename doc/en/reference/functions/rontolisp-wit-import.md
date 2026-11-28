@@ -158,6 +158,7 @@ host that has never heard of the program. The output is identical all three ways
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
 | `resource bucket` — its **release** (WIT declares no function for it) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
 | the release on any exit (a macro) | `kv:with-bucket` | `(kv:with-bucket (b (kv:open "")) ...)` |
+| an `async func` `send` started and waited for in two halves (`--component`) | `client:send-start`, `client:send-wait` | `(client:send-wait (client:send-start req))` |
 
 A resource member is prefixed with the resource, so two resources may declare
 the same method without colliding in the flat Lisp-2 function namespace, and a
@@ -415,6 +416,35 @@ memory of those still unread.
   (pg:rows-drop-readable rows)
   (pg:done-drop-readable done))
 ```
+
+### A call in two halves
+
+Under `--component` an `async func` binds two more functions when the program names one
+of them: `<function>-start` begins the call and answers at once with a token, and
+`<function>-wait` waits where it is for the call the token stands for and answers what
+`<function>` answers, a `result`'s error arm signalled. Like an alias's built-ins they are
+the async canonical ABI's, and they make no future: a program that does not await
+(`:blocking t`) uses them to write, while the call runs, a stream the call reads.
+`wasi:http`'s `client.send` reads a request's body:
+
+```console
+(let* ((contents (http:body-stream-new))
+       (trailers (http:trailers-future-new))
+       (made (http:request-new (http:fields-new) (car contents) (car trailers) nil)))
+  (http:trailers-future-resolve (cdr trailers) '(:ok))
+  (http:request-set-method (car made) :post)
+  (let ((call (client:send-start (car made))))
+    (http:body-stream-write (cdr contents) "a body")    ; read within the call
+    (http:body-stream-drop-writable (cdr contents))      ; the body ends
+    (client:send-wait call)))                            ; the response
+```
+
+A token is waited for once, and what its start staged in linear memory goes with the
+wait when nothing kept was staged above it meanwhile; a program may end with a call it
+never waited for. Only a component binds them: compiling a program that names one for
+another target is refused, and the interpreter leaves both unbound. A WIT function of
+either name keeps it, and a `:blocking t` directive binding the function itself refuses
+the two, which would lower it a second time.
 
 ### Rich values as arguments
 

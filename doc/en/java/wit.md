@@ -182,7 +182,7 @@ exported interface's. Each is checked against its definition, once.
 | `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end; in an `option`, `Optional<Consumer<OutputStream>>` | |
 | `stream<T>` of values or of resources | `am.ik.rontolisp.wit.WitStream<T>` | `rontolisp-java-api` |
 | `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`; a `future<result<T, E>>` is a `WitFuture<T>` (`Void` for no ok value) whose `get()` throws the error arm | `rontolisp-java-api` |
-| an `async func` | a method answering its value: an import's waits for the host's answer, an export's may block | |
+| an `async func` | a method answering its value: an import's waits for the host's answer, an export's may block. An import's method answering `WitFuture<T>` of its result is [started](#a-call-started): it answers at once, and `get()` waits | |
 | `error-context` | none: a WIT naming it is refused | |
 
 Where each type may stand is [Where each type crosses](#where-each-type-crosses), which
@@ -193,7 +193,8 @@ integer, a `u64` past `Long.MAX_VALUE`, `null` or a closed resource does
 The worked examples: the key-value `Store` at the top (a resource, an `option`, a record, a
 `result` thrown), the `QueryAsync` rows and the socket's `send`
 ([What the host answers in pieces](#what-the-host-answers-in-pieces)), the HTTP request
-([A future the program hands the host](#a-future-the-program-hands-the-host)), the
+([A future the program hands the host](#a-future-the-program-hands-the-host)) and its
+body ([A call started](#a-call-started)), the
 `Shapes` world and its `pause` ([The types of an export](#the-types-of-an-export)), and the
 `Counters` world's resource and the `Reporter` that takes it
 ([Resources of an export](#resources-of-an-export)).
@@ -358,11 +359,46 @@ try (InputStream in = body.contents()) {
 ```
 
 So a program is an HTTP client over `wasi:http@0.3.0` under `wasmtime run -S http=y`: it
-sends a request with no body and reads the response. A request's body is the limit: a
-write to the `OutputStream` waits until the host has read it, and wasmtime reads a
-request's body within `client.send`, which the program is waiting on. A body that ends
-at once (the consumer closes the stream) is sent, and its trailers are then read from
-the future.
+sends a request and reads the response. wasmtime reads a request's body within
+`client.send`, so a request with a body starts the call
+([A call started](#a-call-started)).
+
+### A call started
+
+An `async func` whose method answers the `WitFuture` of its result is started: the method
+answers at once, and the call goes on while the program does what else it does. The
+future's `get()` waits for the answer and keeps it, and throws a `result`'s error arm as a
+`WitException`, as the call that waits does. Its type argument is the result's Java type,
+a `result`'s ok arm (`Void` for none). A stream the program hands such a call is written
+while it runs: the consumer is handed the writable end once the call has started.
+
+```console
+// client.send: async func(request: request) -> result<response, error-code>;
+WitFuture<Types.Response> send(Types.Request request);
+```
+
+```console
+OutputStream[] body = new OutputStream[1];
+Types.Sent sent = types.requestNew(types.fieldsNew(), Optional.of(out -> body[0] = out),
+        WitFuture.of(Optional.empty()), Optional.empty());
+sent.request().setMethod(new Types.Method.Post());
+sent.request().setAuthority(Optional.of("example.com"));
+WitFuture<Types.Response> answer = client.send(sent.request());   // started
+try (OutputStream out = body[0]) {
+    out.write(json);                                                // read within the call
+}
+Types.Response response = answer.get();                             // waits for the response
+```
+
+The stream's `close()` ends the body, with or without a `content-length`, and wasmtime then
+reads the trailers. A write waits until the host has read what it wrote, so the
+`OutputStream` keeps nothing and its `flush()` does nothing. `close()` of a call's future
+not yet read leaves the call to the host: nothing waits for it, its answer is not read, and
+`get()` throws `IllegalStateException`. Under a JDK and on the interpreter and the JVM the
+provider answers a `WitFuture` of its own. In a component the binding starts the call and
+waits for it through `<function>-start` and `<function>-wait`, which
+[`rontolisp:wit-import`](../reference/functions/rontolisp-wit-import.md#a-call-in-two-halves)
+binds on a component alone.
 
 ## Exporting a WIT world
 
@@ -719,7 +755,8 @@ is `Ipv4Address`), its components `v0`, `v1` and so on. A resource the world exp
 class whose constructor and methods throw, with a `close()` that does nothing. Each
 interface the world imports is a `@WitImport` member interface of the class, with its
 resources and types, and so is each interface whose resource one of them, or an export,
-takes with `use`; a method finds it with `ServiceLoader.load(Shapes.Store.class)`. The
+takes with `use`; a method finds it with `ServiceLoader.load(Shapes.Store.class)`. An
+imported `async func` handed a stream is [started](#a-call-started); every other one waits. The
 class is named after the file, or after the world when printed. The file compiles
 unchanged, so the exports can be filled in one at a time.
 
@@ -754,7 +791,7 @@ compiles, on every target, at the Java declaration, naming the WIT member's line
 | a tuple in an error arm thrown as a `WitException` | | refused: no type is written for it (answer the `WitResult`) | | refused, likewise | |
 | a resource of the interface | yes; an `own` handed over closes the object | yes | yes, the object: a `borrow` lent for the call, an `own` handed over | yes, the object, but no `borrow` | yes (a record's field, a list's element) |
 | a resource taken with `use` | yes, declared in the interface standing for the other one | yes, likewise | yes: of an exported interface the object; of one the component imports an object of its binding, closed when the call ends where it is lent | yes, likewise, but no `borrow` | yes |
-| `stream<u8>` | yes, `Consumer<OutputStream>`, but not to an `async func`: the call waits while the host reads what the program writes after it | yes, `InputStream` | refused: an export carries no stream | refused | in an import result; in a parameter only as an `option` of its own |
+| `stream<u8>` | yes, `Consumer<OutputStream>`; to an `async func` only one [started](#a-call-started): a call that waits waits while the host reads what the program writes after it | yes, `InputStream` | refused: an export carries no stream | refused | in an import result; in a parameter only as an `option` of its own |
 | `stream<T>` of values or of resources | refused: the guest cannot write one | yes, `WitStream<T>` | refused | refused | in an import result |
 | `future<T>` | yes, a `WitFuture<T>` the program made | yes, but not of a `bool`, a `list`, `flags` or an `option`: its value is a future its writer dropped too | refused: an export carries no future | refused | in an import result; in a parameter refused |
 | `error-context` | refused: the WIT is refused as naming a type it does not define | | | | |
@@ -781,7 +818,7 @@ boundary: [`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.m
 
 On every target but a JDK the declarations are checked against the WIT. A member a target
 does not carry is refused at its WIT line where the program calls it, as `wit-import`
-refuses it.
+refuses it. A [call started](#a-call-started) is a `--component`'s alone.
 
 ## At the boundary
 
@@ -804,7 +841,8 @@ refuses it.
 
 - A stream the program writes is read by the host when the host chooses: a write that
   waits for a read the host makes only within a later call never returns. So a
-  `wasi:http` request carries no body under wasmtime, which reads it within `client.send`.
+  `wasi:http` request body written before `client.send` is never sent; one written once
+  the call has [started](#a-call-started) is.
 - An exception an export leaves uncaught, or one the static initialization run by the
   first call leaves, is reported on standard error by the line a JDK writes
   (`Exception in thread "main" java.lang.IllegalStateException: ...`), then the call traps.

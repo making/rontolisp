@@ -137,6 +137,26 @@ boundary").
   `WitImportDirectiveTest.anAsyncAliasBindsItsBuiltInsOnlyWhenTheProgramNamesThem`,
   `WasmLispCompilerIntegrationTest#componentImportLetsLispDriveWasiHttpAcrossSeparatelyImportedInterfaces`,
   `JavaWitImportTest.everyKindOfValueCrossesWasmtimesOwnInterfaces`.
+- **`<member>-start` / `<member>-wait`, an async func's call in two halves** (an
+  `(:async-start member start wait)` member): what a program that does not await needs to
+  write, while the call runs, a stream the call reads. Bound together when the program names
+  one, under `--component` alone: refused named elsewhere, skipped by a bind-everything pass
+  beside a `:blocking t` binding of the member, refused beside one named, and so is a
+  function two directives of one interface lower both ways (`mergeByIface`): one field, one
+  instance-type function and one core export. A WIT member of either name keeps it.
+  The start is `:async-call`'s start, its token `(packed . (retptr . (mark . end)))`. The
+  wait waits where it is on a waitable-set of its own for the subtask's RETURNED (asyncMode
+  too, no scheduler entry), drops the subtask, lifts, and pops down to the start's mark when
+  its own mark is where the start's staging ended, nothing kept above it since: 31 calls one
+  after another kept one span, `(429672 . 429712)` (2026-11-28, wasmtime 51), where a
+  scheduled call keeps its staging for good. A result's wait signals the error arm,
+  `-wait%raw` answers the envelope. A subtask whose result is lowered during another
+  wrapper's wait is `.todo/178`'s case 1. Pins:
+  `WitImportDirectiveTest.lowersAnAsyncFuncMemberWithAsyncTOnPreview1`,
+  `WasmComponentImportCompilerTest.twoBindingsOfOneMemberDeclareItOnce`,
+  `WasmLispCompilerIntegrationTest#componentImportDropsResourcesSoALispRequestCanCarryABody`
+  (a body with no `content-length`, ended by the drop), the Java subset's started call
+  ([java-frontend.md](java-frontend.md), "A call started").
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the

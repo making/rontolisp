@@ -14,6 +14,11 @@ package am.ik.rontolisp.wit;
  * its own implementing this interface.
  *
  * <p>
+ * One a {@link WitImport} interface's method answers for an {@code async func}, declared
+ * to answer the future of its result, is the call itself, started: {@link #get()} waits
+ * for its answer, and a stream handed to the call is written while it runs.
+ *
+ * <p>
  * One a function takes is the program's: {@link #of(Object)},
  * {@link #failed(WitException)}, or a class of its own. In a component the binding calls
  * {@link #get()} once, before the call, and leaves what it answered or threw where the
@@ -37,8 +42,9 @@ public interface WitFuture<T> extends AutoCloseable {
 
 	/**
 	 * Gives the readable end back: the writer sees the future dropped, if it is still
-	 * unread. Closing a closed future does nothing, and the value a future that was read
-	 * answered stays its answer.
+	 * unread; a started call not yet read is left to the host, which goes on with it, its
+	 * answer unread. Closing a closed future does nothing, and the value a future that
+	 * was read answered stays its answer.
 	 */
 	@Override
 	void close();

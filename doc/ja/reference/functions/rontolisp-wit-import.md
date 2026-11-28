@@ -160,6 +160,7 @@ rontolisp counter.lisp -o Counter.class && java Counter
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
 | `resource bucket` — その**解放** (WIT はそのための関数を宣言しません) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
 | どの経路で抜けても行う解放 (マクロ) | `kv:with-bucket` | `(kv:with-bucket (b (kv:open "")) ...)` |
+| 2 つに分けて始めて待つ `async func` の `send` (`--component`) | `client:send-start`、`client:send-wait` | `(client:send-wait (client:send-start req))` |
 
 リソースのメンバーにはリソース名が前置されるため、2 つのリソースが同じメソッド名を
 宣言してもフラットな Lisp-2 の関数名前空間で衝突しません。また**メソッドはハンドルを
@@ -424,6 +425,34 @@ resolve するプログラムが持ち続けるのは、まだ読まれていな
   (pg:rows-drop-readable rows)
   (pg:done-drop-readable done))
 ```
+
+### 2 つに分けた呼び出し
+
+`--component` では、プログラムがどちらかの名前を書くと、`async func` にさらに 2 つの関数が
+束縛されます。`<function>-start` は呼び出しを始めてすぐにトークンを返し、`<function>-wait` は
+トークンが表す呼び出しをその場で待って、`<function>` が返すものを返します (`result` の
+エラー側はシグナルします)。エイリアスの組み込みと同じく非同期 canonical ABI のもので、future を
+作りません。そのため await しないプログラム (`:blocking t`) でも、呼び出しが読む stream を、
+呼び出しが続いている間に書けます。`wasi:http` の `client.send` はリクエストのボディを読みます:
+
+```console
+(let* ((contents (http:body-stream-new))
+       (trailers (http:trailers-future-new))
+       (made (http:request-new (http:fields-new) (car contents) (car trailers) nil)))
+  (http:trailers-future-resolve (cdr trailers) '(:ok))
+  (http:request-set-method (car made) :post)
+  (let ((call (client:send-start (car made))))
+    (http:body-stream-write (cdr contents) "a body")    ; 呼び出しの中で読まれる
+    (http:body-stream-drop-writable (cdr contents))      ; ボディが終わる
+    (client:send-wait call)))                            ; レスポンス
+```
+
+1 つのトークンを待つのは 1 度だけです。開始が線形メモリに置いたものは、その間に保持される
+ものがその上に置かれていなければ、待機とともに解放されます。待たなかった呼び出しを残したまま
+プログラムが終わっても構いません。束縛するのはコンポーネントだけです。ほかのターゲット向けに
+名前を書いたプログラムをコンパイルすると拒否され、インタプリタではどちらも束縛されないままです。
+どちらかの名前の WIT 関数があれば、その名前は WIT 関数のものです。関数そのものを束縛する `:blocking t` のディレクティブは、この 2 つを拒否します (関数を
+2 度 lower することになるため)。
 
 ### 豊かな値を引数として渡す
 

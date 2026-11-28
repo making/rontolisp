@@ -402,6 +402,15 @@ class WasmComponentImportCompilerTest {
 		WitComponentTypeEncoder.OuterResources none = (owner, resource) -> 0;
 		assertThat(WitComponentTypeEncoder.encode(merged, none, new java.util.LinkedHashSet<>()))
 			.isEqualTo(WitComponentTypeEncoder.encode(text, none, new java.util.LinkedHashSet<>()));
+		// an async func one binding waits on and another starts would be lowered twice,
+		// two functions of one name in the instance type
+		String pull = "package local:x@0.1.0;\n\ninterface s {\n    pull: async func() -> u32;\n}\n";
+		WasmComponentImportCompiler.Import waiting = parseImport("local:x/s@0.1.0", pull, "(\"pull\" \"S::PULL\")");
+		WasmComponentImportCompiler.Import started = parseImport("local:x/s@0.1.0", pull,
+				"(:async-start \"pull\" \"T::PULL-START\" \"T::PULL-WAIT\")");
+		assertThatThrownBy(() -> WasmComponentImportCompiler.mergeByIface(List.of(waiting, started)))
+			.hasMessage("rontolisp:wit-import binds the async func 'pull' of local:x/s@0.1.0 both as a call that "
+					+ "waits (:blocking t) and as one that does not, which a component lowers once");
 	}
 
 	@Test

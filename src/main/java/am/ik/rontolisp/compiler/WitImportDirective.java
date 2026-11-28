@@ -772,6 +772,78 @@ public final class WitImportDirective {
 				componentMembers.add(asyncBinding(alias.name(), op, name, directive.blocking() && "read".equals(op)));
 			}
 		}
+		// An async func's call in two halves: <member>-start begins it and answers at
+		// once, <member>-wait waits where it is for what it answers. What a program
+		// needs that writes, while the call runs, a stream the call reads -- a request
+		// body client.send reads, which a call that waits leaves no moment to write.
+		// Like an alias's built-ins they are no WIT functions but the async canonical
+		// ABI's, so they bind when the program names them, under --component alone; a
+		// WIT member of the name keeps it.
+		for (WitResolver.Func func : funcs) {
+			String member = memberName(func);
+			String start = member + "-start";
+			String wait = member + "-wait";
+			if (!func.def().func().async() || allMembers.contains(start) || allMembers.contains(wait)) {
+				continue;
+			}
+			boolean startNamed = !unnamed(directive, start) && !filtered(dropFilter, directive, start);
+			boolean waitNamed = !unnamed(directive, wait) && !filtered(dropFilter, directive, wait);
+			if (!startNamed && !waitNamed) {
+				continue;
+			}
+			if (!component) {
+				if (dropFilter != null) {
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + start
+							+ "' and '" + wait + "' start the async func '" + member
+							+ "' and wait for it, which only the --component backend does (the async canonical "
+							+ "ABI)");
+				}
+				continue;
+			}
+			// a token is only the other half's, so one half binds with the other: a
+			// :names table names both
+			if (directive.names() != null && (unnamed(directive, start) || unnamed(directive, wait))) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def())
+						+ ": the :names table names one of '" + start + "' and '" + wait + "', which bind together");
+			}
+			if (boundMembers.contains(member) && directive.blocking()) {
+				if (dropFilter == null && directive.names() == null) {
+					// binding everything keeps the member's own binding
+					continue;
+				}
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+						+ "' is bound both as a call that waits (:blocking t) and as one '" + start
+						+ "' begins, which a component lowers twice");
+			}
+			if (!boundMembers.contains(member)) {
+				validateComponentFunc(func, witPath, locations, resolver, iface, member);
+			}
+			allMembers.add(start);
+			allMembers.add(wait);
+			boundMembers.add(start);
+			boundMembers.add(wait);
+			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false,
+					false);
+			// a list<T> argument is coerced in Lisp, as the member's own binding does
+			String startName = bindingName(directive, start);
+			if (params.stream().anyMatch(param -> param.descriptor() != null)) {
+				String raw = rawName(directive, start);
+				bindings.add(wrapperDefun(startName, raw, params, false));
+				startName = raw;
+			}
+			// a result's error arm signals, as the member's own binding does; a front
+			// end reading the envelope itself names the raw wait
+			String waitName = bindingName(directive, wait);
+			if (isResultReturning(func, resolver, iface)) {
+				String raw = rawName(directive, wait);
+				if (!rawOnly(dropFilter, directive, wait)) {
+					bindings.add(wrapperDefun(waitName, raw, List.of(new Param("token", ":INT")), true));
+				}
+				waitName = raw;
+			}
+			componentMembers.add(list(List.of(new LispSymbol(":ASYNC-START"), new LispString(member),
+					new LispString(startName), new LispString(waitName))));
+		}
 		// A component may import an interface purely for its TYPES: wasi:io/streams' own
 		// `stream-error` carries a wasi:io/error `error` resource, and a resource is its
 		// defining interface's type, so that interface has to be imported for the type to

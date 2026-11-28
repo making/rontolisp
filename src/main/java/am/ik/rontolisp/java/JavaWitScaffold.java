@@ -652,15 +652,21 @@ final class JavaWitScaffold {
 			String what = method + " (" + member.name() + " of " + described.id() + ", " + member.at() + ")";
 			List<JavaBoundary.Param> params = member.kind() == Kind.METHOD
 					? member.params().subList(1, member.params().size()) : member.params();
+			// an async func handed a stream is started, the stream written while the call
+			// runs: the method answers the future of its result
+			boolean started = member.async() && JavaWitImports.startedRefusal(described, member) == null
+					&& params.stream()
+						.anyMatch(param -> param.type().rep() != Rep.FUTURE_HANDLE
+								&& JavaWitImports.asyncIn(param.type()) != null);
 			String refused = null;
 			for (JavaBoundary.Param param : params) {
 				if (refused == null) {
-					refused = handed(param, member.async(), what + ": its parameter " + param.name());
+					refused = handed(param, member.async() && !started, what + ": its parameter " + param.name());
 				}
 			}
 			JavaBoundary.Type result = member.result();
 			if (refused == null && result != null) {
-				refused = refusal(result, false, what + ": its result");
+				refused = started ? startedRefusal(result, what) : refusal(result, false, what + ": its result");
 			}
 			if (refused == null) {
 				refused = usedHome(params, result, what);
@@ -678,13 +684,41 @@ final class JavaWitScaffold {
 				parameters.add((stream ? JavaWitImports.handedText(type, false)
 						: text(type, false, place + JavaWitImports.upperCamel(param.name()))) + " " + parameter);
 			}
-			String answer = result == null ? "void" : text(result, false, place + "Result");
+			String answer = started ? startedText(result, place)
+					: result == null ? "void" : text(result, false, place + "Result");
 			List<String> lines = new ArrayList<>();
 			javadoc(lines, 0,
 					docs(member.resource() == null ? member.function() : member.resource() + "." + member.function()),
 					signature(member, params));
 			lines.add(answer + " " + method + "(" + String.join(", ", parameters) + ");");
 			return lines;
+		}
+
+		/**
+		 * The refusal of a started call's result, as the check makes it: its future's
+		 * value, then a result's error arm.
+		 */
+		private @Nullable String startedRefusal(JavaBoundary.Type result, String what) {
+			JavaBoundary.Type value = result.rep() == Rep.RESULT ? result.element() : result;
+			String valued = value == null ? null : refusal(value, false, what + ": its call's future's value");
+			return valued != null || result.rep() != Rep.RESULT || result.error() == null ? valued
+					: refusal(result.error(), true, what + ": its result's error arm");
+		}
+
+		/**
+		 * What a started call answers: the {@code WitFuture} of its result's value, a
+		 * result's error arm declared for the {@code WitException} its {@code get()}
+		 * throws.
+		 */
+		private String startedText(JavaBoundary.@Nullable Type result, String place) {
+			if (result == null) {
+				return JavaWitImports.WIT_FUTURE + "<java.lang.Void>";
+			}
+			if (result.rep() == Rep.RESULT && result.error() != null) {
+				text(result.error(), true, place + "Error");
+			}
+			return text(new JavaBoundary.Type(Rep.FUTURE_HANDLE, result, "future<" + result.wit() + ">", null,
+					List.of(), null, false, null), false, place + "Result");
 		}
 
 		/**

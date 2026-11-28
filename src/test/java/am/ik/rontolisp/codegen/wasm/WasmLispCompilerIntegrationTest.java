@@ -25320,11 +25320,37 @@ class WasmLispCompilerIntegrationTest {
 							          (http:transmit-future-drop-readable (car (cdr reqpair)))
 							          (list :status status :body text))))))
 
+							;; the call in two halves, no future made: client:send-start begins it, the
+							;; body is written while it runs (no content-length: its end is the drop),
+							;; and client:send-wait waits where it is for the response
+							(rontolisp:async-defun post-started (authority path body)
+							  (let* ((contents (http:body-stream-new))
+							         (trailers (http:trailers-future-new))
+							         (reqpair (http:request-new (http:fields-new) (car contents) (car trailers) nil))
+							         (req (car reqpair)))
+							    (http:trailers-future-resolve (cdr trailers) (cons :ok nil))
+							    (http:request-set-method req :post)
+							    (http:request-set-scheme req :HTTP)
+							    (http:request-set-authority req authority)
+							    (http:request-set-path-with-query req path)
+							    (let ((call (client:send-start req)))
+							      (http:body-stream-write (cdr contents) body)
+							      (http:body-stream-drop-writable (cdr contents))
+							      (let* ((response (client:send-wait call))
+							             (status (http:response-get-status-code response))
+							             (res (http:transmit-future-new))
+							             (pair (http:response-consume-body response (car res))))
+							        (http:transmit-future-resolve (cdr res) :ok)
+							        (list :status status :body (rontolisp:await (read-all (car pair) "")))))))
+
 							(let ((r (rontolisp:await (post-url "127.0.0.1:%d" "/echo" "hello from a lisp POST"))))
 							  (print (getf r :status))
 							  (print (getf r :body)))
+							(let ((r (rontolisp:await (post-started "127.0.0.1:%d" "/echo" "a body sent while the call ran"))))
+							  (print (getf r :status))
+							  (print (getf r :body)))
 							"""
-						.formatted(port));
+						.formatted(port, port));
 			wasmtime.copyFileToContainer(Transferable.of(backendBytes), path("wit-post-backend.wasm"));
 			wasmtime.copyFileToContainer(Transferable.of(postBytes), path("wit-post.component.wasm"));
 			return wasmtime.execInContainer("bash", "-c", "wasmtime serve --addr 127.0.0.1:" + port + " "
@@ -25340,7 +25366,8 @@ class WasmLispCompilerIntegrationTest {
 					+ path("wit-post.component.wasm"));
 		});
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("200\n\"echo hello from a lisp POST\"");
+		assertThat(result.getStdout().trim())
+			.isEqualTo("200\n\"echo hello from a lisp POST\"\n200\n\"echo a body sent while the call ran\"");
 	}
 
 	@Test

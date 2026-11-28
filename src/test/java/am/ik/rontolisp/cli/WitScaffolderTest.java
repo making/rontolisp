@@ -346,15 +346,14 @@ class WitScaffolderTest {
 				""");
 		String option = "an option of a type one of whose values the boundary cannot tell from none";
 		// each refusal is the check's: the declaration left out, written in, is refused
-		// in those words
+		// in those words; an async func handed a stream is started, answering the
+		// future of its result, which the check takes
+		String started = "WitFuture<Void> send(Consumer<OutputStream> data);";
 		Map<String, List<String>> worlds = Map.of("exports", List.of("public static int fine() {",
 				"public static int check(Optional<Boolean> x) {\n        return 0;\n    }\n\n    public static int fine() {",
 				"check (check of world exports, app.wit:10): its parameter x is option<bool>, " + option), "imports",
-				List.of("int ok(int x);", "int ok(int x);\n\n        void flag(Optional<Boolean> x);",
-						"flag (flag of test:skip/host, app.wit:4): its parameter x is option<bool>, " + option,
-						"send (send of test:skip/host, app.wit:5): its parameter data is stream<u8>, a stream the "
-								+ "program hands an async func, which the call waits on while the host reads what the "
-								+ "program can write only after it"));
+				List.of(started, started + "\n\n        void flag(Optional<Boolean> x);",
+						"flag (flag of test:skip/host, app.wit:4): its parameter x is option<bool>, " + option));
 		for (Map.Entry<String, List<String>> world : worlds.entrySet()) {
 			List<String> skipped = new ArrayList<>();
 			Path java = this.tempDir.resolve("App.java");

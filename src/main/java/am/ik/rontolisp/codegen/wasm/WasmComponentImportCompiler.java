@@ -268,9 +268,17 @@ final class WasmComponentImportCompiler {
 	 * lift wrapper (called by {@code _subtask_future} for an eagerly-completed call, or
 	 * by the scheduler once the subtask reports RETURNED) lifts the result out of the
 	 * return area, with no waiting of its own.
+	 * <p>
+	 * A call started and waited on with no scheduler ({@code <member>-start} /
+	 * {@code <member>-wait}) has a wait wrapper instead of the lift: it waits where it is
+	 * for the subtask to return, releases it and lifts the result, as a read of a
+	 * {@code :blocking} directive waits.
 	 *
 	 * @param startName the start wrapper's Lisp name ({@code pkg::%send-start})
-	 * @param liftName the lift wrapper's Lisp name ({@code pkg::%send-lift})
+	 * @param liftName the lift wrapper's Lisp name ({@code pkg::%send-lift}), or
+	 * {@code null} for a call the wait wrapper lifts
+	 * @param waitName the wait wrapper's Lisp name ({@code pkg:send-wait}), or
+	 * {@code null} for a call the scheduler awaits
 	 * @param module the WASM import module = the interface's canonical id
 	 * @param field the WASM import field = the canonical-ABI function name
 	 * @param func the WIT function
@@ -279,8 +287,8 @@ final class WasmComponentImportCompiler {
 	 * @param octets whether a {@code list<u8>} the result carries lifts as a packed
 	 * {@code (unsigned-byte 8)} vector ({@code :octets t})
 	 */
-	record AsyncCall(String startName, String liftName, String module, String field, WitResolver.Func func,
-			WitCanonicalAbi abi, WitCanonicalAbi.FlatSig sig, boolean octets) {
+	record AsyncCall(String startName, @Nullable String liftName, @Nullable String waitName, String module,
+			String field, WitResolver.Func func, WitCanonicalAbi abi, WitCanonicalAbi.FlatSig sig, boolean octets) {
 
 		/** Whether the lift wrapper calls {@code _bytes_from_mem}. */
 		boolean liftsOctets() {
@@ -541,6 +549,15 @@ final class WasmComponentImportCompiler {
 			asyncs.addAll(imported.asyncs());
 			final List<AsyncCall> calls = new ArrayList<>(prev.calls());
 			calls.addAll(imported.calls());
+			// a function lowered both ways would be two of one name in the instance type
+			for (AsyncCall call : calls) {
+				if (decls.stream().anyMatch(decl -> decl.field().equals(call.field()))) {
+					throw new UnsupportedOperationException("rontolisp:wit-import binds the async func '" + call.field()
+							+ "' of " + imported.ifaceId()
+							+ " both as a call that waits (:blocking t) and as one that does not, which a component "
+							+ "lowers once");
+				}
+			}
 			final List<TaskReturn> taskReturns = new ArrayList<>(prev.taskReturns());
 			taskReturns.addAll(imported.taskReturns());
 			// The interface / resolver are the same WIT type across both bindings (the
@@ -675,8 +692,27 @@ final class WasmComponentImportCompiler {
 						.findFirst()
 						.orElseThrow(() -> new IllegalStateException(
 								"Internal component-import form names an unknown member: " + member.value()));
-					calls.add(new AsyncCall(startName.value(), liftName.value(), ifaceId.value(), cabiFieldName(func),
-							func, abi, abi.flatSigAsyncLower(func), octets));
+					calls.add(new AsyncCall(startName.value(), liftName.value(), null, ifaceId.value(),
+							cabiFieldName(func), func, abi, abi.flatSigAsyncLower(func), octets));
+					continue;
+				}
+				// (:async-start "send" "client:send-start" "client:send-wait%raw"): the
+				// call started by the one wrapper and waited on by the other
+				if (":ASYNC-START".equals(keyword.name())) {
+					if (!(rest.car() instanceof LispString member) || !(rest.cdr() instanceof LispCons startCons)
+							|| !(startCons.car() instanceof LispString startName)
+							|| !(startCons.cdr() instanceof LispCons waitCons)
+							|| !(waitCons.car() instanceof LispString waitName) || waitCons.cdr() != LispNil.INSTANCE) {
+						throw new UnsupportedOperationException(
+								"Malformed internal component-import member: " + items.get(i).print());
+					}
+					WitResolver.Func func = funcs.stream()
+						.filter(f -> member.value().equals(WitImportDirective.memberName(f)))
+						.findFirst()
+						.orElseThrow(() -> new IllegalStateException(
+								"Internal component-import form names an unknown member: " + member.value()));
+					calls.add(new AsyncCall(startName.value(), null, waitName.value(), ifaceId.value(),
+							cabiFieldName(func), func, abi, abi.flatSigAsyncLower(func), octets));
 					continue;
 				}
 				if (":TASK-RETURN".equals(keyword.name())) {
@@ -1138,7 +1174,9 @@ final class WasmComponentImportCompiler {
 	 * allocate the return area, make the async-lowered call and hand back the
 	 * {@code (packed . retptr)} token cons. The staging is deliberately NOT popped -- the
 	 * lowered argument bytes and the return area must outlive the call until the await --
-	 * so each start grows the bump heap by its staging (accepted; noted in the design).
+	 * so each start grows the bump heap by its staging (accepted; noted in the design). A
+	 * start a wait wrapper ends hands it where its staging begins and ends too,
+	 * {@code (packed . (retptr . (mark . end)))}, for the wait to pop.
 	 * @param ctxBuilder the shared context builder
 	 * @param call the bound async call
 	 * @param ordinal the import's ordinal (shared with the function imports)
@@ -1183,21 +1221,53 @@ final class WasmComponentImportCompiler {
 	 */
 	static byte[] buildAsyncLiftBody(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int allocFuncIndex,
 			int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
-		int octetsFromMem = octetsLift(call.liftsOctets(), bytesFromMemFuncIndex, call.liftName());
-		Body probe = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, octetsFromMem, MAX_SCRATCH,
-				MAX_SCRATCH);
-		Body body = emitAsyncLift(ctxBuilder, call, allocFuncIndex, strFromMemFuncIndex, octetsFromMem, probe.i32Pool(),
-				probe.i64Pool());
+		String name = Objects.requireNonNull(call.liftName());
+		int octetsFromMem = octetsLift(call.liftsOctets(), bytesFromMemFuncIndex, name);
+		Body probe = emitAsyncLift(ctxBuilder, call, name, null, allocFuncIndex, strFromMemFuncIndex, octetsFromMem,
+				MAX_SCRATCH, MAX_SCRATCH);
+		Body body = emitAsyncLift(ctxBuilder, call, name, null, allocFuncIndex, strFromMemFuncIndex, octetsFromMem,
+				probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
 
-	private static Body emitAsyncLift(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, int allocFuncIndex,
-			int strFromMemFuncIndex, int octetsFromMem, int i32Pool, int i64Pool) {
+	/**
+	 * Builds the code entry of an async call's WAIT wrapper ({@code <member>-wait}):
+	 * parse the token cons, wait where it is for a subtask still running to return -- its
+	 * own waitable-set, as a read of a {@code :blocking} directive waits --, release the
+	 * subtask and lift the result from the return area. What the start staged goes with
+	 * this wrapper's own staging when nothing was kept above it since; else it stays, as
+	 * a scheduled call's does.
+	 * @param ctxBuilder the shared context builder
+	 * @param call the bound async call
+	 * @param waitOrdinals the interface's waitable-set built-ins and {@code subtask.drop}
+	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
+	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem}
+	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem}, which
+	 * an {@link AsyncCall#liftsOctets} binding needs, or -1
+	 * @return the code entry bytes
+	 */
+	static byte[] buildAsyncWaitBody(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, WaitOrdinals waitOrdinals,
+			int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
+		String name = Objects.requireNonNull(call.waitName());
+		int octetsFromMem = octetsLift(call.liftsOctets(), bytesFromMemFuncIndex, name);
+		Body probe = emitAsyncLift(ctxBuilder, call, name, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
+				octetsFromMem, MAX_SCRATCH, MAX_SCRATCH);
+		Body body = emitAsyncLift(ctxBuilder, call, name, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
+				octetsFromMem, probe.i32Pool(), probe.i64Pool());
+		return wrapEntry(body);
+	}
+
+	// The lift of an async call's result, waited for first when the wait ordinals are
+	// given (the wait wrapper).
+	private static Body emitAsyncLift(WasmLispCompiler.Ctx.Builder ctxBuilder, AsyncCall call, String name,
+			@Nullable WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int octetsFromMem,
+			int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
-		Gen gen = new Gen(ctx, call.liftName(), 1, -1, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
+		Gen gen = new Gen(ctx, name, 1, -1, allocFuncIndex, strFromMemFuncIndex, i32Pool, i64Pool);
 		gen.octetsFromMemFuncIndex = octetsFromMem;
+		gen.waitOrdinals = waitOrdinals;
 		gen.emitAsyncLiftBody(call);
 		int eqTemps = ctx.nextLocal - (1 + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -1868,20 +1938,38 @@ final class WasmComponentImportCompiler {
 			else {
 				refNullEq();
 			}
+			if (call.waitName() != null) {
+				// (packed . (retptr . (mark . end))): where the staging begins and ends,
+				// which the wait wrapper pops when nothing was kept above it meanwhile
+				getLocal(this.mark);
+				boxI31();
+				loadCell(WasmLispCompiler.HEAP_PTR_ADDR);
+				boxI31();
+				newCons();
+				newCons();
+			}
 			newCons();
 			this.w.write(Instruction.END);
 		}
 
 		// lift: (packed . retptr) -> the lifted result. The subtask (when there was
 		// one) has already reported RETURNED and been dropped by the scheduler; this
-		// wrapper only reads the return area.
+		// wrapper only reads the return area. The wait wrapper (wait ordinals given)
+		// waits for it first.
 		void emitAsyncLiftBody(AsyncCall call) {
 			emitStagingPrologue();
+			WaitOrdinals waited = this.waitOrdinals;
+			if (waited != null) {
+				emitSubtaskWait(waited);
+			}
 			int rp = allocI32();
 			WitCanonicalAbi.FlatSig sig = call.sig();
 			if (sig.retptr()) {
 				getLocal(1);
 				structGet(WasmLispCompiler.TYPE_CONS, 1);
+				if (waited != null) {
+					structGet(WasmLispCompiler.TYPE_CONS, 0);
+				}
 				WasmEmitHelper.castI31GetS(this.ctx);
 				setLocal(rp);
 			}
@@ -1894,7 +1982,87 @@ final class WasmComponentImportCompiler {
 			}
 			int resultTmp = this.ctx.allocTemp();
 			setLocal(resultTmp);
+			if (waited != null) {
+				// the subtask has returned and its answer is lifted, so what its start
+				// staged goes with this wrapper's own staging -- when nothing was kept
+				// above it since: this wrapper's mark is where the start's staging ended
+				int span = allocI32();
+				getLocal(1);
+				structGet(WasmLispCompiler.TYPE_CONS, 1);
+				structGet(WasmLispCompiler.TYPE_CONS, 1);
+				this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				this.w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+				int pair = this.ctx.allocTemp();
+				this.w.write(Instruction.TEE_LOCAL);
+				this.w.writeUnsignedLeb128(pair);
+				structGet(WasmLispCompiler.TYPE_CONS, 1);
+				WasmEmitHelper.castI31GetS(this.ctx);
+				setLocal(span);
+				getLocal(this.mark);
+				alignedHeapTop(() -> getLocal(span));
+				this.w.write(Instruction.I32_EQ);
+				this.w.write(Instruction.IF, 0x40);
+				getLocal(pair);
+				structGet(WasmLispCompiler.TYPE_CONS, 0);
+				WasmEmitHelper.castI31GetS(this.ctx);
+				setLocal(this.mark);
+				this.w.write(Instruction.END);
+			}
 			emitStagingEpilogue(resultTmp);
+		}
+
+		// The subtask of a call still running, waited for where it is: the token's
+		// packed status is no RETURNED, the subtask's index above its four bits (a call
+		// that returned at once has none). Its own waitable-set, whose every event is
+		// the subtask's -- STARTED, then RETURNED --; then the subtask leaves the set
+		// and is released, which only a delivered RETURNED allows.
+		private void emitSubtaskWait(WaitOrdinals ordinals) {
+			int packed = allocI32();
+			int subtask = allocI32();
+			int set = allocI32();
+			getLocal(1);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(packed);
+			getLocal(packed);
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			i32Const(SUBTASK_STATUS_RETURNED);
+			this.w.write(Instruction.I32_NE);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(packed);
+			i32Const(4);
+			this.w.write(Instruction.I32_SHR_U);
+			setLocal(subtask);
+			int evtp = allocRetArea(8);
+			callOrdinal(ordinals.setNew());
+			setLocal(set);
+			getLocal(subtask);
+			getLocal(set);
+			callOrdinal(ordinals.join());
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(set);
+			getLocal(evtp);
+			callOrdinal(ordinals.setWait());
+			this.w.write(Instruction.DROP);
+			load(evtp, 4, Instruction.I32_LOAD, 2);
+			i32Const(SUBTASK_STATE_RETURNED);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			getLocal(subtask);
+			i32Const(0);
+			callOrdinal(ordinals.join());
+			getLocal(set);
+			callOrdinal(ordinals.setDrop());
+			getLocal(subtask);
+			callOrdinal(ordinals.subtaskDrop());
+			this.w.write(Instruction.END);
 		}
 
 		// task-return: lower the Lisp value to the declared result type's flats and

@@ -46,15 +46,18 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * An {@code async func} is a method that waits for the host's answer, as a call does: the
- * directive blocks on it ({@code :blocking t}), and a read waits as it does. A
- * {@code stream<T>} the host answers is a {@code WitStream<T>}, of values or of
- * resources, a {@code stream<u8>} an {@code InputStream}, a {@code future<T>} a
- * {@code WitFuture<T>} ({@code rontolisp-java-api}), each a class of the binding reading
- * through the built-ins of an alias of its type the directive adds ({@code :aliases}). A
- * {@code stream<u8>} the program hands the host is a {@code Consumer<OutputStream>},
- * handed the writable end once the call has returned; a {@code future<T>} it hands the
- * host is a {@code WitFuture<T>} of its own, whose value the binding writes before the
- * call for whenever the host reads it ({@code <alias>-resolve}).
+ * directive blocks on it ({@code :blocking t}), and a read waits as it does. Its method
+ * declared to answer the {@code WitFuture} of its result is started instead, the call in
+ * two halves ({@code <member>-start}, {@code <member>-wait}), so that a stream it reads
+ * is written while it runs. A {@code stream<T>} the host answers is a
+ * {@code WitStream<T>}, of values or of resources, a {@code stream<u8>} an
+ * {@code InputStream}, a {@code future<T>} a {@code WitFuture<T>}
+ * ({@code rontolisp-java-api}), each a class of the binding reading through the built-ins
+ * of an alias of its type the directive adds ({@code :aliases}). A {@code stream<u8>} the
+ * program hands the host is a {@code Consumer<OutputStream>}, handed the writable end
+ * once the call has returned; a {@code future<T>} it hands the host is a
+ * {@code WitFuture<T>} of its own, whose value the binding writes before the call for
+ * whenever the host reads it ({@code <alias>-resolve}).
  *
  * <p>
  * A resource an interface takes from another with {@code use} is the member interface of
@@ -161,8 +164,11 @@ final class JavaWitImports {
 	 *
 	 * @param method the method
 	 * @param function the member
+	 * @param started whether the method answers at once: an {@code async func} declared
+	 * to answer the {@code WitFuture} of its result, the call going on while the program
+	 * does what else it does
 	 */
-	record Bound(JavaClass.Method method, JavaBoundary.Function function) {
+	record Bound(JavaClass.Method method, JavaBoundary.Function function, boolean started) {
 	}
 
 	/**
@@ -468,7 +474,15 @@ final class JavaWitImports {
 		private Bound bind(JavaClass.Method method, JavaBoundary.Function member) {
 			String what = method.name + " (" + member.name() + " of " + this.wit.id() + ", " + member.at() + ")";
 			// an async func is a call that waits for the host's answer, as any call does
-			// (the directive blocks on it)
+			// (the directive blocks on it), or, declared to answer the WitFuture of its
+			// result, one started that the program waits for when it reads the future
+			boolean started = member.async() && startedForm(member.result(), method.returnType);
+			if (started) {
+				String taken = startedRefusal(this.wit, member);
+				if (taken != null) {
+					throw at(method, what + " answers a WitFuture, " + taken);
+				}
+			}
 			List<JavaBoundary.Param> params = member.kind() == Kind.METHOD
 					? member.params().subList(1, member.params().size()) : member.params();
 			if (method.parameters.size() != params.size()) {
@@ -479,22 +493,54 @@ final class JavaWitImports {
 				JavaBoundary.Param param = params.get(i);
 				String parameter = what + ": its parameter " + param.name();
 				if (asyncIn(param.type()) != null) {
-					handed(param.type(), method.parameters.get(i), member, method, parameter);
+					handed(param.type(), method.parameters.get(i), member.async() && !started, method, parameter);
 					continue;
 				}
 				expect(param.type(), method.parameters.get(i), false, method, parameter);
 			}
-			expectAnswer(member.result(), method, what);
-			return new Bound(method, member);
+			if (started) {
+				expectStarted(member.result(), method, what);
+			}
+			else {
+				expectAnswer(member.result(), method, what);
+			}
+			return new Bound(method, member, started);
+		}
+
+		/**
+		 * Checks what a started call's future answers: the result's value -- a
+		 * {@code result}'s ok arm, its error arm thrown by {@code get()} as a
+		 * {@code WitException}, as a {@code future<result<T, E>>}'s --, {@code Void} for
+		 * none.
+		 */
+		private void expectStarted(JavaBoundary.@Nullable Type result, JavaClass.Method method, String what) {
+			JavaType argument = Objects.requireNonNull(JavaWitTypes.argument(method.returnType));
+			JavaBoundary.Type value = result != null && result.rep() == Rep.RESULT ? result.element() : result;
+			if (value == null) {
+				if (!JavaWitTypes.isClass(argument, "java.lang.Void")) {
+					throw at(method,
+							what + " answers " + (result == null ? "nothing" : "a result whose ok arm carries nothing")
+									+ ", so its call's future is WitFuture<Void>, not " + method.returnType);
+				}
+			}
+			else {
+				expect(value, argument, true, method, what + ": its call's future's value");
+			}
+			if (result != null && result.rep() == Rep.RESULT && result.error() != null) {
+				// thrown by get() as a WitException's value, as a result's error arm is
+				expect(result.error(), null, true, method, what + ": its result's error arm");
+			}
 		}
 
 		/**
 		 * Checks a parameter carrying a stream or a future the program hands the host
 		 * ({@link #handedRefusal}).
+		 * @param waited whether the call waits: an {@code async func} the method does not
+		 * answer the future of
 		 */
-		private void handed(JavaBoundary.Type wit, JavaType declared, JavaBoundary.Function member,
-				JavaClass.Method method, String what) {
-			String refusal = handedRefusal(wit, member.async());
+		private void handed(JavaBoundary.Type wit, JavaType declared, boolean waited, JavaClass.Method method,
+				String what) {
+			String refusal = handedRefusal(wit, waited);
 			if (refusal != null) {
 				throw at(method, what + " is " + wit.wit() + ", " + refusal);
 			}
@@ -607,6 +653,46 @@ final class JavaWitImports {
 	}
 
 	/**
+	 * Whether a method of an {@code async func} answers at once, the call started: it is
+	 * declared to answer a {@code WitFuture}, the future of the call's result, not the
+	 * result. Of a result that is a future itself (or a result whose ok arm is one), a
+	 * {@code WitFuture} of that future's value is the call that waits, and the call's
+	 * future is a {@code WitFuture} of a {@code WitFuture}.
+	 * @param result the function's result, or {@code null} for none
+	 * @param declared what the method answers
+	 */
+	static boolean startedForm(JavaBoundary.@Nullable Type result, JavaType declared) {
+		if (!(declared instanceof ClassType type && type.declaration().name.equals(WIT_FUTURE)
+				&& type.arguments().size() == 1)) {
+			return false;
+		}
+		JavaBoundary.Type answered = result != null && result.rep() == Rep.RESULT ? result.element() : result;
+		boolean future = result != null && result.rep() == Rep.FUTURE_HANDLE
+				|| answered != null && answered.rep() == Rep.FUTURE_HANDLE;
+		return !future
+				|| type.arguments().get(0) instanceof ClassType value && value.declaration().name.equals(WIT_FUTURE);
+	}
+
+	/**
+	 * Why an {@code async func} cannot be started, or {@code null}: its interface has a
+	 * member of the name the directive gives one of the call's two halves
+	 * ({@code <member>-start}, {@code <member>-wait}), which then stays that member's.
+	 * @param wit the interface
+	 * @param member the function
+	 */
+	static @Nullable String startedRefusal(JavaBoundary.WitInterface wit, JavaBoundary.Function member) {
+		for (String half : List.of(member.name() + "-start", member.name() + "-wait")) {
+			for (JavaBoundary.Function other : wit.members()) {
+				if (other.name().equals(half)) {
+					return "which starts the call, and the WIT has a member " + half
+							+ ", the name the binding starts it or waits for it by";
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Why a parameter carrying a stream or a future the program hands the host has no
 	 * Java declaration, or {@code null}. A {@code stream<u8>} of its own, or an option of
 	 * one, is a {@code Consumer<OutputStream>} the binding hands the writable end once
@@ -615,13 +701,15 @@ final class JavaWitImports {
 	 * {@code WitFuture<T>} the program made, whose value the binding writes before the
 	 * call without waiting for the reader: the host may read it within that call or a
 	 * later one the program waits on. The rest is refused: no write of a stream of values
-	 * or of handles is bound; an {@code async func} is waited on while the host reads
-	 * what the program writes only after it; one held in another type has no place the
-	 * binding makes its ends at.
+	 * or of handles is bound; an {@code async func} the program waits on is waited on
+	 * while the host reads what the program writes only after it -- one started, its
+	 * method answering the {@code WitFuture} of its result, is written while it runs --;
+	 * one held in another type has no place the binding makes its ends at.
 	 * @param wit the parameter's type, which carries a stream or a future
-	 * @param async whether the function is an {@code async func}
+	 * @param waited whether the call waits for its answer: an {@code async func} the
+	 * method does not answer the {@code WitFuture} of
 	 */
-	static @Nullable String handedRefusal(JavaBoundary.Type wit, boolean async) {
+	static @Nullable String handedRefusal(JavaBoundary.Type wit, boolean waited) {
 		if (wit.rep() == Rep.FUTURE_HANDLE) {
 			JavaBoundary.Type payload = wit.element();
 			if (payload == null) {
@@ -642,9 +730,10 @@ final class JavaWitImports {
 			return "a stream the program hands the host, of values the program cannot write: the guest only "
 					+ "reads a stream of other than bytes";
 		}
-		if (async) {
+		if (waited) {
 			return "a stream the program hands an async func, which the call waits on while the host reads "
-					+ "what the program can write only after it";
+					+ "what the program can write only after it: a method answering the WitFuture of its result "
+					+ "starts the call, the stream written while it runs";
 		}
 		return null;
 	}
@@ -794,6 +883,19 @@ final class JavaWitImports {
 				String bound = reachedMembers.get(member);
 				if (bound != null) {
 					table.add(JavaForms.list(LispString.literal(member), LispString.literal(bound)));
+				}
+			}
+			// a started call's two halves, which bind together: a future never read
+			// reaches no wait
+			String binding = Objects.requireNonNull(binding(entry.getKey())).name;
+			List<Bound> methods = new ArrayList<>(imported.functions());
+			imported.resources().values().forEach(resource -> methods.addAll(resource.methods()));
+			for (Bound each : methods) {
+				String start = each.function().name() + "-start";
+				String wait = each.function().name() + "-wait";
+				if (each.started() && (reachedMembers.containsKey(start) || reachedMembers.containsKey(wait))) {
+					table.add(JavaForms.list(LispString.literal(start), LispString.literal(binding + "." + start)));
+					table.add(JavaForms.list(LispString.literal(wait), LispString.literal(binding + "." + wait)));
 				}
 			}
 			// the streams and futures the host answers, read through the built-ins of an
@@ -1047,6 +1149,26 @@ final class JavaWitImports {
 			}
 			JavaBoundary.Type result = member.result();
 			boolean raw = result != null && result.rep() == Rep.RESULT;
+			if (bound.started()) {
+				// the call started: the program goes on while it runs -- writing the
+				// streams it hands the call -- and its future's get() waits for it
+				out.append(body)
+					.append("Object call = ")
+					.append(this.binding)
+					.append('.')
+					.append(nativeFor(member.name() + "-start", params.size(), false))
+					.append('(')
+					.append(String.join(", ", arguments))
+					.append(");\n")
+					.append(writers)
+					.append(body)
+					.append("return new ")
+					.append(callClass(bound))
+					.append("(call);\n")
+					.append(indent)
+					.append("}\n");
+				return;
+			}
 			String call = this.binding + "." + nativeFor(member, params.size(), raw) + "("
 					+ String.join(", ", arguments) + ")";
 			if (!writers.isEmpty()) {
@@ -1394,6 +1516,83 @@ final class JavaWitImports {
 				.append('(')
 				.append(v)
 				.append(".outHandle(held));\n            }\n        }\n    }\n");
+			this.asyncClasses.append(text);
+			return name;
+		}
+
+		/**
+		 * The class of a started call's future, written once for its member: its
+		 * {@code get()} waits where it is for what the call answers
+		 * ({@code <member>-wait}), a result's error arm thrown as the call that waits
+		 * throws it, and keeps it; its {@code close()} leaves a call not read to the
+		 * host, which goes on with it, its answer unread.
+		 */
+		private String callClass(Bound bound) {
+			JavaBoundary.Function member = bound.function();
+			String key = "call " + member.name();
+			String known = this.asyncClassOf.get(key);
+			if (known != null) {
+				return known;
+			}
+			String simpleName = "C" + this.asyncClassOf.size();
+			String name = this.binding + "." + simpleName;
+			this.asyncClassOf.put(key, name);
+			JavaBoundary.Type result = member.result();
+			boolean raw = result != null && result.rep() == Rep.RESULT;
+			String wait = this.binding + "." + nativeFor(member.name() + "-wait", 1, raw);
+			JavaType argument = Objects.requireNonNull(JavaWitTypes.argument(bound.method().returnType));
+			JavaBoundary.Type value = raw ? Objects.requireNonNull(result).element() : result;
+			String valueText = value == null ? "java.lang.Void"
+					: JavaWitTypes.javaText(this.imported.declaration(), value, true, argument, false);
+			String what = member.name() + " of " + this.imported.id();
+			String v = VALUES;
+			StringBuilder text = new StringBuilder();
+			// what get() throws is made where it throws, as a future's is
+			text.append("    public static final class ")
+				.append(simpleName)
+				.append(" implements ")
+				.append(WIT_FUTURE)
+				.append('<')
+				.append(valueText)
+				.append("> {\n        Object call;\n        boolean read;\n        boolean failed;\n")
+				.append("        Object error;\n        ")
+				.append(valueText)
+				.append(" value;\n        ")
+				.append(simpleName)
+				.append("(Object call) {\n            this.call = call;\n        }\n        public ")
+				.append(valueText)
+				.append(" get() {\n            if (!this.read) {\n                if (this.call == null) {\n")
+				.append("                    throw new IllegalStateException(\"The future of ")
+				.append(what)
+				.append(" is closed\");\n                }\n                Object started = this.call;\n")
+				.append("                this.call = null;\n                Object answer = ")
+				.append(wait)
+				.append("(started);\n                this.read = true;\n");
+			String answer = raw ? v + ".payload(answer)" : "answer";
+			if (raw) {
+				JavaBoundary.Type error = Objects.requireNonNull(result).error();
+				text.append("                if (")
+					.append(v)
+					.append(".failed(answer)) {\n                    this.failed = true;\n")
+					.append("                    this.error = ")
+					.append(error == null ? "null" : in(error, null, answer))
+					.append(";\n                }\n");
+				if (value != null) {
+					text.append("                else {\n                    this.value = ")
+						.append(in(value, argument, answer))
+						.append(";\n                }\n");
+				}
+			}
+			else if (value != null) {
+				text.append("                this.value = ").append(in(value, argument, answer)).append(";\n");
+			}
+			text.append("            }\n            if (this.failed) {\n                throw new ")
+				.append(WIT_EXCEPTION)
+				.append("(\"")
+				.append(what)
+				.append(" answered its error arm\" + (this.error == null ? \"\" : \": \" + this.error), this.error);\n")
+				.append("            }\n            return this.value;\n        }\n")
+				.append("        public void close() {\n            this.call = null;\n        }\n    }\n");
 			this.asyncClasses.append(text);
 			return name;
 		}

@@ -4688,13 +4688,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		// return area, called by _subtask_future / the scheduler once the subtask has
 		// returned) -- registered like the other synthetic defuns, after the async
 		// built-ins in the placeholder ordinal space.
+		// A call started and waited on with no scheduler (<member>-start /
+		// <member>-wait) binds a wait wrapper in the lift's place.
 		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallStartWrappers = new LinkedHashMap<>();
 		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallLiftWrappers = new LinkedHashMap<>();
+		Map<String, WasmComponentImportCompiler.AsyncCall> componentCallWaitWrappers = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : componentImports) {
 			for (WasmComponentImportCompiler.AsyncCall call : imported.calls()) {
-				for (String wrapperName : List.of(call.startName(), call.liftName())) {
+				List<String> wrapperNames = new ArrayList<>(List.of(call.startName()));
+				if (call.liftName() != null) {
+					wrapperNames.add(call.liftName());
+				}
+				if (call.waitName() != null) {
+					wrapperNames.add(call.waitName());
+				}
+				for (String wrapperName : wrapperNames) {
 					boolean duplicate = componentCallStartWrappers.containsKey(wrapperName)
 							|| componentCallLiftWrappers.containsKey(wrapperName)
+							|| componentCallWaitWrappers.containsKey(wrapperName)
 							|| componentAsyncWrappers.containsKey(wrapperName)
 							|| componentDropWrappers.containsKey(wrapperName)
 							|| componentImportWrappers.containsKey(wrapperName)
@@ -4710,8 +4721,14 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				componentCallStartWrappers.put(call.startName(), call);
 				defuns.add(new DefunDecl(call.startName(), startParams, false, List.of()));
-				componentCallLiftWrappers.put(call.liftName(), call);
-				defuns.add(new DefunDecl(call.liftName(), List.of("%component-import-p0"), false, List.of()));
+				if (call.liftName() != null) {
+					componentCallLiftWrappers.put(call.liftName(), call);
+					defuns.add(new DefunDecl(call.liftName(), List.of("%component-import-p0"), false, List.of()));
+				}
+				if (call.waitName() != null) {
+					componentCallWaitWrappers.put(call.waitName(), call);
+					defuns.add(new DefunDecl(call.waitName(), List.of("%component-import-p0"), false, List.of()));
+				}
 			}
 		}
 		// A task-return built-in binds the same way (one parameter: the result value).
@@ -4721,6 +4738,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				boolean duplicate = componentTaskReturnWrappers.containsKey(tr.lispName())
 						|| componentCallStartWrappers.containsKey(tr.lispName())
 						|| componentCallLiftWrappers.containsKey(tr.lispName())
+						|| componentCallWaitWrappers.containsKey(tr.lispName())
 						|| componentAsyncWrappers.containsKey(tr.lispName())
 						|| componentDropWrappers.containsKey(tr.lispName())
 						|| componentImportWrappers.containsKey(tr.lispName())
@@ -5784,6 +5802,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					|| componentDropWrappers.containsKey(defun.name) || componentAsyncWrappers.containsKey(defun.name)
 					|| componentCallStartWrappers.containsKey(defun.name)
 					|| componentCallLiftWrappers.containsKey(defun.name)
+					|| componentCallWaitWrappers.containsKey(defun.name)
 					|| componentTaskReturnWrappers.containsKey(defun.name)) {
 				importBodySlots.put(defun.name, userFunctionBodies.size());
 				userFunctionBodies.add(null); // filled in below
@@ -6204,6 +6223,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| componentCallLiftWrappers.values()
 					.stream()
 					.anyMatch(WasmComponentImportCompiler.AsyncCall::liftsOctets)
+				|| componentCallWaitWrappers.values()
+					.stream()
+					.anyMatch(WasmComponentImportCompiler.AsyncCall::liftsOctets)
 				|| componentAsyncWrappers.values().stream().anyMatch(WasmComponentImportCompiler.Async::liftsOctets)
 				// a canonical export bound with :octets t lifts a list<u8> parameter so
 				|| exportDecls.stream().anyMatch(decl -> decl.wit() != null && decl.wit().liftsOctets());
@@ -6369,18 +6391,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					continue;
 				}
 				String schedIface = imported.ifaceId();
-				schedWiring = new WasmFutureRuntimeBuilder.Sched(
-						new WasmComponentImportCompiler.WaitOrdinals(
-								Objects.requireNonNull(importSlotIndex
-									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
-								Objects.requireNonNull(importSlotIndex
-									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
-								Objects.requireNonNull(importSlotIndex
-									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
-								Objects.requireNonNull(importSlotIndex
-									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
-								Objects.requireNonNull(importSlotIndex
-									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
+				schedWiring = new WasmFutureRuntimeBuilder.Sched(waitOrdinals(importSlotIndex, schedIface),
 						schedRegistryGlobalIndex, schedSetGlobalIndex, schedReadFreeGlobalIndex, allocFuncIndex,
 						strFromMemFuncIndex, bytesFromMemFuncIndex, streamEndedGlobalIndex, schedNextTurnGlobalIndex);
 				break;
@@ -6504,17 +6515,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (WasmComponentImportCompiler.Async async : componentAsyncWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(async.module() + "\0" + async.field()));
-				WasmComponentImportCompiler.WaitOrdinals asyncWaitOrdinals = new WasmComponentImportCompiler.WaitOrdinals(
-						Objects.requireNonNull(importSlotIndex
-							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW)),
-						Objects.requireNonNull(importSlotIndex
-							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT)),
-						Objects.requireNonNull(importSlotIndex
-							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP)),
-						Objects.requireNonNull(importSlotIndex
-							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_WAITABLE_JOIN)),
-						Objects.requireNonNull(importSlotIndex
-							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
+				WasmComponentImportCompiler.WaitOrdinals asyncWaitOrdinals = waitOrdinals(importSlotIndex,
+						async.module());
 				// a settling wrapper writes again what its cancel-write withdrew
 				int writeOrdinal = async.op() == WasmComponentImportCompiler.AsyncOp.WRITE_SETTLE
 						? Objects.requireNonNull(
@@ -6537,6 +6539,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				byte[] body = WasmComponentImportCompiler.buildAsyncLiftBody(ctxBuilder, call, allocFuncIndex,
 						strFromMemFuncIndex, bytesFromMemFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.liftName())), body);
+			}
+			for (WasmComponentImportCompiler.AsyncCall call : componentCallWaitWrappers.values()) {
+				byte[] body = WasmComponentImportCompiler.buildAsyncWaitBody(ctxBuilder, call,
+						waitOrdinals(importSlotIndex, call.module()), allocFuncIndex, strFromMemFuncIndex,
+						bytesFromMemFuncIndex);
+				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(call.waitName())), body);
 			}
 			for (WasmComponentImportCompiler.TaskReturn tr : componentTaskReturnWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(tr.module() + "\0" + tr.field()));
@@ -10921,6 +10929,20 @@ public final class WasmLispCompiler implements LispCompiler {
 	// The import-slot ordinal of a $sched builtin field.
 	private static int schedOrdinal(Map<String, Integer> importSlotIndex, String field) {
 		return Objects.requireNonNull(importSlotIndex.get(WasmComponentImportCompiler.SCHED_MODULE + "\0" + field));
+	}
+
+	// The import-slot ordinals of an interface's waitable-set built-ins and its
+	// subtask.drop, which every interface binding an async call or built-in imports.
+	private static WasmComponentImportCompiler.WaitOrdinals waitOrdinals(Map<String, Integer> importSlotIndex,
+			String module) {
+		java.util.function.ToIntFunction<String> ordinal = field -> Objects
+			.requireNonNull(importSlotIndex.get(module + "\0" + field));
+		return new WasmComponentImportCompiler.WaitOrdinals(
+				ordinal.applyAsInt(WasmComponentImportCompiler.FIELD_WAITABLE_SET_NEW),
+				ordinal.applyAsInt(WasmComponentImportCompiler.FIELD_WAITABLE_SET_WAIT),
+				ordinal.applyAsInt(WasmComponentImportCompiler.FIELD_WAITABLE_SET_DROP),
+				ordinal.applyAsInt(WasmComponentImportCompiler.FIELD_WAITABLE_JOIN),
+				ordinal.applyAsInt(WasmComponentImportCompiler.FIELD_SUBTASK_DROP));
 	}
 
 	// -Drontolisp.wasm.debug-func-sizes (the wasm twin of

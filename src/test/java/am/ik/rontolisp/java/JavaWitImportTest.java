@@ -142,11 +142,13 @@ class JavaWitImportTest {
 	 * And an HTTP client over {@code wasi:http@0.3.0}, against a {@code wasmtime serve}
 	 * backend: {@code client.send} takes the request and answers the response
 	 * {@code wasi:http/types} defines, each the member interface of the
-	 * {@code @WitImport} interface standing for that one; the futures a request and a
-	 * body's reader take are the program's {@code WitFuture}s, written before the call
-	 * with no reader yet -- wasmtime reads a request's trailers within
-	 * {@code client.send}, once its body has ended, and the error arm one was made of is
-	 * what the send answers --, and no request's body is {@code Optional.empty()}.
+	 * {@code @WitImport} interface standing for that one, and is started: declared to
+	 * answer the {@code WitFuture} of its response, so a request's body is written while
+	 * the call reads it and the backend echoes it; the futures a request and a body's
+	 * reader take are the program's {@code WitFuture}s, written before the call with no
+	 * reader yet -- wasmtime reads a request's trailers within {@code client.send}, once
+	 * its body has ended, and the error arm one was made of is what the send answers --,
+	 * and no request's body is {@code Optional.empty()}.
 	 */
 	@Test
 	void everyKindOfValueCrossesWasmtimesOwnInterfaces() throws Exception {
@@ -294,10 +296,17 @@ class JavaWitImportTest {
 						        return sent;
 						    }
 
-						    static String exchange(Types.Sent sent) throws IOException {
+						    // the call started, the body written while it runs, then its answer read
+						    static String exchange(Types.Sent sent, OutputStream[] writer, String text) throws IOException {
 						        String answer;
 						        try {
-						            Types.Response response = CLIENT.send(sent.request());
+						            WitFuture<Types.Response> call = CLIENT.send(sent.request());
+						            if (writer != null) {
+						                try (OutputStream out = writer[0]) {
+						                    out.write(text.getBytes(StandardCharsets.UTF_8));
+						                }
+						            }
+						            Types.Response response = call.get();
 						            answer = Short.toUnsignedInt(response.getStatusCode()) + " ";
 						            try (Types.Fields headers = response.getHeaders()) {
 						                answer += new String(headers.get("x-probe").get(0), StandardCharsets.UTF_8) + " ";
@@ -320,6 +329,10 @@ class JavaWitImportTest {
 						        }
 						    }
 
+						    static String exchange(Types.Sent sent) throws IOException {
+						        return exchange(sent, null, null);
+						    }
+
 						    static WitFuture<Optional<Types.Fields>> refused(String why) {
 						        return WitFuture.failed(new WitException(why, new Types.ErrorCode.InternalError(Optional.of(why))));
 						    }
@@ -337,6 +350,10 @@ class JavaWitImportTest {
 						            System.out.println(e.getMessage());
 						        }
 						        System.out.println(exchange(first));
+						        // a body the backend echoes, written while client.send reads it
+						        OutputStream[] writer = new OutputStream[1];
+						        System.out.println(exchange(request(new Types.Method.Post(), "/posted",
+						                Optional.of(out -> writer[0] = out), WitFuture.of(Optional.empty())), writer, " and its body"));
 						        // two requests made before either is sent: the first one's trailers are
 						        // still unread when the second's are written
 						        Types.Sent refused = request(new Types.Method.Post(), "/refused", Optional.of(ENDED),
@@ -350,6 +367,16 @@ class JavaWitImportTest {
 						                WitFuture.of(Optional.empty()));
 						        unsent.transmission().close();
 						        unsent.request().close();
+						        // a call's future closed unread: the call goes on, its answer unread
+						        WitFuture<Types.Response> left = CLIENT.send(request(new Types.Method.Get(), "/left",
+						                Optional.empty(), WitFuture.of(Optional.empty())).request());
+						        left.close();
+						        try {
+						            left.get();
+						        }
+						        catch (IllegalStateException e) {
+						            System.out.println(e.getMessage());
+						        }
 						        System.out.println(exchange(request(new Types.Method.Put(), "/again", Optional.of(ENDED),
 						                refused("other trailers, longer than the first ones were"))));
 						        for (int i = 0; i < 20; i++) {
@@ -386,9 +413,11 @@ class JavaWitImportTest {
 						Other[value=PURGE]
 						request-set-method of wasi:http/types@0.3.0 answered its error arm
 						200 probed PURGE /first false, sent
+						200 probed POST /posted and its body false, sent
 						200 probed POST /plain false, sent
 						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[the first trailers]], \
 						not sent: InternalError[value=Optional[the first trailers]]
+						The future of send of wasi:http/client@0.3.0 is closed
 						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[other trailers, \
 						longer than the first ones were]], not sent: InternalError[value=Optional[other trailers, longer than \
 						the first ones were]]
@@ -472,15 +501,17 @@ class JavaWitImportTest {
 
 	/**
 	 * What a host answers in pieces: an {@code async func} is a method that waits for its
-	 * answer, a {@code stream<T>} of values a {@code WitStream<T>} read so many at a
-	 * time, a {@code stream<u8>} an {@code InputStream}, a {@code future<result<_, E>>} a
+	 * answer, or one started that answers the {@code WitFuture} of its result, a
+	 * {@code stream<T>} of values a {@code WitStream<T>} read so many at a time, a
+	 * {@code stream<u8>} an {@code InputStream}, a {@code future<result<_, E>>} a
 	 * {@code WitFuture<Void>} whose error arm {@code get()} throws; a {@code stream<u8>}
 	 * the program hands the host, or an option of one, is a
 	 * {@code Consumer<OutputStream>} handed the writable end, which the program may write
-	 * after the call; a {@code future<T>} it hands the host is a {@code WitFuture<T>} of
-	 * its own, a result's error arm the {@code WitException} its {@code get()} throws.
-	 * Under a JDK, on the interpreter and on the JVM the program's provider answers them;
-	 * on a component the directive blocks on the async func and reads, writes and
+	 * after the call (a started one's while it runs); a {@code future<T>} it hands the
+	 * host is a {@code WitFuture<T>} of its own, a result's error arm the
+	 * {@code WitException} its {@code get()} throws. Under a JDK, on the interpreter and
+	 * on the JVM the program's provider answers them; on a component the directive blocks
+	 * on the async func that waits, starts the other in two halves, and reads, writes and
 	 * resolves the streams and the futures through aliases it adds to the WIT. What the
 	 * binding cannot read or write is refused at the method.
 	 */
@@ -524,6 +555,21 @@ class JavaWitImportTest {
 
 						    public InputStream dump(String sql) {
 						        return new ByteArrayInputStream("1,one\\n2,two\\n3,three\\n".getBytes(StandardCharsets.UTF_8));
+						    }
+
+						    // the bytes written while the call runs
+						    public WitFuture<Long> upload(Consumer<OutputStream> data) {
+						        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+						        data.accept(sink);
+						        return new WitFuture<>() {
+
+						            public Long get() {
+						                return (long) sink.size();
+						            }
+
+						            public void close() {
+						            }
+						        };
 						    }
 
 						    // the lines written by the time the future is read
@@ -588,6 +634,12 @@ class JavaWitImportTest {
 				            out.write("ive\\n".getBytes(StandardCharsets.UTF_8));
 				        }
 				        System.out.println(loaded.get());
+				        // an async func started, written while it runs
+				        WitFuture<Long> uploaded = host.upload(out -> writer[0] = out);
+				        try (OutputStream out = writer[0]) {
+				            out.write("uploaded".getBytes(StandardCharsets.UTF_8));
+				        }
+				        System.out.println(uploaded.get());
 				        // futures the program hands over: a value, a result's arms; no stream and one
 				        host.settle(WitFuture.of(true));
 				        System.out.println(host.total());
@@ -619,6 +671,7 @@ class JavaWitImportTest {
 				2,two
 				3,three
 				2
+				8
 				7
 				kept false
 				refused Refused[value=not kept] true
@@ -637,12 +690,14 @@ class JavaWitImportTest {
 		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "RowsMain",
 				"--java-source-path", API))
 			.isEqualTo(expected);
-		// a component: the directive blocks on the async funcs and adds an alias for
-		// each type it reads or writes, naming its built-ins in the table
+		// a component: the directive blocks on the async funcs that wait, names the two
+		// halves of the one started, and adds an alias for each type it reads or writes,
+		// naming its built-ins in the table
 		assertThat(read(main, true).get(0)).isEqualTo("(RONTOLISP:WIT-IMPORT \"rows.wit\" :INTERFACE "
 				+ "\"test:rows/rows@0.1.0\" :NAMES ((\"settle\" \"Rows$Wit.settle\") (\"query\" \"Rows$Wit.query\") "
 				+ "(\"total\" \"Rows$Wit.total\") (\"dump\" \"Rows$Wit.dump\") (\"load\" \"Rows$Wit.load\") "
-				+ "(\"confirm\" \"Rows$Wit.confirm\") (\"java-stream-0-read\" \"Rows$Wit.java-stream-0-read\") "
+				+ "(\"confirm\" \"Rows$Wit.confirm\") (\"upload-start\" \"Rows$Wit.upload-start\") "
+				+ "(\"upload-wait\" \"Rows$Wit.upload-wait\") (\"java-stream-0-read\" \"Rows$Wit.java-stream-0-read\") "
 				+ "(\"java-future-1-read\" \"Rows$Wit.java-future-1-read\") (\"java-future-1-drop-readable\" "
 				+ "\"Rows$Wit.java-future-1-drop-readable\") (\"java-stream-2-new\" \"Rows$Wit.java-stream-2-new\") "
 				+ "(\"java-stream-2-read\" \"Rows$Wit.java-stream-2-read\") (\"java-stream-2-write\" "
@@ -686,7 +741,11 @@ class JavaWitImportTest {
 		refusals.put("long upload(Consumer<OutputStream> data);",
 				"upload (upload of test:rows/rows@0.1.0, rows.wit:16): its parameter data is stream<u8>, a stream "
 						+ "the program hands an async func, which the call waits on while the host reads what the "
-						+ "program can write only after it");
+						+ "program can write only after it: a method answering the WitFuture of its result starts "
+						+ "the call, the stream written while it runs");
+		refusals.put("WitFuture<Long> total();",
+				"total (total of test:rows/rows@0.1.0, rows.wit:19) answers a WitFuture, which starts the call, and "
+						+ "the WIT has a member total-wait, the name the binding starts it or waits for it by");
 		refusals.put("void batch(List<Consumer<OutputStream>> parts);",
 				"batch (batch of test:rows/rows@0.1.0, rows.wit:17): its parameter parts is list<stream<u8>>, "
 						+ "carrying stream<u8>, which the binding hands the host only as a parameter of its own");
@@ -700,8 +759,10 @@ class JavaWitImportTest {
 				"load (load of test:rows/rows@0.1.0, rows.wit:21): its parameter data is stream<u8>, which the "
 						+ "program writes: Consumer<OutputStream> in Java, handed the writable end, not InputStream");
 		for (Map.Entry<String, String> refusal : refusals.entrySet()) {
-			write("refused/Rows.java", ROWS.replace("WitFuture<Long> load(Consumer<OutputStream> data);", "")
-				.replace("long total();", refusal.getKey()));
+			write("refused/Rows.java",
+					ROWS.replace("WitFuture<Long> load(Consumer<OutputStream> data);", "")
+						.replace("WitFuture<Long> upload(Consumer<OutputStream> data);", "")
+						.replace("long total();", refusal.getKey()));
 			assertThatThrownBy(() -> read(refused, false)).hasMessageContaining(refusal.getValue());
 		}
 	}
@@ -735,6 +796,7 @@ class JavaWitImportTest {
 			  confirm: func(note: option<stream<u8>>, done: future<result<string, error>>) -> string;
 			  flag: func(v: option<bool>);
 			  pending: func(all: list<future<u32>>);
+			  total-wait: func();
 			}
 			""";
 
@@ -760,6 +822,8 @@ class JavaWitImportTest {
 			    InputStream dump(String sql);
 
 			    WitFuture<Long> load(Consumer<OutputStream> data);
+
+			    WitFuture<Long> upload(Consumer<OutputStream> data);
 
 			    void settle(WitFuture<Boolean> done);
 
@@ -2372,17 +2436,18 @@ class JavaWitImportTest {
 	/**
 	 * {@code wasi:http/client@0.3.0}, whose request and response are
 	 * {@code wasi:http/types}' resources; a value type it takes is a member type of its
-	 * own.
+	 * own. Its {@code send} is started: the {@code WitFuture} of the response.
 	 */
 	private static final String HTTP_CLIENT = """
 			import java.util.Optional;
 
+			import am.ik.rontolisp.wit.WitFuture;
 			import am.ik.rontolisp.wit.WitImport;
 
 			@WitImport(value = "wasi:http/client@0.3.0", wit = "http.wit")
 			public interface Client {
 
-			    Types.Response send(Types.Request request);
+			    WitFuture<Types.Response> send(Types.Request request);
 
 			ERROR_CODE
 			}
