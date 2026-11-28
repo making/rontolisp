@@ -510,10 +510,11 @@ the contract and export nothing.
   else (a program reaching no WASI: `reduce`/`mapcar` bring stdout); a printing `--component`
   imports WASI, which the world does not.
 - Byte-identical before and after: 36 components and their WIT (count-vowels, shapes,
-  counters, rust-calls-lisp, stats, memory-store on `--component`, `--no-wasi`, `--optimize`;
-  the resource, shapes and pipeline apps, page-hits in Lisp, Java and Clojure,
-  lisp-calls-rust, the Java shapes, on two), a Preview 1, a `--no-gc` and a `--no-wasi` module
-  and its glue.
+  counters, rust-calls-lisp, stats, memory-store as `--component`, with `--no-wasi` and with
+  `--optimize`; the resource, shapes and pipeline apps, page-hits in Lisp, Java and Clojure,
+  lisp-calls-rust and the Java shapes as the first and the last; count-vowels on `--no-gc
+  --component`, the Java sockets echo), a Preview 1, a `--no-gc` and a `--no-wasi` module and
+  its glue.
 - Pins: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`,
   `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`,
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...` (reporter, `peeking`, `untouched`;
