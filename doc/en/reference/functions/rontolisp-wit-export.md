@@ -244,7 +244,8 @@ try {
 ### Resources
 
 A `resource` an exported interface declares is exported by a component
-(`--component`, with or without `--no-wasi`). Its functions are `defun`s named
+(`--component`, with or without `--no-wasi`, and `--no-gc --component` over
+integers: [On the scalar backend](#on-the-scalar-backend)). Its functions are `defun`s named
 as [`rontolisp:wit-import`](rontolisp-wit-import.md) binds them on the other
 side:
 
@@ -386,9 +387,61 @@ other and exports nothing; bound as the
 [`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
 runs one program both ways.
 
-A core module (`-o out.wasm` alone, `--no-wasi` without `--component`) and
-`--no-gc` refuse an interface that declares a resource or uses one the
-component imports, and so do the Clojure and the Java front ends.
+A core module (`-o out.wasm` alone, `--no-wasi` or `--no-gc` without
+`--component`) refuses an interface that declares a resource or uses one the
+component imports. `--no-gc --component` refuses one that uses a resource the
+component imports, since its `wit-import` binds no resource. The Clojure and
+the Java front ends refuse both.
+
+#### On the scalar backend
+
+`--no-gc --component` exports a resource whose functions take and answer the
+flat types. Its values are numbers, so the resource is the integer the
+constructor answers, and the handle carries that integer: the component keeps
+no value behind it.
+
+```console
+// wit/cells.wit
+package example:cells@0.1.0;
+
+interface cells {
+  resource cell {
+    constructor(v: u32);
+    get: func() -> u32;
+    plus: static func(a: cell, b: borrow<cell>) -> cell;
+  }
+  live: func() -> u32;
+}
+
+world provider {
+  export cells;
+}
+```
+
+```console
+(defvar *live* 0)
+
+(defun cell-new (v) (setq *live* (+ *live* 1)) v)
+(defun cell-get (self) self)
+(defun cell-plus (a b) (+ a b))
+(defun cell-drop (c) (setq *live* (- *live* 1)))
+(defun live () *live*)
+
+(rontolisp:wit-export "wit/cells.wit")
+```
+
+- The integer is a `u32`: a constructor answering one outside 0 to 4294967295
+  traps. A method and a function taking a borrowed handle receive the integer.
+- An owned handle received is the integer too, and the export releases the
+  handle without calling `cell-drop`: the value moved to the function (`plus`'s
+  `a`). `cell-drop` is called with the integer when a holder releases a handle;
+  a resource whose program defines no `cell-drop` has no destructor.
+- A handle crosses alone, as a parameter or a result. One inside a list, an
+  option, a record or any other compound type is refused with the compound
+  type, and a borrowed handle in a result as on the default backend.
+- A program that prints is refused: every export of a printing `--no-gc
+  --component` is an `async func`, which a constructor cannot be. Under
+  `--no-wasi` printing writes nothing, and the world compiles.
 
 ## What it checks
 
@@ -402,12 +455,15 @@ offending export:
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
 - a WIT type the export does not carry: beyond the flat types on a WASI module
-  or under `--no-gc`, and a `stream`, a `future` or a handle of a resource the
-  world declares anywhere
+  or under `--no-gc` (and a handle of a resource the world exports, alone, on
+  `--no-gc --component`), and a `stream`, a `future` or a handle of a resource
+  the world declares anywhere
 - a resource's function with no matching `defun` (`counter-new`, `counter-add`)
-  or another arity, a `counter-drop` that does not take the one value, and an
-  exported interface that declares a `resource`, or names one the component
-  imports, where the output is no component of the default backend
+  or another arity, a `counter-drop` that does not take the one value, an
+  exported interface that declares a `resource` where the output is no
+  component, or that names one the component imports where it is no component
+  of the default backend, and a printing `--no-gc --component` program whose
+  world exports a resource
 - a `use` clause of an exported interface that names a type that holds a
   handle; one whose type the scope has no name for (a world's) or whose name the
   scope gives another type; and one of the world naming a resource of an

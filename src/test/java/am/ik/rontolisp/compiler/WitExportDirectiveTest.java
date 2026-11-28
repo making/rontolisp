@@ -451,13 +451,82 @@ class WitExportDirectiveTest {
 			assertThatThrownBy(() -> lower(counters.formatted(refusal.getKey(), ""), Backend.WASM_COMPONENT, peeking))
 				.hasMessageStartingWith("world.wit:21: " + refusal.getValue());
 		}
-		// Only a component of the default backend defines a resource type, and a front
-		// end that binds its own names has no value for a handle.
-		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC, Backend.WASM_NO_GC_COMPONENT)) {
+		// Only a component defines a resource type, and a front end that binds its own
+		// names has no value for a handle.
+		for (Backend backend : List.of(Backend.WASM_GC, Backend.WASM_NO_GC)) {
 			assertThatThrownBy(() -> lower(counters.formatted("", ""), backend, counting)).as(backend.name())
-				.hasMessageStartingWith("world.wit:20: interface 'root:component/counters' declares the resource "
-						+ "'counter', which only a component of the default backend exports");
+				.hasMessage("world.wit:20: interface 'root:component/counters' declares the resource 'counter', "
+						+ "which only a component exports (--component): a core module defines no resource type");
 		}
+		// The scalar backend's resource is the integer its constructor answers, the
+		// handle's representation: an owned handle answered is made by the built-in
+		// the component defines, a borrowed one is the integer, an owned one received
+		// is taken in -- its representation read and the handle dropped, the
+		// destructor that drop runs told to call no <resource>-drop. The destructor is
+		// the program's <resource>-drop; a resource with none has none.
+		String cells = """
+				package root:component;
+
+				interface cells {
+				  resource cell {
+				    constructor(v: u32);
+				    get: func() -> u32;
+				    plus: static func(a: cell, b: borrow<cell>) -> cell;
+				  }
+				  resource token;
+				  live: func(t: borrow<token>) -> u32;
+				}
+
+				interface peek {
+				  use cells.{cell};
+				  twice: func(c: borrow<cell>) -> u32;
+				}
+
+				world analyzer {
+				  export cells;
+				  export peek;
+				}
+				""";
+		Map<String, List<String>> celling = new java.util.HashMap<>(Map.of("cell-new", List.of("v"), "cell-get",
+				List.of("self"), "cell-plus", List.of("a", "b"), "live", List.of("t"), "twice", List.of("c")));
+		celling.put("cell-drop", List.of("c"));
+		String cellsAt = " :WIT \"...\" :WIT-WORLD \"analyzer\" :WIT-AT \"world.wit:19\" ";
+		String module = " :FROM \"[export]root:component/cells\" :AS ";
+		String inCells = " :INTERFACE \"root:component/cells\")";
+		assertThat(lower(cells, Backend.WASM_NO_GC_COMPONENT, celling).stream()
+			.map(form -> form.print().replaceAll(":WIT \"[^\"]*\"", ":WIT \"...\"")))
+			.containsExactly("(DEFVAR RONTOLISP::*WIT-HANDLE-TAKEN* NIL)",
+					"(RONTOLISP:WASM-IMPORT '|cell%wit-new|" + module
+							+ "\"[resource-new]cell\" :PARAMS '(:U32) :RETURNS :U32)",
+					"(RONTOLISP:WASM-IMPORT '|cell%wit-rep|" + module
+							+ "\"[resource-rep]cell\" :PARAMS '(:U32) :RETURNS :U32)",
+					"(RONTOLISP:WASM-IMPORT '|cell%wit-drop|" + module + "\"[resource-drop]cell\" :PARAMS '(:U32))",
+					"(DEFUN |cell%wit-take| (HANDLE) (LET ((REP (|cell%wit-rep| HANDLE))) (SETQ "
+							+ "RONTOLISP::*WIT-HANDLE-TAKEN* T) (|cell%wit-drop| HANDLE) REP))",
+					"(DEFUN |cell%wit-dtor| (REP) (IF RONTOLISP::*WIT-HANDLE-TAKEN* (SETQ RONTOLISP::*WIT-HANDLE-TAKEN* "
+							+ "NIL) (|cell-drop| REP)))",
+					"(RONTOLISP:WASM-EXPORT '|cell%wit-dtor| :AS \"[dtor]cell\" :PARAMS '(:U32)" + inCells,
+					"(DEFUN |cell-new%wit-export| (P0) (|cell%wit-new| (|cell-new| P0)))",
+					"(RONTOLISP:WASM-EXPORT '|cell-new%wit-export| :AS \"[constructor]cell\" :PARAMS '(:U32)" + cellsAt
+							+ ":PARAM-NAMES '(|v|) :RETURNS :U32" + inCells,
+					"(RONTOLISP:WASM-EXPORT '|cell-get| :AS \"[method]cell.get\" :PARAMS '(:U32)" + cellsAt
+							+ ":PARAM-NAMES '(|self|) :RETURNS :U32" + inCells,
+					"(DEFUN |cell-plus%wit-export| (P0 P1) (|cell%wit-new| (|cell-plus| (|cell%wit-take| P0) P1)))",
+					"(RONTOLISP:WASM-EXPORT '|cell-plus%wit-export| :AS \"[static]cell.plus\" :PARAMS '(:U32 :U32)"
+							+ cellsAt + ":PARAM-NAMES '(|a| |b|) :RETURNS :U32" + inCells,
+					"(RONTOLISP:WASM-EXPORT '|live| :PARAMS '(:U32)" + cellsAt + ":PARAM-NAMES '(|t|) :RETURNS :U32"
+							+ inCells,
+					"(RONTOLISP:WASM-EXPORT '|twice| :PARAMS '(:U32)" + cellsAt.replace("19", "20")
+							+ ":PARAM-NAMES '(|c|) :RETURNS :U32 :INTERFACE \"root:component/peek\")");
+		celling.remove("cell-drop");
+		assertThat(printed(lower(cells, Backend.WASM_NO_GC_COMPONENT, celling))).doesNotContain("[dtor]", "DEFVAR",
+				"SETQ");
+		Map<String, List<String>> peeking = new java.util.HashMap<>(celling);
+		peeking.put("cell-peek", List.of("self"));
+		assertThatThrownBy(() -> lower(cells.replace("    get:", "    peek: func() -> borrow<cell>;\n    get:"),
+				Backend.WASM_NO_GC_COMPONENT, peeking))
+			.hasMessage("world.wit:20: export '[method]cell.peek': the WIT type of the result holds a borrowed handle "
+					+ "of the resource 'cell' in a result, which an export does not carry");
 		assertThatThrownBy(() -> WitExportDirective.describe(new Directive(WIT, null), counters.formatted("", ""), WIT))
 			.hasMessageStartingWith("world.wit:20: interface 'root:component/counters' declares the resource "
 					+ "'counter', which this language does not export");

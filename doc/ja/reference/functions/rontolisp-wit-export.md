@@ -236,7 +236,8 @@ try {
 ### リソース
 
 エクスポートするインタフェースが宣言する `resource` は、コンポーネント
-(`--component`、`--no-wasi` の有無は問いません) がエクスポートします。リソースの関数は
+(`--component`、`--no-wasi` の有無は問いません) がエクスポートします。`--no-gc --component`
+も整数でエクスポートします ([スカラーバックエンドのリソース](#on-the-scalar-backend))。リソースの関数は
 `defun` で実装し、名前は [`rontolisp:wit-import`](rontolisp-wit-import.md) が
 インポート側で束縛する名前と同じです。
 
@@ -376,9 +377,60 @@ world auditor {
 [`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)
 は、1 つのプログラムを両方の形で実行する例です。
 
-コアモジュール (`-o out.wasm` だけ、`--component` なしの `--no-wasi`) と `--no-gc` は、
+コアモジュール (`-o out.wasm` だけ、`--component` なしの `--no-wasi` または `--no-gc`) は、
 リソースを宣言するインタフェースと、コンポーネントがインポートするリソースを取り込む
-インタフェースを拒否します。Clojure と Java のフロントエンドも拒否します。
+インタフェースを拒否します。`--no-gc --component` は、コンポーネントがインポートする
+リソースを取り込むインタフェースを拒否します。この出力の `wit-import` はリソースを
+束縛しないからです。Clojure と Java のフロントエンドはどちらも拒否します。
+
+#### スカラーバックエンドのリソース
+
+`--no-gc --component` は、関数がフラットな型を受け渡すリソースをエクスポートします。
+このバックエンドの値は数なので、リソースはコンストラクタが返した整数で、ハンドルの
+表現はその整数です。コンポーネントはハンドルの背後に値を保持しません。
+
+```console
+// wit/cells.wit
+package example:cells@0.1.0;
+
+interface cells {
+  resource cell {
+    constructor(v: u32);
+    get: func() -> u32;
+    plus: static func(a: cell, b: borrow<cell>) -> cell;
+  }
+  live: func() -> u32;
+}
+
+world provider {
+  export cells;
+}
+```
+
+```console
+(defvar *live* 0)
+
+(defun cell-new (v) (setq *live* (+ *live* 1)) v)
+(defun cell-get (self) self)
+(defun cell-plus (a b) (+ a b))
+(defun cell-drop (c) (setq *live* (- *live* 1)))
+(defun live () *live*)
+
+(rontolisp:wit-export "wit/cells.wit")
+```
+
+- 整数は `u32` です。コンストラクタが 0 から 4294967295 の範囲外を返すとトラップします。
+  メソッドと、借用したハンドルを受け取る関数は、その整数を受け取ります。
+- 所有権ごと受け取ったハンドルも整数で届きます。エクスポートは `cell-drop` を呼ばずに
+  そのハンドルを解放します。値は関数に移ったからです (`plus` の `a`)。`cell-drop` は、
+  保持者がハンドルを解放したときにその整数で呼ばれます。プログラムが `cell-drop` を
+  定義しないリソースにはデストラクタがありません。
+- ハンドルを受け渡せるのは、引数か戻り値そのものとしてだけです。リスト、option、
+  レコードなどの複合型の中のハンドルは複合型と同じく拒否します。戻り値の借用ハンドルは、
+  既定のバックエンドと同じく拒否します。
+- 標準出力に書くプログラムは拒否します。標準出力に書く `--no-gc --component` の
+  エクスポートはすべて `async func` で、コンストラクタは `async` にできないからです。
+  `--no-wasi` では標準出力に何も書かないので、この world もコンパイルできます。
 
 ## チェックされる内容
 
@@ -391,12 +443,14 @@ world auditor {
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (エクスポートされる関数は必須引数のみを取ります。`&optional` / `&rest` /
   `&key` は拒否されます)
-- エクスポートで受け渡せない WIT 型。WASI モジュールと `--no-gc` ではフラットな型以外、
-  それ以外の出力でも `stream`、`future`、world が宣言するリソースのハンドル
+- エクスポートで受け渡せない WIT 型。WASI モジュールと `--no-gc` ではフラットな型以外
+  (`--no-gc --component` では、world がエクスポートするリソースのハンドルそのものも
+  受け渡せます)、それ以外の出力でも `stream`、`future`、world が宣言するリソースのハンドル
 - リソースの関数に対応する `defun` (`counter-new`、`counter-add`) がない、または引数の数が
-  合わない場合。値 1 つを取らない `counter-drop`。既定のバックエンドのコンポーネント
-  以外の出力で、`resource` を宣言するインタフェース、またはコンポーネントがインポートする
-  リソースを取り込むインタフェースをエクスポートする場合
+  合わない場合。値 1 つを取らない `counter-drop`。コンポーネント以外の出力で `resource` を
+  宣言するインタフェースを、既定のバックエンドのコンポーネント以外の出力でコンポーネントが
+  インポートするリソースを取り込むインタフェースをエクスポートする場合。world がリソースを
+  エクスポートし、標準出力に書く `--no-gc --component` のプログラム
 - エクスポートするインタフェースの `use` 句が、ハンドルを含む型を取り込む場合。また、
   取り込んだ型が含む型にスコープ (world) が名前を与えていない `use` 句と、スコープが別の
   型に与えている名前を使う `use` 句。world がエクスポートするインタフェースのリソースを

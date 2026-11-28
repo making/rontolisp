@@ -383,7 +383,79 @@ class WitOracleE2eTest {
 		assertThat(Files.readString(this.tempDir.resolve("untouched.wit"))).isEqualTo(oracle(flat))
 			.isEqualTo("package root:component;\n\nworld root {\n  export twice: func(x: u32) -> u32;\n}\n");
 		assertTargets(this.tempDir.resolve("wit/relaying.wit"), "untouched", this.tempDir.resolve("untouched.wasm"));
+		// The scalar backend's component defines a resource the same way, the integer
+		// its constructor answers the representation; a resource whose program defines
+		// no <resource>-drop has no destructor.
+		Path cells = Files.writeString(this.tempDir.resolve("cells.lisp"), CELLS_PROVIDER);
+		Files.writeString(this.tempDir.resolve("cells.wit"), CELLS);
+		Path undropped = Files.writeString(this.tempDir.resolve("undropped.lisp"),
+				CELLS_PROVIDER.replace("(defun cell-drop (c) (setq *live* (- *live* 1)))\n", ""));
+		for (Path source : List.of(cells, undropped)) {
+			for (List<String> shape : List.of(List.of("--component", "--no-gc"),
+					List.of("--component", "--no-gc", "--no-wasi"))) {
+				byte[] scalar = compileFileViaCli(source, "scalar", shape);
+				assertThat(Files.readString(this.tempDir.resolve("scalar.wit"))).as(source + " " + shape)
+					.isEqualTo(oracle(scalar))
+					.contains("    resource cell {\n      constructor(v: u32);\n      get: func() -> u32;\n"
+							+ "      plus: static func(a: cell, b: borrow<cell>) -> cell;\n    }");
+				assertTargets(this.tempDir.resolve("cells.wit"), "provider", this.tempDir.resolve("scalar.wasm"));
+			}
+		}
 	}
+
+	// A world of a resource and the flat types alone, which the scalar backend exports.
+	private static final String CELLS = """
+			package example:cells@0.1.0;
+
+			interface cells {
+			  resource cell {
+			    constructor(v: u32);
+			    get: func() -> u32;
+			    plus: static func(a: cell, b: borrow<cell>) -> cell;
+			  }
+			  live: func() -> u32;
+			}
+
+			interface peek {
+			  use cells.{cell};
+			  twice: func(c: borrow<cell>) -> u32;
+			}
+
+			world provider {
+			  export cells;
+			  export peek;
+			}
+			""";
+
+	// CELLS implemented over integers: a cell is its value.
+	private static final String CELLS_PROVIDER = """
+			(defvar *live* 0)
+			(defun cell-new (v) (setq *live* (+ *live* 1)) v)
+			(defun cell-get (self) self)
+			(defun cell-plus (a b) (+ a b))
+			(defun cell-drop (c) (setq *live* (- *live* 1)))
+			(defun live () *live*)
+			(defun twice (c) (* 2 c))
+			(rontolisp:wit-export "cells.wit" :world provider)
+			""";
+
+	// CELLS' caller: a cell lent, one handed over and one answered, and none left.
+	private static final String CELLS_CALLER = """
+			(rontolisp:wit-import "cells.wit" :interface "example:cells/cells" :package c)
+			(rontolisp:wit-import "cells.wit" :interface "example:cells/peek" :package p)
+			(let ((a (c:cell-new 3))
+			      (b (c:cell-new 40)))
+			  (format t "get   ~s~%" (c:cell-get a))
+			  (format t "twice ~s~%" (p:twice b))
+			  (format t "live  ~s~%" (c:live))
+			  (let ((s (c:cell-plus a b)))
+			    (format t "plus  ~s~%" (c:cell-get s))
+			    (format t "live  ~s~%" (c:live))
+			    (c:cell-drop s))
+			  (format t "live  ~s~%" (c:live))
+			  (c:cell-drop b)
+			  (format t "live  ~s~%" (c:live)))
+			""";
 
 	// Worlds over the example's registry, implemented by RELAY: an exported interface
 	// takes the counters another component keeps, lent and owned, alone and inside a
@@ -575,6 +647,27 @@ class WitOracleE2eTest {
 		assertThat(composedRun("caller", "counters", registry, "relay", "example:counters/relay@0.1.0").lines())
 			.containsExactly("bump-all 26", "label    \"b\"", "fresh    (:NAME \"f\" :VALUE 1)",
 					"pick     (:NAME \"x\" :VALUE 3)", "pick     NIL", "live     2", "live     0");
+		// The scalar backend's resource, called by the default backend's command: what
+		// plus takes over is not released, what it answers is a new handle.
+		Files.writeString(this.tempDir.resolve("cells.wit"), CELLS);
+		compileFileViaCli(Files.writeString(this.tempDir.resolve("cells.lisp"), CELLS_PROVIDER), "scalar",
+				List.of("--component", "--no-gc"));
+		compileFileViaCli(Files.writeString(this.tempDir.resolve("cells-caller.lisp"), CELLS_CALLER), "cells-caller",
+				List.of("--component"));
+		Path cellsComposed = this.tempDir.resolve("cells-composed.wasm");
+		Process composeCells = new ProcessBuilder("wasm-tools", "compose",
+				this.tempDir.resolve("cells-caller.wasm").toString(), "-d",
+				this.tempDir.resolve("scalar.wasm").toString(), "-o", cellsComposed.toString())
+			.redirectErrorStream(true)
+			.start();
+		String composingCells = new String(composeCells.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(composeCells.waitFor()).as(composingCells).isZero();
+		Process runCells = new ProcessBuilder("wasmtime", "run", cellsComposed.toString()).redirectErrorStream(true)
+			.start();
+		String printedCells = new String(runCells.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(runCells.waitFor()).as(printedCells).isZero();
+		assertThat(printedCells.lines()).containsExactly("get   3", "twice 80", "live  2", "plus  43", "live  2",
+				"live  1", "live  0");
 		// A call made while another waits: an async func's call is a task that waits
 		// inside the component, and the host runs a plain func of the same instance
 		// meanwhile. What the waiting call holds in memory -- here the place its own

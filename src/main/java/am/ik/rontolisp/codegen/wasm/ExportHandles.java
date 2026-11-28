@@ -40,7 +40,8 @@ record ExportHandles(int repNew, int repValue, int repTake, Map<String, Resource
 	 * The fields the core module imports a resource's built-ins under, before the
 	 * resource's name; the module is {@link #module}.
 	 */
-	static final List<String> FIELDS = List.of("[resource-new]", "[resource-rep]", "[resource-drop]");
+	static final List<String> FIELDS = List.of(WitExportDirective.RESOURCE_NEW_PREFIX,
+			WitExportDirective.RESOURCE_REP_PREFIX, WitExportDirective.RESOURCE_DROP_PREFIX);
 
 	/** The position of {@code canon resource.new} in {@link #FIELDS}. */
 	static final int NEW = 0;
@@ -68,7 +69,18 @@ record ExportHandles(int repNew, int repValue, int repTake, Map<String, Resource
 	 * @return the import module name
 	 */
 	static String module(String ifaceId) {
-		return "[export]" + ifaceId;
+		return WitExportDirective.EXPORTED_MODULE_PREFIX + ifaceId;
+	}
+
+	/**
+	 * Whether a host import is one of the built-ins of an exported interface's resources
+	 * ({@link #module}), which the component defines rather than imports: what the scalar
+	 * backend's {@code rontolisp:wit-export} declares them as.
+	 * @param module the import module name
+	 * @return whether it names such a built-in's module
+	 */
+	static boolean builtin(String module) {
+		return module.startsWith(WitExportDirective.EXPORTED_MODULE_PREFIX);
 	}
 
 	/**

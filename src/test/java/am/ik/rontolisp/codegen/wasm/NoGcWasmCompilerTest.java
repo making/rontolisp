@@ -3703,6 +3703,16 @@ class NoGcWasmCompilerTest {
 				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
 				""")).isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("both bind \"env\".\"add\", which --no-gc --component cannot import twice");
+		// A resource's built-in is the component's own, of a resource the world exports.
+		assertThatThrownBy(() -> compileComponent(
+				"""
+						(rontolisp:wasm-import 'made :from "[export]docs:x/y" :as "[resource-new]r" :params '(:u32) :returns :u32)
+						(defun run (n) (made n))
+						(rontolisp:wasm-export 'run :as "run" :params '(:u32) :returns :u32)
+						"""))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("binds \"[export]docs:x/y\".\"[resource-new]r\", which is no built-in of a "
+					+ "resource the world exports");
 	}
 
 	@Test

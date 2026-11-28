@@ -70,11 +70,12 @@ import org.jspecify.annotations.Nullable;
  * named as an import of the interface binds them ({@code counter-new},
  * {@code counter-add}), and the value the constructor answers is the resource -- the
  * component keeps it behind the handle a host holds ({@code wit-resource.lisp}), and a
- * function taking or answering the resource takes or answers that value. A resource of an
- * interface the world does not export, which an exported interface or the world names
- * with {@code use}, is one the component imports: its handle is the integer
- * {@code rontolisp:wit-import} gives one, and a borrowed one is released when the
- * function has answered.
+ * function taking or answering the resource takes or answers that value; on the scalar
+ * backend's component the value is an integer, the handle's representation itself
+ * ({@code ScalarHandles}). A resource of an interface the world does not export, which an
+ * exported interface or the world names with {@code use}, is one the component imports:
+ * its handle is the integer {@code rontolisp:wit-import} gives one, and a borrowed one is
+ * released when the function has answered.
  *
  * <p>
  * This directive covers the export side only. A world's {@code import} interface items
@@ -354,6 +355,7 @@ public final class WitExportDirective {
 		boolean typed = (backend == Backend.WASM_COMPONENT || backend == Backend.WASM_NO_GC_COMPONENT)
 				&& namesTypes(implemented, witPath);
 		Set<String> destructors = new java.util.HashSet<>();
+		ScalarHandles handles = backend == Backend.WASM_NO_GC_COMPONENT ? new ScalarHandles(implemented) : null;
 		boolean[] exports = new boolean[1];
 		walk(implemented, witPath, true, false, new ExportVisitor() {
 			@Override
@@ -361,13 +363,13 @@ public final class WitExportDirective {
 					WitItem.InterfaceDef scope) {
 				exports[0] = true;
 				forms.addAll(exportForms(name, defun, func, witPath, locations, item, defuns, backend, ifaceId,
-						directive, implemented, scope, document, typed));
+						directive, implemented, scope, document, typed, handles));
 			}
 
 			@Override
 			public void resource(String ifaceId, WitItem.ResourceDef resource, WitItem item) {
 				forms.addAll(destructorForms(ifaceId, resource, witPath, locations, item, defuns, backend, directive,
-						destructors));
+						destructors, handles));
 			}
 
 			@Override
@@ -385,6 +387,9 @@ public final class WitExportDirective {
 		if (!exports[0]) {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
+		}
+		if (handles != null) {
+			forms.addAll(0, handles.forms());
 		}
 		return forms;
 	}
@@ -1275,7 +1280,7 @@ public final class WitExportDirective {
 	private static List<LispVal> exportForms(String name, String defun, WitFunc func, String witPath,
 			WitLocations locations, WitItem item, Defuns defuns, Backend backend, @Nullable String ifaceId,
 			Directive directive, Implemented implemented, WitItem.InterfaceDef scope,
-			java.util.function.Supplier<String> document, boolean typed) {
+			java.util.function.Supplier<String> document, boolean typed, @Nullable ScalarHandles handles) {
 		Map<String, String> names = directive.names();
 		checkLabel(name, witPath, locations, item);
 		String defunName = defun;
@@ -1324,9 +1329,17 @@ public final class WitExportDirective {
 		WitResolver resolver = implemented.resolver();
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> paramNames = new ArrayList<>();
+		// On the scalar backend's component, a handle of a resource the world exports
+		// is the integer the resource is: what each argument is taken in by (null for
+		// the argument itself), and what the result is answered by.
+		List<@Nullable String> takes = new ArrayList<>();
+		String answers = null;
 		boolean flat = true;
 		for (WitFunc.Param param : func.params()) {
-			BoundaryType boundary = flatDesignator(param.type(), resolver, scope);
+			ScalarHandles.Handle handle = handles == null ? null : handles.of(param.type(), scope, ifaceId);
+			takes.add(handle != null && handle.owned() ? handle.take() : null);
+			BoundaryType boundary = handle != null ? ScalarHandles.CARRIER
+					: flatDesignator(param.type(), resolver, scope);
 			if (boundary == null) {
 				flat = false;
 				requireCanonical(param.type(), name, param.name(), witPath, locations, item, backend, implemented,
@@ -1340,7 +1353,14 @@ public final class WitExportDirective {
 		WitType result = func.result();
 		String returns = BoundaryType.VOID.designator();
 		if (result != null) {
-			BoundaryType boundary = flatDesignator(result, resolver, scope);
+			ScalarHandles.Handle handle = handles == null ? null : handles.of(result, scope, ifaceId);
+			if (handle != null && !handle.owned()) {
+				throw error(witPath, locations, item,
+						"export '" + name + "': the WIT type of the result holds a "
+								+ "borrowed handle of the resource '" + handle.name()
+								+ "' in a result, which an export does " + "not carry");
+			}
+			BoundaryType boundary = handle != null ? ScalarHandles.CARRIER : flatDesignator(result, resolver, scope);
 			if (boundary == null) {
 				flat = false;
 				requireCanonical(result, name, "the result", witPath, locations, item, backend, implemented, scope,
@@ -1349,10 +1369,17 @@ public final class WitExportDirective {
 			else {
 				returns = boundary.designator();
 			}
+			if (handle != null) {
+				answers = handle.answer();
+			}
 		}
 
 		List<LispVal> forms = new ArrayList<>();
 		String exported = defunName;
+		if (answers != null || takes.stream().anyMatch(java.util.Objects::nonNull)) {
+			exported = java.util.Objects.requireNonNull(handles).unique(defunName + "%wit-export");
+			forms.add(handleDefun(exported, defunName, takes, answers));
+		}
 		// A result at the top of a canonical export's answer is the settled mapping's:
 		// the function answers the ok arm and signals rontolisp:wit-error for the error
 		// arm, as a provider does. The boundary lowers the envelope, which a defun
@@ -1366,7 +1393,7 @@ public final class WitExportDirective {
 		List<LispVal> out = new ArrayList<>();
 		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)));
 		out.add(quote(new LispSymbol(exported)));
-		if (names != null || !flat || !defun.equals(name)) {
+		if (names != null || !flat || !defun.equals(name) || !exported.equals(defunName)) {
 			// the label, since the function's own name derives no export name (a
 			// c%ns/name symbol lowercased is no label, nor is the envelope defun's or
 			// a resource function's)
@@ -1427,14 +1454,13 @@ public final class WitExportDirective {
 	// (rontolisp:wasm-export 'counter%wit-dtor :as "[dtor]counter" :params '(:s32)
 	// :interface "docs:res/counters@0.1.0")
 	private static List<LispVal> destructorForms(String ifaceId, WitItem.ResourceDef resource, String witPath,
-			WitLocations locations, WitItem item, Defuns defuns, Backend backend, Directive directive,
-			Set<String> made) {
-		if (backend.isNoGc() || backend == Backend.WASM_GC) {
+			WitLocations locations, WitItem item, Defuns defuns, Backend backend, Directive directive, Set<String> made,
+			@Nullable ScalarHandles handles) {
+		if (backend == Backend.WASM_NO_GC || backend == Backend.WASM_GC) {
 			throw error(witPath, locations, item,
 					"interface '" + ifaceId + "' declares the resource '" + resource.name()
-							+ "', which only a component of the default backend exports (--component without "
-							+ "--no-gc): " + (backend.isNoGc() ? "the scalar backend holds no value a handle stands for"
-									: "a core module defines no resource type"));
+							+ "', which only a component exports (--component): a core module defines no "
+							+ "resource type");
 		}
 		// the program's destructor, when it defines one
 		String member = resource.name() + "-drop";
@@ -1458,6 +1484,11 @@ public final class WitExportDirective {
 				&& (lambdaList.size() != 1 || PackageRegistry.isClLambdaListKeyword(lambdaList.get(0)))) {
 			throw error(witPath, locations, item, "the destructor of the resource '" + resource.name()
 					+ "' maps to (defun " + member + " ...), which takes one required parameter, the value");
+		}
+		if (handles != null) {
+			// the scalar backend's: made once the exports say which handles they take
+			handles.resource(ifaceId, resource.name()).drop = lambdaList == null ? null : hook;
+			return List.of();
 		}
 		if (backend != Backend.WASM_COMPONENT) {
 			// the interpreter and the JVM compile no export
@@ -1496,6 +1527,243 @@ public final class WitExportDirective {
 	 * the exported interface.
 	 */
 	public static final String DESTRUCTOR_PREFIX = "[dtor]";
+
+	/**
+	 * The module a core module imports the canonical built-ins of an exported interface's
+	 * resources from, before the interface's id: {@code [export]docs:res/counters@0.1.0}.
+	 */
+	public static final String EXPORTED_MODULE_PREFIX = "[export]";
+
+	/** The field of {@code canon resource.new}, before the resource's name. */
+	public static final String RESOURCE_NEW_PREFIX = "[resource-new]";
+
+	/** The field of {@code canon resource.rep}, before the resource's name. */
+	public static final String RESOURCE_REP_PREFIX = "[resource-rep]";
+
+	/** The field of {@code canon resource.drop}, before the resource's name. */
+	public static final String RESOURCE_DROP_PREFIX = "[resource-drop]";
+
+	// The export of a function that takes or answers handles on the scalar backend's
+	// component: each owned argument taken in, the owned result answered.
+	//
+	// (defun counter-merge%wit-export (p0 p1)
+	// (counter%wit-new (counter-merge (counter%wit-take p0) p1)))
+	private static LispVal handleDefun(String name, String target, List<@Nullable String> takes,
+			@Nullable String answers) {
+		List<LispVal> parameters = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(target));
+		for (int i = 0; i < takes.size(); i++) {
+			LispSymbol parameter = new LispSymbol("P" + i);
+			parameters.add(parameter);
+			String take = takes.get(i);
+			call.add(take == null ? parameter : list(List.of(new LispSymbol(take), parameter)));
+		}
+		LispVal body = answers == null ? list(call) : list(List.of(new LispSymbol(answers), list(call)));
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(parameters), body));
+	}
+
+	/**
+	 * The handles of the resources a world exports on the scalar backend's component
+	 * ({@code --no-gc --component}), whose values are numbers: a resource is the integer
+	 * its constructor answers, and that integer is the handle's representation -- there
+	 * is no store. An owned handle answered is {@code canon resource.new} of it, a
+	 * borrowed one received is the integer, an owned one received is
+	 * {@code canon resource.rep} and then {@code canon resource.drop}. That drop calls
+	 * the destructor at once, which a flag tells to call no {@code <resource>-drop}: the
+	 * export took the value over. The built-ins are core imports under the canonical
+	 * ABI's names, which the component defines over its resource type; the destructor is
+	 * the program's {@code <resource>-drop}, and a resource the program defines none for
+	 * has none.
+	 */
+	private static final class ScalarHandles {
+
+		/** What a handle and a representation cross as: the 32 bits, unsigned. */
+		static final BoundaryType CARRIER = BoundaryType.U32;
+
+		private final Implemented implemented;
+
+		private final Map<String, Resource> resources = new java.util.LinkedHashMap<>();
+
+		private final Set<String> names = new java.util.HashSet<>();
+
+		ScalarHandles(Implemented implemented) {
+			this.implemented = implemented;
+		}
+
+		// A handle an export's signature names: the resource, its name as written, and
+		// whether it is owned.
+		record Handle(Resource resource, String name, boolean owned) {
+
+			// What an owned handle received is taken in by.
+			String take() {
+				this.resource.taken = true;
+				return this.resource.base + "%wit-take";
+			}
+
+			// What an owned handle answered is made by.
+			String answer() {
+				this.resource.answered = true;
+				return this.resource.base + "%wit-new";
+			}
+
+		}
+
+		// An exported resource: its interface, its name there, the name its helpers are
+		// spelled from, the program's destructor, and whether an export takes an owned
+		// handle of it in or answers one.
+		static final class Resource {
+
+			final String ifaceId;
+
+			final String name;
+
+			final String base;
+
+			@Nullable String drop;
+
+			boolean taken;
+
+			boolean answered;
+
+			Resource(String ifaceId, String name, String base) {
+				this.ifaceId = ifaceId;
+				this.name = name;
+				this.base = base;
+			}
+
+		}
+
+		Resource resource(String ifaceId, String name) {
+			return this.resources.computeIfAbsent(ifaceId + "#" + name,
+					key -> new Resource(ifaceId, name, unique(name)));
+		}
+
+		// A name no other helper has: two interfaces' resources of one name are two.
+		String unique(String name) {
+			String made = name;
+			for (int n = 1; !this.names.add(made); n++) {
+				made = name + "%" + n;
+			}
+			return made;
+		}
+
+		// The handle a type of an exported interface's function is, or null: a type
+		// that is none, or a handle of a resource the component imports.
+		@Nullable Handle of(WitType type, WitItem.InterfaceDef scope, @Nullable String ifaceId) {
+			if (ifaceId == null) {
+				return null;
+			}
+			WitResolver resolver = this.implemented.resolver();
+			Scoped scoped = resolveAliases(type, resolver, scope);
+			String written;
+			boolean owned;
+			switch (scoped.type()) {
+				case WitType.OwnOf own -> {
+					written = own.resource();
+					owned = true;
+				}
+				case WitType.BorrowOf borrow -> {
+					written = borrow.resource();
+					owned = false;
+				}
+				case WitType.Named named -> {
+					written = named.name();
+					owned = true;
+				}
+				default -> {
+					return null;
+				}
+			}
+			WitResolver.Owned found = resolver.resolveOwned(scoped.scope(), written);
+			if (found == null || !(found.item() instanceof WitItem.ResourceDef def)) {
+				return null;
+			}
+			String id = found.owner() == scope ? ifaceId : this.implemented.exportedId(found.owner());
+			return id == null ? null : new Handle(resource(id, def.name()), written, owned);
+		}
+
+		// The built-ins the exports call, the functions over them and the destructors:
+		//
+		// (rontolisp:wasm-import 'counter%wit-new :from "[export]docs:res/counters"
+		// :as "[resource-new]counter" :params '(:u32) :returns :u32)
+		// (defun counter%wit-take (handle)
+		// (let ((rep (counter%wit-rep handle)))
+		// (setq rontolisp::*wit-handle-taken* t) (counter%wit-drop handle) rep))
+		// (defun counter%wit-dtor (rep)
+		// (if rontolisp::*wit-handle-taken* (setq rontolisp::*wit-handle-taken* nil)
+		// (counter-drop rep)))
+		// (rontolisp:wasm-export 'counter%wit-dtor :as "[dtor]counter" :params '(:u32)
+		// :interface "docs:res/counters")
+		List<LispVal> forms() {
+			List<LispVal> forms = new ArrayList<>();
+			LispSymbol flag = new LispSymbol(
+					PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_HANDLE_TAKEN));
+			if (this.resources.values().stream().anyMatch(resource -> resource.taken && resource.drop != null)) {
+				forms.add(list(List.of(new LispSymbol(LispNames.DEFVAR), flag, LispNil.INSTANCE)));
+			}
+			LispSymbol handle = new LispSymbol("HANDLE");
+			LispSymbol rep = new LispSymbol("REP");
+			for (Resource resource : this.resources.values()) {
+				String module = EXPORTED_MODULE_PREFIX + resource.ifaceId;
+				if (resource.answered) {
+					forms.add(builtin(resource.base + "%wit-new", module, RESOURCE_NEW_PREFIX + resource.name, true));
+				}
+				String drop = resource.drop;
+				if (resource.taken) {
+					LispSymbol repOf = new LispSymbol(resource.base + "%wit-rep");
+					LispSymbol release = new LispSymbol(resource.base + "%wit-drop");
+					forms.add(builtin(repOf.name(), module, RESOURCE_REP_PREFIX + resource.name, true));
+					forms.add(builtin(release.name(), module, RESOURCE_DROP_PREFIX + resource.name, false));
+					List<LispVal> body = new ArrayList<>();
+					body.add(new LispSymbol(LispNames.LET));
+					body.add(list(List.of(list(List.of(rep, list(List.of(repOf, handle)))))));
+					if (drop != null) {
+						body.add(list(List.of(new LispSymbol(LispNames.SETQ), flag, LispTrue.INSTANCE)));
+					}
+					body.add(list(List.of(release, handle)));
+					body.add(rep);
+					forms.add(list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(resource.base + "%wit-take"),
+							list(List.of(handle)), list(body))));
+				}
+				if (drop == null) {
+					continue;
+				}
+				String destructor = drop;
+				if (resource.taken) {
+					destructor = resource.base + "%wit-dtor";
+					LispVal body = list(List.of(new LispSymbol(LispNames.IF), flag,
+							list(List.of(new LispSymbol(LispNames.SETQ), flag, LispNil.INSTANCE)),
+							list(List.of(new LispSymbol(drop), rep))));
+					forms.add(list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(destructor),
+							list(List.of(rep)), body)));
+				}
+				forms.add(list(
+						List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_EXPORT)),
+								quote(new LispSymbol(destructor)), new LispSymbol(":AS"),
+								new LispString(DESTRUCTOR_PREFIX + resource.name), new LispSymbol(":PARAMS"),
+								quote(list(List.of(new LispSymbol(CARRIER.designator())))),
+								new LispSymbol(":INTERFACE"), new LispString(resource.ifaceId))));
+			}
+			return forms;
+		}
+
+		// (rontolisp:wasm-import 'name :from "module" :as "field" :params '(:u32)
+		// [:returns :u32])
+		private static LispVal builtin(String name, String module, String field, boolean answers) {
+			List<LispVal> out = new ArrayList<>(
+					List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_IMPORT)),
+							quote(new LispSymbol(name)), new LispSymbol(":FROM"), new LispString(module),
+							new LispSymbol(":AS"), new LispString(field), new LispSymbol(":PARAMS"),
+							quote(list(List.of(new LispSymbol(CARRIER.designator()))))));
+			if (answers) {
+				out.add(new LispSymbol(":RETURNS"));
+				out.add(new LispSymbol(CARRIER.designator()));
+			}
+			return list(out);
+		}
+
+	}
 
 	/**
 	 * Whether a lowered program exports a resource, and so calls the slot store of

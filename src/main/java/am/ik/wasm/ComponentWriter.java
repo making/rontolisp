@@ -581,6 +581,15 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a resource type a component defines with no destructor,
+	 * {@code (resource (rep i32))}: releasing a handle of it calls nothing.
+	 * @return the encoded type entry
+	 */
+	public static byte[] definedResource() {
+		return enc(w -> w.write(0x3f).write(0x7f).write(0x00));
+	}
+
+	/**
 	 * Encode a component import of a resource type (externdesc {@code type} with a
 	 * {@code sub resource} bound): how a nested component takes a resource of the
 	 * component around it. The import appends one entry to the type index space.

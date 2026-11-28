@@ -759,6 +759,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " program that runs once, as a command, compiles on the default GC backend (drop --no-gc)");
 		}
 
+		if (this.component) {
+			validateBuiltins(importDecls.values(), exportDecls);
+		}
 		WasmExportCompiler.checkNames(exportDecls, true, this.component);
 		// Validate every export against its defun: scalar boundary types only, the named
 		// function must be a top-level defun, and the arity must match.
@@ -1026,9 +1029,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// lifts -- and the nogc (empty-world) WIT.
 			final boolean printAdapter = mem.printUsed() && !this.noWasi;
 			refuseWaitsOutsideAnAsyncTask(exportDecls, importDecls, calls, printAdapter);
-			this.componentWit = WitEmitter.emitNoGc(
-					printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls, hostImports);
-			return NoGcWasmComponentBuilder.build(module, exportDecls, printAdapter, hostImports);
+			// A resource's destructor is a core export its type names, and its
+			// built-ins are functions the component defines: neither is lifted nor
+			// imported.
+			List<WasmExportCompiler.Decl> lifted = exportDecls.stream()
+				.filter(decl -> decl.destructorOf() == null)
+				.toList();
+			List<WasmImportCompiler.Decl> userImports = hostImports.stream()
+				.filter(decl -> !ExportHandles.builtin(decl.module()))
+				.toList();
+			if (printAdapter && !ExportedResources.of(lifted).isEmpty()) {
+				// Every export of a printing program lifts async, which a constructor
+				// cannot be, and a destructor runs in no task that may wait.
+				throw new UnsupportedOperationException("the program prints, and its world exports a resource: the "
+						+ "exports of a printing --no-gc --component are async functions (stdout is a stream they "
+						+ "wait on), which a resource's constructor cannot be; compile it with --no-wasi, where "
+						+ "printing writes nothing, or drop the printing");
+			}
+			this.componentWit = WitEmitter
+				.emitNoGc(printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, lifted, userImports);
+			return NoGcWasmComponentBuilder.build(module, lifted, printAdapter, userImports);
 		}
 		return module;
 	}
@@ -1137,7 +1157,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * @param decl the parsed export directive
 	 */
 	private static void validateComponentExport(WasmExportCompiler.Decl decl) {
-		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
+		if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()
+				&& !WasmExportCompiler.isResourceExportName(decl)) {
 			throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
 					+ "' is not a valid component-model export name (lower-kebab-case words, e.g."
 					+ " \"sum-squared\"); rename it with :as \"kebab-name\"");
@@ -1159,7 +1180,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ WasmMemoryIntrinsic.MODULE + "\", which is a core-module boundary: a component's memory is"
 					+ " crossed through the canonical ABI, not by address");
 		}
-		if (this.component) {
+		if (this.component && !ExportHandles.builtin(decl.module())) {
 			validateComponentImport(decl);
 		}
 		if (decl.async()) {
@@ -1168,6 +1189,31 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					+ " value to represent one (the whole async surface is rejected here). Drop :async t -- the call"
 					+ " answers the function's value; :blocking t declares a function the call waits for (an `async"
 					+ " func` of a component)");
+		}
+	}
+
+	/**
+	 * Refuses a built-in of a resource ({@link ExportHandles#builtin}) the world the
+	 * exports implement does not export: the component defines the built-ins of those
+	 * alone, and the core module could import nothing else under that module.
+	 * @param imports every import declaration
+	 * @param exportDecls the export directives
+	 */
+	private static void validateBuiltins(Collection<WasmImportCompiler.Decl> imports,
+			List<WasmExportCompiler.Decl> exportDecls) {
+		Set<String> defined = new HashSet<>();
+		for (ExportedResources.Resource resource : ExportedResources.of(exportDecls)) {
+			for (String field : ExportHandles.FIELDS) {
+				defined.add(ExportHandles.module(resource.ifaceId()) + "\u0000" + field + resource.name());
+			}
+		}
+		for (WasmImportCompiler.Decl decl : imports) {
+			if (ExportHandles.builtin(decl.module()) && !defined.contains(decl.module() + "\u0000" + decl.field())) {
+				throw new UnsupportedOperationException("rontolisp:wasm-import '" + decl.name() + "' binds \""
+						+ decl.module() + "\".\"" + decl.field() + "\", which is no built-in of a resource the world "
+						+ "exports: the component defines those of the resources of the interfaces "
+						+ "rontolisp:wit-export exports, and imports nothing under that module");
+			}
 		}
 	}
 

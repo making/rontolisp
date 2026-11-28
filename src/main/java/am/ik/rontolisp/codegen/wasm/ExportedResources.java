@@ -10,6 +10,7 @@ import java.util.Set;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.wasm.ComponentWriter;
 import am.ik.wasm.Type;
+import am.ik.wasm.WasmExports;
 import am.ik.wasm.WasmImports;
 import am.ik.wasm.WasmShimModules;
 import am.ik.wit.WitItem;
@@ -17,7 +18,9 @@ import am.ik.wit.WitItem;
 /**
  * The resources a world exports, as the component around the core module defines them:
  * one resource type each, its three canonical built-ins for the core module to import,
- * and its destructor, which the core module exports.
+ * and its destructor where the core module exports one (the scalar backend's resource
+ * whose program defines no {@code <resource>-drop} has none:
+ * {@code (resource (rep i32))}).
  *
  * <p>
  * The shape is the one {@code wasm-tools component new} gives an exported resource (read
@@ -92,20 +95,22 @@ final class ExportedResources {
 	 * instantiation.
 	 *
 	 * @param resources the resources, in world order
+	 * @param destructed the resources with a destructor, in world order: the slots of the
+	 * shim's table
 	 * @param typeOf the component type index of each resource's type, by
 	 * {@link Resource#key}
-	 * @param coreModules the core modules added (the shim and the fixup)
+	 * @param coreModules the core modules added (the shim and the fixup, or none)
 	 * @param coreInstances the core instances added
 	 * @param coreFuncs the core functions added
 	 * @param builtins the core instance of each interface's built-ins, by the module name
 	 * the core module imports them under
-	 * @param shimInstance the core instance index of the shim
-	 * @param fixupModule the core module index of the fixup
+	 * @param shimInstance the core instance index of the shim, or {@code -1}
+	 * @param fixupModule the core module index of the fixup, or {@code -1}
 	 */
-	record Defined(List<Resource> resources, Map<String, Integer> typeOf, int coreModules, int coreInstances,
-			int coreFuncs, Map<String, Integer> builtins, int shimInstance, int fixupModule) {
+	record Defined(List<Resource> resources, List<Resource> destructed, Map<String, Integer> typeOf, int coreModules,
+			int coreInstances, int coreFuncs, Map<String, Integer> builtins, int shimInstance, int fixupModule) {
 
-		static final Defined NONE = new Defined(List.of(), Map.of(), 0, 0, 0, Map.of(), -1, -1);
+		static final Defined NONE = new Defined(List.of(), List.of(), Map.of(), 0, 0, 0, Map.of(), -1, -1);
 
 		/**
 		 * {@return the component types added}: one per resource
@@ -116,27 +121,30 @@ final class ExportedResources {
 
 		/**
 		 * {@return the core functions the fixup adds after the core module's
-		 * instantiation}: one destructor alias per resource
+		 * instantiation}: one destructor alias per resource that has one
 		 */
 		int fixedCoreFuncs() {
-			return this.resources.size();
+			return this.destructed.size();
 		}
 
 		/**
 		 * {@return the core instances the fixup adds}: its arguments and itself, or none
 		 */
 		int fixedCoreInstances() {
-			return this.resources.isEmpty() ? 0 : 2;
+			return this.destructed.isEmpty() ? 0 : 2;
 		}
 
 	}
 
 	/**
 	 * Defines the resource types and their built-ins, ahead of the core module's
-	 * instantiation. Emits nothing for a world that exports no resource.
+	 * instantiation. Emits nothing for a world that exports no resource. A resource has a
+	 * destructor where the core module exports one ({@link ExportHandles#destructor}),
+	 * and the shim and the fixup exist where one does.
 	 * @param c the component writer
 	 * @param resources the resources, in world order
-	 * @param coreModule the core module, whose imports say which built-ins it calls
+	 * @param coreModule the core module, whose imports say which built-ins it calls and
+	 * whose exports which destructors it has
 	 * @param nextCoreModule the first free core module index
 	 * @param nextCoreInstance the first free core instance index
 	 * @param nextCoreFunc the first free core function index
@@ -148,28 +156,44 @@ final class ExportedResources {
 		if (resources.isEmpty()) {
 			return Defined.NONE;
 		}
-		final int n = resources.size();
-		// one destructor each: (func (param i32))
-		final List<Type[]> params = new ArrayList<>();
-		final List<Type[]> results = new ArrayList<>();
-		for (int k = 0; k < n; k++) {
-			params.add(new Type[] { Type.I32 });
-			results.add(new Type[0]);
+		final Set<String> exported = WasmExports.names(coreModule);
+		final List<Resource> destructed = new ArrayList<>();
+		for (Resource resource : resources) {
+			if (exported.contains(ExportHandles.destructor(resource.ifaceId(), resource.name()))) {
+				destructed.add(resource);
+			}
 		}
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmShimModules.shim(params, results));
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmShimModules.fixup(params, results));
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceInstantiate(nextCoreModule, List.of(), List.of()))));
-		final int shimInstance = nextCoreInstance;
-		final List<byte[]> trampolines = new ArrayList<>();
+		final int d = destructed.size();
+		int coreFunc = nextCoreFunc;
+		int shimInstance = -1;
+		if (d > 0) {
+			// one destructor each: (func (param i32))
+			final List<Type[]> params = new ArrayList<>();
+			final List<Type[]> results = new ArrayList<>();
+			for (int k = 0; k < d; k++) {
+				params.add(new Type[] { Type.I32 });
+				results.add(new Type[0]);
+			}
+			c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmShimModules.shim(params, results));
+			c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmShimModules.fixup(params, results));
+			c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
+				.vec(List.of(ComponentWriter.coreInstanceInstantiate(nextCoreModule, List.of(), List.of()))));
+			shimInstance = nextCoreInstance;
+			final List<byte[]> trampolines = new ArrayList<>();
+			for (int k = 0; k < d; k++) {
+				trampolines.add(ComponentWriter.aliasCoreFunc(shimInstance, WasmShimModules.slotName(k)));
+			}
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(trampolines));
+			coreFunc += d;
+		}
 		final List<byte[]> types = new ArrayList<>();
 		final Map<String, Integer> typeOf = new LinkedHashMap<>();
-		for (int k = 0; k < n; k++) {
-			trampolines.add(ComponentWriter.aliasCoreFunc(shimInstance, WasmShimModules.slotName(k)));
-			types.add(ComponentWriter.definedResource(nextCoreFunc + k));
+		for (int k = 0; k < resources.size(); k++) {
+			int slot = destructed.indexOf(resources.get(k));
+			types.add(slot < 0 ? ComponentWriter.definedResource()
+					: ComponentWriter.definedResource(nextCoreFunc + slot));
 			typeOf.put(resources.get(k).key(), nextType + k);
 		}
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(trampolines));
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
 		// The built-ins the core module imports, grouped by the module it imports them
 		// from: one per exported interface that declares a resource.
@@ -177,11 +201,10 @@ final class ExportedResources {
 		for (WasmImports.Entry entry : WasmImports.of(coreModule)) {
 			imported.add(entry.module() + "\0" + entry.field());
 		}
-		int coreFunc = nextCoreFunc + n;
 		final List<byte[]> canons = new ArrayList<>();
 		final Map<String, List<String>> fields = new LinkedHashMap<>();
 		final Map<String, List<Integer>> funcs = new LinkedHashMap<>();
-		for (int k = 0; k < n; k++) {
+		for (int k = 0; k < resources.size(); k++) {
 			Resource resource = resources.get(k);
 			String module = ExportHandles.module(resource.ifaceId());
 			int type = nextType + k;
@@ -200,7 +223,7 @@ final class ExportedResources {
 		if (!canons.isEmpty()) {
 			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(canons));
 			final List<byte[]> instances = new ArrayList<>();
-			int instance = shimInstance + 1;
+			int instance = nextCoreInstance + (d > 0 ? 1 : 0);
 			for (Map.Entry<String, List<String>> group : fields.entrySet()) {
 				instances.add(ComponentWriter.coreInstanceFromFuncs(group.getValue(),
 						java.util.Objects.requireNonNull(funcs.get(group.getKey()))));
@@ -208,13 +231,15 @@ final class ExportedResources {
 			}
 			c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(instances));
 		}
-		return new Defined(List.copyOf(resources), typeOf, 2, 1 + builtins.size(), coreFunc - nextCoreFunc, builtins,
-				shimInstance, nextCoreModule + 1);
+		return new Defined(List.copyOf(resources), List.copyOf(destructed), typeOf, d > 0 ? 2 : 0,
+				(d > 0 ? 1 : 0) + builtins.size(), coreFunc - nextCoreFunc, builtins, shimInstance,
+				d > 0 ? nextCoreModule + 1 : -1);
 	}
 
 	/**
 	 * Writes the core module's destructors into the shim's table, after the core module's
-	 * instantiation. Emits nothing for a world that exports no resource.
+	 * instantiation. Emits nothing for a world that exports no resource with a
+	 * destructor.
 	 * @param c the component writer
 	 * @param defined what {@link #define} added
 	 * @param coreInstance the core instance index of the core module
@@ -224,8 +249,8 @@ final class ExportedResources {
 	 */
 	static void fix(ComponentWriter c, Defined defined, int coreInstance, int nextCoreInstance, int nextCoreFunc,
 			int nextCoreTable) {
-		final List<Resource> resources = defined.resources();
-		if (resources.isEmpty()) {
+		final List<Resource> destructed = defined.destructed();
+		if (destructed.isEmpty()) {
 			return;
 		}
 		final List<byte[]> aliases = new ArrayList<>();
@@ -236,8 +261,8 @@ final class ExportedResources {
 		names.add(WasmShimModules.TABLE_EXPORT);
 		sorts.add(ComponentWriter.CORE_SORT_TABLE);
 		indices.add(nextCoreTable);
-		for (int k = 0; k < resources.size(); k++) {
-			Resource resource = resources.get(k);
+		for (int k = 0; k < destructed.size(); k++) {
+			Resource resource = destructed.get(k);
 			aliases.add(ComponentWriter.aliasCoreFunc(coreInstance,
 					ExportHandles.destructor(resource.ifaceId(), resource.name())));
 			names.add(WasmShimModules.slotName(k));

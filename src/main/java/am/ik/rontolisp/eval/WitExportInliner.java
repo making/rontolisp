@@ -91,8 +91,9 @@ public final class WitExportInliner {
 				String path = SourceLoader.resolve(baseDir, directive.path());
 				List<LispVal> lowered = WitExportDirective.lower(directive, read(loader, path), defuns::get, backend);
 				// A world that exports a resource keeps each handle's value in the slot
-				// store, which the export wrappers call: spliced once, ahead of them.
-				if (WitExportDirective.exportsResource(lowered) && !resources) {
+				// store, which the export wrappers call: spliced once, ahead of them. The
+				// scalar backend's resource is the integer itself.
+				if (!backend.isNoGc() && WitExportDirective.exportsResource(lowered) && !resources) {
 					resources = true;
 					result.addAll(0, WitLibrary.resourceForms());
 				}

@@ -632,8 +632,9 @@ compiles, on every target, at the Java declaration, naming the WIT member's line
 An exported interface that declares a resource, or whose `use` clause names one or a type
 holding a handle, is refused at the world's `export` line whether or not a function takes
 it. A `use` of a resource in the world itself is left out, and a function of the world
-naming it is refused. A Common Lisp program exports a resource from a component, and takes a
-handle of one the component imports
+naming it is refused. A Common Lisp program exports a resource from a component (on
+`--no-gc --component` too, as the integer its constructor answers), and takes a handle of one
+the component imports
 ([`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md#resources)); a Java
 program imports the exported one from that component as any resource.
 

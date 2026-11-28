@@ -208,6 +208,8 @@ and the value the constructor answers is the resource -- the host holds a handle
 of it, and a function that takes a `counter` receives that value
 ([Resources](../reference/functions/rontolisp-wit-export.md#resources),
 [`examples/wit/resource`](https://github.com/making/rontolisp/tree/develop/examples/wit/resource)).
+On `--no-gc --component` the resource is the integer the constructor answers
+([On the scalar backend](../reference/functions/rontolisp-wit-export.md#on-the-scalar-backend)).
 A resource of an interface the world only imports crosses as well, as the integer
 handle `wit-import` takes: the component imports the interface for it
 ([A resource the component imports](../reference/functions/rontolisp-wit-export.md#a-resource-the-component-imports)).

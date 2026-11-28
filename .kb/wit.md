@@ -191,9 +191,9 @@ exported `defun` with `&optional`/`&rest`/`&key`; a duplicate; a name that is no
 `label` or is the reserved `run`; an interface the file does not define; an inline `import name:
 func` (rejected, not dropped); a type no export carries, or none on this backend ("Compound
 types across an export"; the flat list is DERIVED, `BoundaryType.witNames`); a resource's
-function or destructor that the program gets wrong, and a resource -- exported or imported --
-where the output is no component of the default backend ("A resource the world exports", "A
-resource the component imports"); a `use` clause whose type cannot be named in the scope ("A
+function or destructor that the program gets wrong, a resource exported where the output is no
+component (or a printing `--no-gc --component`), and one imported where it is no component of
+the default backend ("A resource the world exports", "A resource the component imports"); a `use` clause whose type cannot be named in the scope ("A
 type of another interface").
 **A user-facing message carries no `.todo` pointer** -- a todo file is deleted when the work lands.
 
@@ -432,8 +432,32 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
 - An `async func` of a resource is the sync form with `:async t`, like any export's. Measured
   2026-11-27 with a `:blocking t` Lisp importer, both component shapes: async methods and a
   static async function taking an owned handle and a borrowed one of another interface.
-- **Refused**: a used type holding a handle; a core module and `--no-gc` (`.todo/m96`);
-  `describe`, so the Java and Clojure front ends (`.todo/m97`). A resource of an interface the
+- **Refused**: a used type holding a handle; a core module (`--no-gc` without `--component`
+  too); `describe`, so the Java and Clojure front ends (`.todo/m97`).
+- **`--no-gc --component`** (`WitExportDirective.ScalarHandles`): no store -- the resource is
+  the integer the constructor answers, the `rep`, crossing as `:u32` (outside it the wrapper
+  traps). The directive lowers to what a hand-written program would be: the built-ins are
+  `rontolisp:wasm-import`s of module `[export]<iface>`, fields `[resource-new|rep|drop]<r>`
+  (`ExportHandles.builtin`: no component-name check, refused unless the world exports the
+  resource, kept out of the import block and `--emit-wit`); an export taking or answering an
+  own handle is a `<defun>%wit-export` around the function (`<r>%wit-take` = rep then drop,
+  `<r>%wit-new`); a borrow is the integer. The destructor is `<r>-drop` itself, or
+  `<r>%wit-dtor` testing `rontolisp::*wit-handle-taken*` where an export takes an own one in
+  (the take sets it before `resource.drop`, which calls the destructor at once). No `<r>-drop`:
+  no destructor, `(resource (rep i32))` -- `ExportedResources` makes the shim and fixup for
+  the destructed ones only, and the GC core always exports one, so its bytes do not move.
+  `NoGcWasmComponentBuilder` defines them ahead of the core instance and fixes them after the
+  user fixups. A handle inside a compound type is refused with it. A printing program is
+  refused: its exports lift async, and wasm-tools: "constructor function cannot be async";
+  `--no-wasi` sinks the print and compiles. A handle of an imported resource stays refused
+  (the backend's `wit-import` binds no resource).
+- Measured 2026-11-28 (wasmtime 51, wasm-tools 1.263.0), raw / gzip: the E2E's
+  `CELLS_PROVIDER` 2,028 / 796 B (`--component` 11,325 / 4,926), without `cell-drop` 1,744 /
+  667; `resource cell { constructor(v: u32); get: func() -> u32; }` 760 / 380 (GC 9,006 /
+  4,166). Composed with a GC caller it prints what the interpreter and the JVM print over
+  `wit-provide`. Byte-identical before and after: 16 outputs (counters, reporter, app, shapes,
+  analyzer as components; count-vowels, mandelbrot, fractal, the worker on `--no-gc` as module,
+  `--component`, `--no-wasi`; a proxy-wasm filter). A resource of an interface the
   world does not export: "A resource the component imports".
 - `--emit-wit` prints the resource with its functions (no docs) and the residual `use`, bare
   inside its own package: byte-identical to the tool.
@@ -449,10 +473,13 @@ Interpreter / JVM: the directive checks the functions and exports nothing; bound
   pipeline, the Java shapes, a Clojure world, each on the shapes it compiles to).
 - Not measured: a host other than wasmtime (jco, `bindgen!`), and handles in a spilled
   parameter tuple (a Lisp importer cannot call past 16 flats; the lift is the list element's).
-- Pins: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...`,
+- Pins: `WitExportDirectiveTest.lowersATypeBeyondTheFlatSet...` (the scalar forms too),
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExports...` (emitted WIT = the tool's, `targets`,
-  both world orders) / `.aComponentCallsWhatAnotherExportsOverCompoundTypes`
-  (`examples/wit/resource` composed, both component shapes), `examples.yaml`'s `wit/resource`.
+  both world orders; the scalar one with and without a drop) /
+  `.aComponentCallsWhatAnotherExportsOverCompoundTypes` (`examples/wit/resource` composed,
+  both component shapes; the scalar provider under a GC caller), `examples.yaml`'s
+  `wit/resource`, `WitExportInlinerTest.aWorldIsRefusedAnOutputThatCannotExportIt`,
+  `NoGcWasmCompilerTest.componentImportNamesFollowTheComponentModelGrammar`.
 
 ### A resource the component imports
 **Invariant: a resource of an interface the world does not export, named by an exported

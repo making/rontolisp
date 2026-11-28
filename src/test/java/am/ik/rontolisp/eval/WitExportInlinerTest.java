@@ -380,6 +380,32 @@ class WitExportInlinerTest {
 			.hasMessage("the world's exports name the resource 'descriptor' of 'wasi:filesystem/types@0.3.0', an "
 					+ "interface the component imports as part of its own WASI surface, whose types an export does "
 					+ "not take");
+		// A resource the world exports is a type only a component defines, and on the
+		// scalar backend one whose exports are no async functions: a printing one's
+		// are.
+		Files.writeString(this.tempDir.resolve("cells.wit"), """
+				package root:component;
+
+				interface cells {
+				  resource cell { constructor(v: u32); }
+				}
+
+				world root {
+				  export cells;
+				}
+				""");
+		Path cells = this.tempDir.resolve("cells.lisp");
+		Files.writeString(cells, "(defun cell-new (v) (print v) v)\n(rontolisp:wit-export \"cells.wit\")");
+		String cellsOut = this.tempDir.resolve("cells.wasm").toString();
+		assertThatThrownBy(() -> cli.run(new String[] { cells.toString(), "-o", cellsOut, "--no-gc" }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cells.wit:8: interface 'root:component/cells' declares the resource 'cell', which "
+					+ "only a component exports (--component): a core module defines no resource type");
+		assertThatThrownBy(() -> cli.run(new String[] { cells.toString(), "-o", cellsOut, "--no-gc", "--component" }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("the program prints, and its world exports a resource");
+		cli.run(new String[] { cells.toString(), "-o", cellsOut, "--no-gc", "--component", "--no-wasi" });
+		assertThat(this.tempDir.resolve("cells.wasm")).isNotEmptyFile();
 	}
 
 	@Test

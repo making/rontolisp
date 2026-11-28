@@ -213,7 +213,9 @@ final class NoGcWasmComponentBuilder {
 	 * @param decls the parsed export directives (never empty)
 	 * @param printUsed whether the core module prints (imports {@code fd_write})
 	 * @param imports the REACHED host imports in the core's import order (the ones its
-	 * import section names; a declared-but-uncalled import is not among them)
+	 * import section names; a declared-but-uncalled import is not among them), but the
+	 * built-ins of a resource the world exports ({@link ExportHandles#builtin}), which
+	 * the component defines ({@link ExportedResources})
 	 * @return the component binary
 	 */
 	static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> decls, boolean printUsed,
@@ -342,6 +344,26 @@ final class NoGcWasmComponentBuilder {
 			coreArgNames.add(group.getKey());
 			coreArgInstances.add(nextCoreInstance++);
 		}
+		// The resources the world exports: their types and the built-ins the core
+		// imports, ahead of the core; nothing for a world that exports none.
+		ExportedResources.Defined resources = ExportedResources.Defined.NONE;
+		final List<ExportedResources.Resource> exportedResources = ExportedResources.of(decls);
+		if (!exportedResources.isEmpty()) {
+			if (!pendingInstances.isEmpty()) {
+				c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(pendingInstances));
+				pendingInstances.clear();
+			}
+			resources = ExportedResources.define(c, exportedResources, coreModule, nextCoreModule, nextCoreInstance,
+					nextCoreFunc, nextType);
+			nextCoreModule += resources.coreModules();
+			nextCoreInstance += resources.coreInstances();
+			nextCoreFunc += resources.coreFuncs();
+			nextType += resources.types();
+			resources.builtins().forEach((module, instance) -> {
+				coreArgNames.add(module);
+				coreArgInstances.add(instance);
+			});
+		}
 		pendingInstances.add(ComponentWriter.coreInstanceInstantiate(0, coreArgNames, coreArgInstances));
 		final int coreInstance = nextCoreInstance++;
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter.vec(pendingInstances));
@@ -458,6 +480,10 @@ final class NoGcWasmComponentBuilder {
 				.vec(List.of(ComponentWriter.coreInstanceFromExports(names, sorts, indices),
 						ComponentWriter.coreInstanceInstantiate(userFixupModule, List.of(""), List.of(fixupArgs)))));
 		}
+		// The core's destructors into the resources' shim.
+		ExportedResources.fix(c, resources, coreInstance, nextCoreInstance, nextCoreFunc, nextCoreTable);
+		nextCoreFunc += resources.fixedCoreFuncs();
+		nextCoreInstance += resources.fixedCoreInstances();
 		final List<byte[]> aliases = new ArrayList<>();
 		final List<byte[]> types = new ArrayList<>();
 		final List<byte[]> lifts = new ArrayList<>();
@@ -503,7 +529,7 @@ final class NoGcWasmComponentBuilder {
 			}
 			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
 			ComponentExportWiring.append(c, exported, coreMemory, realloc, nextType, nextComponentFunc,
-					nextComponentInstance, printUsed, Map.of());
+					nextComponentInstance, printUsed, resources.typeOf());
 			return c.toByteArray();
 		}
 		// Per export i: alias the core wrapper, declare its function type, lift it and

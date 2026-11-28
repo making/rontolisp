@@ -9392,6 +9392,13 @@ public final class LispNames {
 	public static final String WIT_REP_TAKEN = "%WIT-REP-TAKEN";
 
 	/**
+	 * {@code rontolisp::*wit-handle-taken*}: on the scalar backend's component, set while
+	 * an export releases an owned handle it took in, so that the destructor that release
+	 * runs calls no {@code <resource>-drop}. A global {@link #WIT_EXPORT} defines.
+	 */
+	public static final String WIT_HANDLE_TAKEN = "*WIT-HANDLE-TAKEN*";
+
+	/**
 	 * The {@code java} package name (interpreter-only Java interop by reflection). It
 	 * does not use {@code cl}; its functions wrap arbitrary host objects as
 	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and

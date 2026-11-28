@@ -468,6 +468,10 @@ byte-identical): per-export alias/type/sync `canonLift`/export, no import block,
     JSPI needed, unlike the GC component's async `wasi:cli/run`) and composition (`wac plug` /
     `wasm-tools compose` with a provider, e.g. a rontolisp `--no-gc --component` that
     `wit-export`s the interface -- the E2E).
+- **A resource the world exports** is the integer its constructor answers, the handle's
+  `rep` (`.kb/wit.md`, "A resource the world exports"): the built-ins are `wasm-import`s the
+  component defines (`ExportHandles.builtin`), the destructor a core export
+  (`destructorOf`), both kept out of the lift, the import block and `--emit-wit`.
 - Component-mode-only compile errors (in `compile()`): non-kebab export names
   (`WasmExportCompiler.COMPONENT_EXPORT_NAME`), non-component import names, a wait no task can
   make ("An `async func`"). `:s-expr` is
