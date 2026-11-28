@@ -135,6 +135,12 @@ class ClojureNativeLoweringE2eTest {
 	 * that crosses to a {@code java:} member is the host's Class of its name on either --
 	 * what Java takes where it takes a {@code java.lang.Class} -- and two of one class
 	 * are =, as the oracle's one Class object is.
+	 * <p>
+	 * A host class a program makes, calls or reads there answers as the JVM's: the image
+	 * registers the constructors, the members and the fields of the types a program names
+	 * ({@code ClojureInteropLowering.HOST_CALLABLE_CLASSES}), so a map takes an entry, a
+	 * static call parses, a caught exception prints its message, and a class value's
+	 * readers answer (2026-11-28: each of those stopped the run).
 	 */
 	@Test
 	void theBinaryWalksAHostClassAsTheJvmInterpreterDoes() throws Exception {
@@ -156,6 +162,16 @@ class ClojureNativeLoweringE2eTest {
 				(println (.isAssignableFrom Number c) (.isAssignableFrom c Number))
 				(println (.isInstance c 1) (.isInstance c "a"))
 				(println (= c (Class/forName "java.lang.Long")) (= String (class "")))
+				(def m (java.util.HashMap.))
+				(.put m 1 2)
+				(println (.get m 1) (.size m))
+				(def l (java.util.ArrayList.))
+				(.add l 1)
+				(println (.size l) (.get (java.util.IdentityHashMap. 16) 1))
+				(println (try (java.lang.Integer/parseInt "x") (catch Exception e (ex-message e))))
+				(println (try (throw (java.lang.Exception. "boom")) (catch Exception e (str e))))
+				(println (.isEnum String) (.isInterface String) (.isAnnotation String))
+				(println (.getComponentType (class (byte-array 1))) (.asSubclass Integer Number))
 				""";
 		Path file = workDir.resolve("host-class-walk.clj");
 		Files.writeString(file, program);

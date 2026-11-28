@@ -261,11 +261,19 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 			List<Member> cached = this.methods.get(name);
 			if (cached == null) {
 				List<Member> candidates = new ArrayList<>();
-				for (Method method : this.type.getMethods()) {
-					if (method.getName().equals(name)) {
-						Method accessible = accessibleMethod(this.type, method);
-						if (accessible != null) {
-							candidates.add(new Member(accessible));
+				// A native image answers a registered class's members and an unregistered
+				// one's none; the members it inherits still run on it, registered where
+				// they are declared (a host exception's Throwable.getMessage, whatever
+				// its class), so a class answering nothing is read through its
+				// superclasses.
+				for (Class<?> current = this.type; current != null
+						&& candidates.isEmpty(); current = current.getSuperclass()) {
+					for (Method method : current.getMethods()) {
+						if (method.getName().equals(name)) {
+							Method accessible = accessibleMethod(this.type, method);
+							if (accessible != null) {
+								candidates.add(new Member(accessible));
+							}
 						}
 					}
 				}
@@ -280,8 +288,11 @@ public final class ReflectiveJavaClasses implements JavaClassLookup {
 			List<Member> cached = this.publicMethods;
 			if (cached == null) {
 				List<Member> list = new ArrayList<>();
-				for (Method method : this.type.getMethods()) {
-					list.add(new Member(method));
+				for (Class<?> current = this.type; current != null
+						&& list.isEmpty(); current = current.getSuperclass()) {
+					for (Method method : current.getMethods()) {
+						list.add(new Member(method));
+					}
 				}
 				cached = List.copyOf(list);
 				this.publicMethods = cached;

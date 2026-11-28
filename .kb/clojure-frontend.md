@@ -3510,12 +3510,22 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
   reflection answers, and its build registers the JDK classes the front end names in its own
   code -- `ClojureThrowables.PARENTS`, `ClojureInteropLowering.HOSTLESS_RECEIVERS`,
   `ClojureValueMethodLowering`'s host kinds, `ClojureTimeValueLowering`'s kinds,
-  `ClojureIoLowering`'s API types, `Object`, `Throwable` -- as `reflection` types in
-  `reachability-metadata.json`, so each answers every member query as a JVM does;
-  `PARENTS`' `clojure.lang` throwables stay out (no host here holds them). A class outside the
-  list stays partial without a JDK, and the binary warns when it finds none
-  (`JavaClassPath.ClassFiles`). The list stays at what the front end names, bare `{"type"}`
-  entries, weighed for the web image the playground downloads.
+  `ClojureIoLowering`'s API types, `Object`, `Throwable` -- and the types a program makes or
+  calls (`ClojureInteropLowering.HOST_CALLABLE_CLASSES`: the wrappers, `Math`, the containers,
+  the streams, the time and net values) as `reflection` types in `reachability-metadata.json`,
+  so each answers every member query as a JVM does; `PARENTS`' `clojure.lang` throwables stay
+  out (no host here holds them). A class outside the list stays partial without a JDK, and the
+  binary warns when it finds none (`JavaClassPath.ClassFiles`). The list stays at what the
+  front end names and what a program makes or calls, weighed for the web image the playground
+  downloads (3.6% of the binary for the `HOST_CALLABLE_CLASSES` half, measured 2026-11-28).
+- Registering a type registers its members with it, not its supertypes': `allPublicConstructors`
+  and `allPublicFields` on every entry (a program constructs and reads a host class through the
+  bridge's reflection, which answered no constructor of `java.util.HashMap` and refused
+  `java.util.GregorianCalendar`'s call, measured 2026-11-28, GraalVM 25.0.3, macOS aarch64), and
+  `allPublicMethods` on `HOST_CALLABLE_CLASSES` (a map's `.put` or `Integer.parseInt` resolved
+  and then died, the same run). The bridge reads a class that answers no member through its
+  superclasses (`ReflectiveJavaClasses.Type.methods`), so a host exception outside the list still
+  answers `getMessage` where `Throwable` registers it.
 - Macro-time evaluation runs on the image's reflection even WITH a JDK found: the lowering
   reads class files, but a macro body runs in the interpreter. A bare `{"type"}` entry answers
   the queries but refuses the call (`MissingReflectionRegistrationError`), so the members
@@ -3529,9 +3539,11 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
 - Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
   `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
   program, a no-JDK host-form program), `ClojureHostImageTypesTest` (the registered list
-  against the constants above), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir` vs
-  this JVM's, CI's native-image-verify job; the no-JDK program again with the binary seeing no
-  JDK).
+  against the constants above, and each entry's constructors, fields and, for
+  `HOST_CALLABLE_CLASSES`, methods), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir`
+  vs this JVM's, CI's native-image-verify job; the no-JDK program again with the binary seeing
+  no JDK; the walk program, a map made and filled, a parsed static, a caught exception's
+  message, a class value's readers and `asSubclass` compared as runs).
 
 ## Java interop
 
