@@ -193,6 +193,8 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
   members it cannot compile: `toUpperCase` and a `float` in a `+`. A program with a `main` is
   a command, which `--no-gc` does not make. With `--component` the exports are a
   `@WitExport` world's ([Exporting a WIT world](wit.md#exporting-a-wit-world)).
+- A `@WitImport` interface of scalar types is imported, the `ServiceLoader` lookup its binding
+  ([What each output takes](wit.md#what-each-output-takes)).
 
 ## A program of several files
 

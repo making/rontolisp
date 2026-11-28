@@ -513,8 +513,9 @@ backend is `:blocking t` (`.kb/wit.md`); the binding that answers a future stays
   writes. Revisit when a `--no-gc` program needs two waits to overlap.
 - **Element types**: a `stream<T>` / `future<T>` is no scalar and is refused at the WIT line
   with every other compound type.
-- **Java**: an `async func` export lifts async; nothing of the scalar subset waits (a
-  `Thread.sleep` needs a mutex, a `@WitImport` binding an object: `.todo/m93`).
+- **Java**: an `async func` export lifts async and waits where it reaches an `async func`
+  `@WitImport` (`:blocking t`); a `Thread.sleep` stays refused (it needs a mutex). The lookup is
+  the binding, a structure nothing reads (`.kb/java-frontend.md`, "WIT imports").
 - Pins: `NoGcWasmCompilerTest.aComponentTypesWhatWaitsAsAsyncAndRefusesAWaitNoTaskCanMake` /
   `.anAsyncImportIsRefusedBecauseThereIsNoFutureToAnswerWith`,
   `WitImportDirectiveTest.theNoGcBackendBindsAnAsyncFuncOnlyAsACallThatWaits`,

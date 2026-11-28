@@ -195,6 +195,8 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
   メンバーです。最後のものには、`toUpperCase` と `+` の `float` があります。
   `main` のあるプログラムはコマンドで、`--no-gc` はコマンドを作りません。`--component` では、
   エクスポートは `@WitExport` の world のものです（[WIT world をエクスポートする](wit.md#exporting-a-wit-world)）。
+- スカラーの型の `@WitImport` インタフェースはインポートされ、`ServiceLoader` による取得が
+  そのバインディングになります（[出力ごとに使えるもの](wit.md#what-each-output-takes)）。
 
 ## 複数ファイルのプログラム
 

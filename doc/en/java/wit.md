@@ -129,7 +129,9 @@ A name that is a Java keyword ends in `_` (`default_`).
 
 So the program says nothing about where it runs: a store of its own answers where it is
 developed, the host where it is deployed. On a WASM target the module imports the
-functions the program calls and no other.
+functions the program calls and no other, and `ServiceLoader.load(Store.class).findFirst()`
+followed by `.orElseThrow()` or `.get()` is the binding itself, made with no loader: the
+lookup `--no-gc` takes, as the scalar backend has no object for a loader.
 
 A `--no-wasi` module imports the interface the way a component does, through the canonical
 ABI, and its host is the JavaScript glue `--emit-js-glue` writes
@@ -642,8 +644,8 @@ Java program imports it from that component as any resource.
 | `--component --no-wasi` | refused: such a component imports nothing | as `--component` | lifted async, but the component imports no clock: a method that sleeps traps | the call traps, writing nothing |
 | `--no-wasi` module, its host the `--emit-js-glue` glue | through the canonical ABI, every type but a `stream` and a `future`; no `async func`. Not reached from `main`: a JavaScript host may answer with a promise | refused: a world is exported by a component | | |
 | Preview 1 module (`-o out.wasm`) | the flat set: the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`, handles; an `async func` of those a call | refused | | |
-| `--no-gc` module | not yet: the scalar backend has no object for the binding `ServiceLoader` answers, so the lookup is refused | refused | | |
-| `--no-gc --component` | not yet, likewise | of `bool`, the integers, `f64` and `string` alone; anything else refused at its WIT line | lifted async, of those types; nothing in the scalar subset waits | the call traps, writing nothing |
+| `--no-gc` module | of `bool`, the integers, `f64` and `string`, imported as a Preview 1 module imports them, through the lookup of [The implementation](#the-implementation); an `async func` of those a call | refused | | |
+| `--no-gc --component` | of `bool`, the integers, `f64` and `string` alone, through that lookup; anything else refused at its WIT line. An `async func` is a call that waits, refused where an export that is no `async func` reaches it | of those types alone; anything else refused at its WIT line | lifted async, of those types: the call may wait where an import does | the call traps, writing nothing |
 | `--native` | none: its runner provides no WIT interface, so a program calling a member of the flat set does not start, and any other member is refused | refused | | |
 | a JDK, the interpreter, the JVM | the program's own provider, every type; nothing is converted | the annotation does nothing: ordinary static methods, and a program with no `main` is refused | the method, called as any other | as any exception |
 

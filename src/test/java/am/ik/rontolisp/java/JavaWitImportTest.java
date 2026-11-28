@@ -783,7 +783,7 @@ class JavaWitImportTest {
 	 * A core module's host is the provider too: the interface's functions are the
 	 * module's imports, here answered by a module wasmtime preloads under the interface's
 	 * name. A {@code u32} crosses as the {@code s32} of its bits, which a Java
-	 * {@code int} is.
+	 * {@code int} is. A {@code --no-gc} reactor imports it alike, its lookup the binding.
 	 */
 	@Test
 	void aFlatInterfaceIsACoreModulesImportFromItsHost() throws Exception {
@@ -838,6 +838,39 @@ class JavaWitImportTest {
 				"calc=" + host, module.toString());
 		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
 		assertThat(run.stdout()).isEqualTo("42 ffff 2.5 true false\n");
+		// --no-gc: a reactor's static field holding the lookup, which is the binding
+		// itself there, a structure nothing reads; each method call the import's
+		Path calls = write("Calls.java", """
+				import java.util.ServiceLoader;
+
+				public class Calls {
+
+				    static final Calc CALC = ServiceLoader.load(Calc.class).findFirst().get();
+
+				    public static int add(int a, int b) {
+				        return CALC.add(a, b);
+				    }
+
+				    public static int lowBits(int x) {
+				        return CALC.lowBits(x);
+				    }
+
+				    public static double half(double x) {
+				        return ServiceLoader.load(Calc.class).findFirst().orElseThrow().half(x);
+				    }
+				}
+				""");
+		Path scalar = this.dir.resolve("calls.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, calls.toString(), "-o", scalar.toString(), "--no-gc");
+		for (List<String> call : List.of(List.of("add", "2", "40", "42"), List.of("lowBits", "-1", "65535"),
+				List.of("half", "5", "2.5"))) {
+			List<String> command = new ArrayList<>(List.of("wasmtime", "run", "--preload", "calc=" + host, "--invoke",
+					call.get(0), scalar.toString()));
+			command.addAll(call.subList(1, call.size() - 1));
+			run = HostWasmtime.INSTANCE.execInContainer(command.toArray(String[]::new));
+			assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+			assertThat(run.stdout()).as(call.get(0)).isEqualTo(call.getLast() + "\n");
+		}
 	}
 
 	/**
@@ -978,10 +1011,11 @@ class JavaWitImportTest {
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap, an {@code async func} lifted async as on the GC one. A world of compound
-	 * types crosses too: a record a member record, a variant a sealed interface, a list a
-	 * {@code List}, a result a {@code WitResult} or its ok arm with a
-	 * {@code WitException} thrown, in an {@code async func} as in any other.
+	 * trap, an {@code async func} lifted async as on the GC one, which waits on the
+	 * host's clock through a {@code @WitImport}. A world of compound types crosses too: a
+	 * record a member record, a variant a sealed interface, a list a {@code List}, a
+	 * result a {@code WitResult} or its ok arm with a {@code WitException} thrown, in an
+	 * {@code async func} as in any other.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
@@ -1032,18 +1066,26 @@ class JavaWitImportTest {
 		Path module = this.dir.resolve("kinds.wasm");
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", module.toString(), "--component");
 		// --no-gc: the scalar component of the world, the static String the start
-		// function initializes, the async func lifted async (the backend has no thread
-		// to sleep in)
+		// function initializes, the async func lifted async, waiting on the host's
+		// clock through a @WitImport (the backend has no thread to sleep in) -- the
+		// program's own provider beside it, which a component does not consult
+		write("clocks.wit", CLOCKS_WIT);
+		write("Clock.java", CLOCK);
+		write("LocalClock.java", LOCAL_CLOCK);
+		write("META-INF/services/Clock", "LocalClock\n");
 		Path scalar = this.dir.resolve("scalar.wasm");
 		write("Kinds.java", KINDS
 			.replace("StringBuilder seen = new StringBuilder(\"seen:\")", "String seen = \"seen: \" + (touched - 1)")
 			.replace("seen.append(' ').append(name);", "")
-			.replace(KINDS.substring(KINDS.indexOf("        long start = System.nanoTime();"),
-					KINDS.indexOf("    public static class Math")), "        return ms;\n    }\n\n"));
+			.replace("Thread.sleep(ms);", "clock.waitFor(ms * 1_000_000L);")
+			.replace("System.nanoTime()", "clock.now()")
+			.replace("        long start", "        Clock clock = java.util.ServiceLoader.load(Clock.class).findFirst()"
+					+ ".orElseThrow();\n        long start"));
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", scalar.toString(), "--component",
 				"--no-gc", "--emit-wit");
-		assertThat(Files.readString(this.dir.resolve("scalar.wit")))
-			.contains("export pause: async func(ms: u32) -> u32;", "export count: func() -> s32;");
+		assertThat(Files.readString(this.dir.resolve("scalar.wit"))).contains(
+				"import wasi:clocks/monotonic-clock@0.3.0;", "export pause: async func(ms: u32) -> u32;",
+				"export count: func() -> s32;");
 		// java.lisp's System.exit and thread ends, which no export of this world
 		// reaches, import no wasi:cli/exit (a sleep does: the refusal of a monitor
 		// held, Thread's id counter's)
@@ -1341,6 +1383,49 @@ class JavaWitImportTest {
 
 			        public static int count() {
 			            return touched + 10;
+			        }
+			    }
+			}
+			""";
+
+	/** The host's monotonic clock, which a {@code --no-gc} {@link #KINDS} waits on. */
+	private static final String CLOCKS_WIT = """
+			package wasi:clocks@0.3.0;
+
+			interface monotonic-clock {
+			  type mark = u64;
+			  now: func() -> mark;
+			  wait-for: async func(how-long: u64);
+			}
+			""";
+
+	/** {@link #CLOCKS_WIT}'s interface. */
+	private static final String CLOCK = """
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:clocks/monotonic-clock@0.3.0", wit = "clocks.wit")
+			public interface Clock {
+
+			    long now();
+
+			    void waitFor(long howLong);
+			}
+			""";
+
+	/** The provider of {@link #CLOCK} under a JDK. */
+	private static final String LOCAL_CLOCK = """
+			public class LocalClock implements Clock {
+
+			    public long now() {
+			        return System.nanoTime();
+			    }
+
+			    public void waitFor(long howLong) {
+			        try {
+			            Thread.sleep(howLong / 1_000_000L);
+			        }
+			        catch (InterruptedException e) {
+			            throw new IllegalStateException(e);
 			        }
 			    }
 			}

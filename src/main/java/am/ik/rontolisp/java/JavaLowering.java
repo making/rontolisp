@@ -9034,6 +9034,38 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * {@code ServiceLoader.load(I.class).findFirst().orElseThrow()} (or {@code .get()})
+	 * of a {@code @WitImport} interface on a target whose host provides it: the binding
+	 * made, which is what the chain answers there -- the loader's one provider is the
+	 * binding, whose class has no field and whose constructor does nothing -- with no
+	 * loader, optional or supplier made. So the scalar backend, which has no object for
+	 * one, takes the lookup: the binding is a structure nothing reads. {@code null} for
+	 * any other call.
+	 */
+	private @Nullable Typed hostLookup(Call call) {
+		if (!this.classes.wit.boundary.hostImports() || !plainCall(call, 0)
+				|| !(call.name().equals("orElseThrow") || call.name().equals("get"))
+				|| !(call.target() instanceof Call first) || !plainCall(first, 0) || !first.name().equals("findFirst")
+				|| !(first.target() instanceof Call load) || !plainCall(load, 1) || !load.name().equals("load")
+				|| !(load.arguments().get(0) instanceof JavaSyntax.ClassLiteral literal) || load.target() == null
+				|| !(classNamed(load.target()) instanceof JavaClass owner) || !owner.name.equals(SERVICE_LOADER)
+				|| !(literalType(literal) instanceof ClassType service)) {
+			return null;
+		}
+		JavaClass binding = this.classes.wit.binding(service.declaration());
+		if (binding == null) {
+			return null;
+		}
+		Method constructor = publicConstructor(binding);
+		return constructor == null ? null : new Typed(made(binding, constructor, call.pos()), service);
+	}
+
+	/** A call of so many arguments, not through {@code super}, with no type argument. */
+	private static boolean plainCall(Call call, int arguments) {
+		return call.arguments().size() == arguments && !call.onSuper() && call.typeArguments().isEmpty();
+	}
+
+	/**
 	 * The providers of a service told by its class's name at run time: a {@code cond}
 	 * over the services the files of a loader's resources name whose class the program
 	 * has (under a bound), each a loader made with its providers; a loader of none for
@@ -14489,6 +14521,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		if (call.name().equals("getClass") && call.arguments().isEmpty() && !call.onSuper()) {
 			return classOf(call);
+		}
+		if (hostLookup(call) instanceof Typed binding) {
+			return binding;
 		}
 		if (call.name().startsWith("find") && call.target() != null) {
 			literalHandle(call);

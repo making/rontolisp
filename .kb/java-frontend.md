@@ -1458,6 +1458,23 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   `patch`. Byte-identical before and after, 8 outputs: `PageHits` (component, class), the
   Lisp `page-hits`, `echo-client.lisp`, `http-hello.lisp`, and m68's sockets, rows and stdin
   programs.
+- **The lookup is the binding** (`JavaLowering.hostLookup`; 2026-11-28): on a host-import target
+  `ServiceLoader.load(I.class).findFirst()` then `.orElseThrow()` or `.get()` (no argument, no
+  type argument) lowers to `new I$Wit()`. Exact: the binding is the loader's one provider, has no
+  field and an empty constructor, and a fresh loader makes a fresh one. It is what lets `--no-gc`
+  import (a loader, an `Optional`, a `Supplier` lambda: no scalar value; the binding is
+  `NoGcStructures`' "structure nothing reads", its methods never reading `this`); a program's own
+  provider in the tree is not made, so the call stays direct. Other spellings (a held `Optional`,
+  `orElseThrow(supplier)`, `iterator()`) keep the loader and are refused on `--no-gc` at the
+  `LAMBDA`. Measured (wasmtime 51): a `--no-gc --component` `async func` export waiting on
+  `wasi:clocks/monotonic-clock@0.3.0` 929 B (`pause(20)` 21.3 ms; the Lisp one 425 B), its GC
+  component 86,797 -> 18,019 B; GC components that use it shrink: `PageHits` 233,445 -> 218,364,
+  `Echo` 256,140 -> 239,204, `java-calls-rust`'s `App` 172,395 -> 129,017. Byte-identical: the
+  counter (GC and `--no-gc` components), `Worker` (`--no-gc`, `--no-wasi`), `Hello`,
+  `page-hits.lisp`. A `--no-gc` core module imports as a Preview 1 one (bare names, `--preload`).
+  Pins: `JavaWitImportTest.aFlatInterfaceIsACoreModulesImportFromItsHost` (the `--no-gc`
+  module, a static field and `.get()`), `.aClassImplementsTheWorldAComponentExports` (the clock
+  wait, the program's own provider beside it).
 - **The user-facing reference is `doc/*/java/wit.md`'s four tables** (each WIT type's Java
   type and where it is declared; each type by direction and position; each output; the
   boundary rules), every cell read off `JavaWitTypes` / `JavaWitImports` / `JavaWitExports`
@@ -1546,7 +1563,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   sleep is a bare trap, sync or async. jco 1.42.0 calls an async export of a `--no-wasi`
   component (and of a Lisp WASI component); it translates no Java WASI component at all,
   async or not ("exceptions proposal not enabled": EH mode). `--no-gc --component` lifts it
-  async too, though nothing of the scalar subset waits (`.kb/no-gc-scalar-wasm.md`, "An `async
+  async too, waiting where it reaches an `async func` `@WitImport` (`.kb/no-gc-scalar-wasm.md`, "An `async
   func`"). A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
   monitor entry reaches `%java-unforeseen`. A compound type crosses it as any export's (the
@@ -1702,6 +1719,8 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
   reactor (`.todo/111`).
+- **A `@WitImport` of scalar types** is imported, its lookup the binding ("WIT imports", "The
+  lookup is the binding").
 - **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
   for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
   is the top level as is, the start function's, and an uncaught exception the bare trap.
