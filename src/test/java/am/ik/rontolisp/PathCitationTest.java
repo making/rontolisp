@@ -150,10 +150,11 @@ class PathCitationTest {
 
 	/**
 	 * Top-level entries the item-number scan leaves out: the notes, where item numbers
-	 * belong, and what is not this repository's text.
+	 * belong, what is not this repository's text, and the slide decks, which quote
+	 * prompts that number todos rather than cite one.
 	 */
 	private static final Set<String> NOT_SCANNED_FOR_ITEMS = Set.of(".git", ".kb", ".todo", ".claude", ".idea",
-			"target");
+			"target", "decks");
 
 	/**
 	 * Directories that are build output wherever they sit
