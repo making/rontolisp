@@ -680,6 +680,11 @@ gitBranch=${git.branch}
 								<buildArg>--exclude-config</buildArg>
 								<buildArg>.*jline.*\.jar</buildArg>
 								<buildArg>META-INF/native-image/.*</buildArg>
+								<!-- java.lang.Thread's members (a Clojure program's host calls on the
+									 binary) reach the thread parker, which svm-wasm lacks. -->
+								<buildArg>--exclude-config</buildArg>
+								<buildArg>.*/rontolisp-[^/]*\.jar</buildArg>
+								<buildArg>META-INF/native-image/am\.ik\.rontolisp/rontolisp-thread/.*</buildArg>
 								<buildArg>-H:-AutoRunVM</buildArg>
 							</buildArgs>
 						</configuration>

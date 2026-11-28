@@ -37,19 +37,36 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ClojureHostImageTypesTest {
 
-	private static final Path METADATA = Path.of("src", "main", "resources", "META-INF", "native-image",
-			"am.ik.rontolisp", "rontolisp", "reachability-metadata.json");
+	private static final Path NATIVE_IMAGE = Path.of("src", "main", "resources", "META-INF", "native-image",
+			"am.ik.rontolisp");
+
+	/**
+	 * The binary reads both; {@code java.lang.Thread}'s file is apart because the
+	 * playground's Web Image build excludes it (svm-wasm has no thread parker).
+	 */
+	private static final List<Path> METADATA = List.of(
+			NATIVE_IMAGE.resolve(Path.of("rontolisp", "reachability-metadata.json")),
+			NATIVE_IMAGE.resolve(Path.of("rontolisp-thread", "reachability-metadata.json")));
 
 	@Test
 	void theImageRegistersEveryJdkClassTheFrontendNames() throws Exception {
-		JsonNode reflection = JsonMapper.builder()
-			.build()
-			.readTree(Files.readString(METADATA, StandardCharsets.UTF_8))
-			.path("reflection");
-		assertThat(reflection.isMissingNode()).as("reflection in %s", METADATA).isFalse();
+		List<JsonNode> entries = new ArrayList<>();
+		for (Path file : METADATA) {
+			JsonNode reflection = JsonMapper.builder()
+				.build()
+				.readTree(Files.readString(file, StandardCharsets.UTF_8))
+				.path("reflection");
+			assertThat(reflection.isMissingNode()).as("reflection in %s", file).isFalse();
+			List<String> types = new ArrayList<>();
+			for (JsonNode entry : reflection) {
+				entries.add(entry);
+				types.add(entry.path("type").asString(""));
+			}
+			assertThat(types).as("reflection types in %s", file).isSorted();
+		}
 		List<String> registered = new ArrayList<>();
 		List<String> callable = new ArrayList<>();
-		for (JsonNode entry : reflection) {
+		for (JsonNode entry : entries) {
 			String type = entry.path("type").asString(null);
 			assertThat(type).as("type of %s", entry).isNotNull();
 			registered.add(type);
@@ -74,8 +91,9 @@ class ClojureHostImageTypesTest {
 		}
 		assertThat(callable).as("the types registered with their members, in %s", METADATA)
 			.containsExactlyInAnyOrderElementsOf(ClojureInteropLowering.HOST_CALLABLE_CLASSES);
-		assertThat(registered).as("reflection types in %s", METADATA).isSorted();
-		assertThat(registered).as("reflection types in %s", METADATA).containsExactlyElementsOf(expectedHostTypes());
+		assertThat(registered).as("reflection types in %s", METADATA)
+			.containsExactlyInAnyOrderElementsOf(expectedHostTypes())
+			.doesNotHaveDuplicates();
 		for (String type : registered) {
 			assertThat(jdkClass(type)).as(type).isNotNull();
 		}

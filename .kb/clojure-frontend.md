@@ -3526,6 +3526,12 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
   and then died, the same run). The bridge reads a class that answers no member through its
   superclasses (`ReflectiveJavaClasses.Type.methods`), so a host exception outside the list still
   answers `getMessage` where `Throwable` registers it.
+- `java.lang.Thread`'s entry is its own file,
+  `src/main/resources/META-INF/native-image/am.ik.rontolisp/rontolisp-thread/reachability-metadata.json`, which
+  the `-Pweb` build excludes (`--exclude-config` on the project jar): its public methods reach the
+  thread parker and stack-overflow check svm-wasm lacks, and the playground image fails to build
+  (`ImageSingletons do not contain key ...Parker$ParkerFactory`, measured 2026-11-28, GraalVM
+  25.0.5). A new `HOST_CALLABLE_CLASSES` type is checked with `./mvnw -Pweb -DskipTests package`.
 - Macro-time evaluation runs on the image's reflection even WITH a JDK found: the lowering
   reads class files, but a macro body runs in the interpreter. A bare `{"type"}` entry answers
   the queries but refuses the call (`MissingReflectionRegistrationError`), so the members

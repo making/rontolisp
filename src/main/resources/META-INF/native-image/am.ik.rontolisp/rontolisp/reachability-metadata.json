@@ -228,7 +228,6 @@
       "allPublicConstructors": true,
       "allPublicFields": true
     },
-    { "type": "java.lang.Thread", "allPublicConstructors": true, "allPublicMethods": true, "allPublicFields": true },
     { "type": "java.lang.ThreadDeath", "allPublicConstructors": true, "allPublicFields": true },
     {
       "type": "java.lang.Throwable",

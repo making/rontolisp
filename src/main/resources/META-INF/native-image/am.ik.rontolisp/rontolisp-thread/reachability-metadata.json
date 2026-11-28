@@ -1,0 +1,12 @@
+{
+  "comment": [
+    "java.lang.Thread's members, a HOST_CALLABLE_CLASSES type (ClojureInteropLowering) kept out of",
+    "the main file: rontolisp's binary reads both, and the browser playground's Web Image build",
+    "excludes this one (pom.xml, the web profile's --exclude-config). The svm-wasm platform has no",
+    "thread parker or stack-overflow check, and registering Thread's public methods makes them",
+    "reachable, which fails that build. ClojureHostImageTypesTest reads the two files as one."
+  ],
+  "reflection": [
+    { "type": "java.lang.Thread", "allPublicConstructors": true, "allPublicMethods": true, "allPublicFields": true }
+  ]
+}
