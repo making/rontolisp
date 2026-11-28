@@ -27,6 +27,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code Object} and {@code Throwable} -- is registered as a type in
  * {@code reachability-metadata.json}, so the image answers every member query of it as a
  * JVM does. A class a program names outside them stays partial without a JDK.
+ * <p>
+ * Each entry registers its public constructors and fields too, and the types a program
+ * makes or calls ({@code HOST_CALLABLE_CLASSES}) their public methods: a program builds a
+ * host class and calls it through the bridge's reflection, which answered no constructor
+ * of a type registered without them ({@code java.util.HashMap}), refused one it answered
+ * ({@code java.util.GregorianCalendar}), and refused the call of a member it resolved
+ * ({@code Integer.parseInt}, {@code HashMap.put}, measured 2026-11-28).
  */
 class ClojureHostImageTypesTest {
 
@@ -41,16 +48,23 @@ class ClojureHostImageTypesTest {
 			.path("reflection");
 		assertThat(reflection.isMissingNode()).as("reflection in %s", METADATA).isFalse();
 		List<String> registered = new ArrayList<>();
+		List<String> callable = new ArrayList<>();
 		for (JsonNode entry : reflection) {
 			String type = entry.path("type").asString(null);
 			assertThat(type).as("type of %s", entry).isNotNull();
 			registered.add(type);
-			List<String> members = ClojureInteropLowering.HOST_STATIC_CLASSES.getOrDefault(type, List.of());
-			if (members.isEmpty()) {
-				assertThat(entry.size()).as("keys of %s", entry).isEqualTo(1);
+			assertThat(entry.path("allPublicConstructors").asBoolean(false))
+				.as("constructors of %s: the bridge constructs a host class reflectively", entry)
+				.isTrue();
+			assertThat(entry.path("allPublicFields").asBoolean(false)).as("fields of %s", entry).isTrue();
+			if (entry.path("allPublicMethods").asBoolean(false)) {
+				callable.add(type);
+			}
+			List<String> members = ClojureInteropLowering.HOST_STATIC_CLASSES.get(type);
+			if (members == null || members.isEmpty()) {
+				assertThat(entry.path("methods").isMissingNode()).as("methods of %s", entry).isTrue();
 			}
 			else {
-				assertThat(entry.size()).as("keys of %s", entry).isEqualTo(2);
 				List<String> methods = new ArrayList<>();
 				for (JsonNode method : entry.path("methods")) {
 					methods.add(method.path("name").asString(null));
@@ -58,6 +72,8 @@ class ClojureHostImageTypesTest {
 				assertThat(methods).as("methods of %s", entry).containsExactlyElementsOf(members);
 			}
 		}
+		assertThat(callable).as("the types registered with their members, in %s", METADATA)
+			.containsExactlyInAnyOrderElementsOf(ClojureInteropLowering.HOST_CALLABLE_CLASSES);
 		assertThat(registered).as("reflection types in %s", METADATA).isSorted();
 		assertThat(registered).as("reflection types in %s", METADATA).containsExactlyElementsOf(expectedHostTypes());
 		for (String type : registered) {
@@ -69,9 +85,10 @@ class ClojureHostImageTypesTest {
 	 * The JDK classes the front end's lowering decisions read, on every target: the
 	 * {@code PARENTS} throwables and their parents, the hostless receivers, the host
 	 * statics macro-time evaluation invokes, the value methods' host kinds, the time
-	 * values' kinds, the io values' API types, and {@code Object} and {@code Throwable}.
-	 * The {@code clojure.lang} throwables of {@code PARENTS} are no JDK classes, so they
-	 * stay out: the image holds none of them.
+	 * values' kinds, the io values' API types, {@code Object} and {@code Throwable}, and
+	 * the types a program makes or calls ({@code HOST_CALLABLE_CLASSES}). The
+	 * {@code clojure.lang} throwables of {@code PARENTS} are no JDK classes, so they stay
+	 * out: the image holds none of them.
 	 * @return the binary names, in name order
 	 */
 	private static List<String> expectedHostTypes() {
@@ -82,6 +99,7 @@ class ClojureHostImageTypesTest {
 		}
 		expected.addAll(ClojureInteropLowering.HOSTLESS_RECEIVERS);
 		expected.addAll(ClojureInteropLowering.HOST_STATIC_CLASSES.keySet());
+		expected.addAll(ClojureInteropLowering.HOST_CALLABLE_CLASSES);
 		expected.addAll(ClojureValueMethodLowering.hostKindTypes());
 		expected.addAll(ClojureTimeValueLowering.kindHosts());
 		expected.add(ClojureDecimalLowering.HOST);

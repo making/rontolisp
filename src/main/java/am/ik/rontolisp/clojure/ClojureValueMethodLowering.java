@@ -208,10 +208,11 @@ final class ClojureValueMethodLowering {
 	 * oracle's class: a vector a {@code List}, {@code RandomAccess} and
 	 * {@code Comparable}, a list or seq a {@code List}, a set a {@code Set}, a map or
 	 * record a {@code Map}, a keyword or symbol a {@code Comparable}, a ratio a
-	 * {@code Number}, a seq iterator an {@code Iterator}, and a fn the oracle's
+	 * {@code Number}, a seq iterator an {@code Iterator}, a fn the oracle's
 	 * {@code AFunction}'s three JDK interfaces ({@code Comparator}'s {@code reversed} or
-	 * {@code thenComparing}; its {@code IFn} methods are rows). {@code Object}'s methods
-	 * every value but nil answers.
+	 * {@code thenComparing}; its {@code IFn} methods are rows), and a class value a
+	 * {@code java.lang.Class}, the oracle's class is. {@code Object}'s methods every
+	 * value but nil answers.
 	 */
 	private static final List<HostKind> HOST_KINDS = List.of(
 			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IS-VECTOR"), r),
@@ -226,7 +227,14 @@ final class ClojureValueMethodLowering {
 					List.of("java.util.Iterator"), HOST_ITERATOR),
 			new HostKind(r -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), r),
 					List.of("java.util.Comparator", "java.lang.Runnable", "java.util.concurrent.Callable"),
-					HOST_MEMBER));
+					HOST_MEMBER),
+			// a class value: a designator crosses to Java as the host's Class of its
+			// name (clojure.lisp, %clojure-designator-host), which is the object the
+			// oracle's class value is, so java.lang.Class's members answer on it. An
+			// arm of the class-designator family, which a program making no class
+			// value folds.
+			new HostKind(r -> ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.CLASS_DESIGNATOR_P), r),
+					List.of("java.lang.Class"), HOST_MEMBER));
 
 	/**
 	 * The kinds no one-argument predicate names exactly, each to its family's test, which

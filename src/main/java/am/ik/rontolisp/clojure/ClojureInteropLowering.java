@@ -3275,14 +3275,50 @@ final class ClojureInteropLowering {
 	 * {@code isAssignableFrom} and {@code isPrimitive} ({@code isa?}),
 	 * {@code getSuperclass} and {@code getInterfaces} ({@code parents},
 	 * {@code ancestors}, {@code bases}), {@code getSimpleName} and {@code toString}
-	 * ({@code .getSimpleName}, {@code str}). An image without them refused the call
+	 * ({@code .getSimpleName}, {@code str}), and its readers ({@code isEnum},
+	 * {@code isInterface}, {@code isAnnotation}, {@code getComponentType},
+	 * {@code asSubclass}). An image without them refused the call
 	 * ({@code MissingReflectionRegistrationError}), since a reflective invoke needs the
 	 * member registered however many classes the image holds.
+	 * <p>
+	 * {@code java.lang.Throwable}'s readers are the runtime's exception path: what a host
+	 * exception printed or asked a message of answers ({@code clojure.lisp},
+	 * {@code %clojure-host-throwable}, {@code %clojure-host-string}), which an image
+	 * refusing them made a caught failure unusable.
 	 */
 	static final Map<String, List<String>> HOST_STATIC_CLASSES = Map.of("java.lang.Class",
 			List.of("forName", "getName", "getSuperclass", "getInterfaces", "isAssignableFrom", "isInstance",
-					"isPrimitive", "getSimpleName", "toString"),
-			"java.lang.System", List.of("getProperty"), "java.util.regex.Pattern", List.of());
+					"isPrimitive", "isEnum", "isInterface", "isAnnotation", "getComponentType", "asSubclass",
+					"getSimpleName", "toString"),
+			"java.lang.System", List.of("getProperty"), "java.util.regex.Pattern", List.of(), "java.lang.Throwable",
+			List.of("getMessage", "getLocalizedMessage", "getCause", "toString"));
+
+	/**
+	 * The JDK types a program makes or calls as values -- the wrappers, {@code Math}, the
+	 * containers, the streams, the time and net values -- whose public members the image
+	 * registers too. A member of a host object is invoked reflectively on the binary,
+	 * where a registered type's members are callable only where registered: a program's
+	 * {@code (Integer/parseInt "1")} or {@code (.put m 1 2)} resolved and then died
+	 * (measured 2026-11-28, GraalVM 25.0.3, macOS aarch64). Registered as
+	 * {@code allPublicMethods} and {@code allPublicFields} entries in
+	 * {@code reachability-metadata.json}; the list stays at what a program makes or
+	 * calls, weighed for the image's size.
+	 */
+	static final List<String> HOST_CALLABLE_CLASSES = List.of("java.io.File", "java.io.FileInputStream",
+			"java.io.PrintStream", "java.io.PrintWriter", "java.lang.Boolean", "java.lang.Byte", "java.lang.Character",
+			"java.lang.Double", "java.lang.Float", "java.lang.Integer", "java.lang.Long", "java.lang.Math",
+			"java.lang.Short", "java.lang.String", "java.lang.StringBuffer", "java.lang.StringBuilder",
+			"java.lang.Thread", "java.net.URI", "java.net.URL", "java.sql.Timestamp", "java.time.Duration",
+			"java.time.Instant", "java.time.LocalDate", "java.time.LocalDateTime", "java.time.LocalTime",
+			"java.time.OffsetDateTime", "java.time.OffsetTime", "java.time.Period", "java.time.ZoneId",
+			"java.time.ZoneOffset", "java.time.ZonedDateTime", "java.time.format.DateTimeFormatter",
+			"java.time.temporal.ChronoUnit", "java.util.ArrayDeque", "java.util.ArrayList", "java.util.Arrays",
+			"java.util.Calendar", "java.util.Collections", "java.util.Date", "java.util.GregorianCalendar",
+			"java.util.HashMap", "java.util.HashSet", "java.util.IdentityHashMap", "java.util.LinkedHashMap",
+			"java.util.LinkedHashSet", "java.util.LinkedList", "java.util.Locale", "java.util.Objects",
+			"java.util.PriorityQueue", "java.util.Random", "java.util.StringJoiner", "java.util.TimeZone",
+			"java.util.TreeMap", "java.util.TreeSet", "java.util.UUID", "java.util.WeakHashMap",
+			"java.util.concurrent.atomic.AtomicReference");
 
 	/**
 	 * An instance call's host arm for a receiver of no known class where the host is not

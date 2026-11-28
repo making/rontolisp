@@ -75,9 +75,10 @@ public final class ClojureLibrary {
 	 * record's, deftype's or reify site's tag, likewise) and
 	 * {@code %clojure-host-fn-class} (a function's class, likewise),
 	 * {@code %clojure-host-class-bases} ({@code bases} of a host class, which exists
-	 * nowhere there), {@code %clojure-host-string} ({@code str}),
-	 * {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?}, {@code uri?},
-	 * {@code class?}), {@code %clojure-host-class-instance-p} and
+	 * nowhere there), {@code %clojure-designator-class-object} (the host's Class of a
+	 * designator's name, which exists nowhere there), {@code %clojure-host-string}
+	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
+	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p} and
 	 * {@code %clojure-host-class-assignable-p} ({@code instance?} of a class value), and
 	 * {@code %clojure-host-throwable} (an exception's view of a value) answer NIL,
 	 * {@code %clojure-host-method} ({@code .getMessage} of a value that is no exception)
@@ -119,6 +120,9 @@ public final class ClojureLibrary {
 			  (declare (ignore c))
 			  nil)
 			(defun rontolisp::%clojure-host-fn-class (name)
+			  (declare (ignore name))
+			  nil)
+			(defun rontolisp::%clojure-designator-class-object (name)
 			  (declare (ignore name))
 			  nil)
 			(defun rontolisp::%clojure-host-print-method (x table)

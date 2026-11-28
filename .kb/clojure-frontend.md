@@ -2179,7 +2179,12 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `class` call of a kind's value, a `clojure.lang` name, a fn's class), so the host walk reads
   a designator by the designator tables (`%clojure-designator-class-bases`), the way `supers`
   and `bases` already did: `isa?`, `parents` and `ancestors` answer it as the JVM's interpreter
-  answers the class. The rows are literal strings
+  answers the class. A designator that crosses to a `java:` member is the host's `Class` of its
+  name where the host has one (`%clojure-designator-class-object`: `Class/forName`), the object
+  the oracle hands Java, so a member taking `java.lang.Class` takes it -- measured 2026-11-27:
+  `(.isAssignableFrom Number (class 1))` was `RontoJavaHandle cannot be cast to
+  java.lang.Class`; a name the host has no class of (a program type, a `clojure.lang` class, a
+  class file the image lacks) keeps the handle. The rows are literal strings
   (an interface list is one space-separated string), since on the JVM a string `format` builds
   is no `java.lang.String` and the runtime class reads quoted strings only.
 - **Readers**: a `Class/forName` of a `clojure.lang` row name answers the stub, one or three
@@ -2258,7 +2263,8 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `JvmRuntimeClassFilesTest` (the stub classes travel); `supers`/`bases` and a fn's class:
   clojure-spec `parents-and-ancestors-of-a-class-add-its-java-supers` (all four,
   oracle-identical), `ClojureClassBasesTest`; the native binary's walk of a class literal, a
-  fn's class and a designator beside the host's class objects:
+  fn's class and a designator beside the host's class objects, and a designator as a
+  `java.lang.Class` argument, as a receiver and as a returned class value:
   `ClojureNativeLoweringE2eTest#theBinaryWalksAHostClassAsTheJvmInterpreterDoes`.
 
 ## Record and deftype class values
@@ -2294,10 +2300,14 @@ real `Class` objects, so a class value of another shape would be unequal to them
   the interfaces; `prefer-method` keeps its keys by class name (`C%H-PREF-KEY`), so a preference
   over a class spelling meets a library's row stored under the class.
 - **Across the `java:` boundary** (interpreter, JVM): where the class value is the host's stub it
-  crosses as itself; a designator (a program naming no `java:`) crosses as one `java:handle` per
-  class name (`%clojure-designator-handles`), class `java.lang.Class`, so a Java map -- schema's
-  `WeakHashMap` registry too -- keys a record's class like the oracle's one `Class` object; Java
-  hands it back as the designator.
+  crosses as itself; a designator crosses as the host's `Class` of its name where the host has
+  one (`%clojure-designator-class-object`), so a member taking `java.lang.Class` takes it and a
+  Java map -- schema's `WeakHashMap` registry too -- keys the class like the oracle's one `Class`
+  object, else as one `java:handle` per class name (`%clojure-designator-handles`, class
+  `java.lang.Class`), which Java hands back as the designator. Two class values of one name are
+  `=` whichever representation they are in (`%clojure-class-value-p`), as the oracle's one
+  `Class` object is, and a designator is a receiver of `java.lang.Class`'s members like a class
+  literal (`ClojureValueMethodLowering`'s class kind).
 - **`R/create`** (schema's `s/record` expansion) is `map->R`, like `R/new` is `->R`
   (`ClojureInteropLowering.qualifiedMember`; a deftype has none).
 - **Kept lenient**: a local or a var of the name wins (the oracle refuses `(def R ...)` beside
@@ -3500,12 +3510,22 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
   reflection answers, and its build registers the JDK classes the front end names in its own
   code -- `ClojureThrowables.PARENTS`, `ClojureInteropLowering.HOSTLESS_RECEIVERS`,
   `ClojureValueMethodLowering`'s host kinds, `ClojureTimeValueLowering`'s kinds,
-  `ClojureIoLowering`'s API types, `Object`, `Throwable` -- as `reflection` types in
-  `reachability-metadata.json`, so each answers every member query as a JVM does;
-  `PARENTS`' `clojure.lang` throwables stay out (no host here holds them). A class outside the
-  list stays partial without a JDK, and the binary warns when it finds none
-  (`JavaClassPath.ClassFiles`). The list stays at what the front end names, bare `{"type"}`
-  entries, weighed for the web image the playground downloads.
+  `ClojureIoLowering`'s API types, `Object`, `Throwable` -- and the types a program makes or
+  calls (`ClojureInteropLowering.HOST_CALLABLE_CLASSES`: the wrappers, `Math`, the containers,
+  the streams, the time and net values) as `reflection` types in `reachability-metadata.json`,
+  so each answers every member query as a JVM does; `PARENTS`' `clojure.lang` throwables stay
+  out (no host here holds them). A class outside the list stays partial without a JDK, and the
+  binary warns when it finds none (`JavaClassPath.ClassFiles`). The list stays at what the
+  front end names and what a program makes or calls, weighed for the web image the playground
+  downloads (3.6% of the binary for the `HOST_CALLABLE_CLASSES` half, measured 2026-11-28).
+- Registering a type registers its members with it, not its supertypes': `allPublicConstructors`
+  and `allPublicFields` on every entry (a program constructs and reads a host class through the
+  bridge's reflection, which answered no constructor of `java.util.HashMap` and refused
+  `java.util.GregorianCalendar`'s call, measured 2026-11-28, GraalVM 25.0.3, macOS aarch64), and
+  `allPublicMethods` on `HOST_CALLABLE_CLASSES` (a map's `.put` or `Integer.parseInt` resolved
+  and then died, the same run). The bridge reads a class that answers no member through its
+  superclasses (`ReflectiveJavaClasses.Type.methods`), so a host exception outside the list still
+  answers `getMessage` where `Throwable` registers it.
 - Macro-time evaluation runs on the image's reflection even WITH a JDK found: the lowering
   reads class files, but a macro body runs in the interpreter. A bare `{"type"}` entry answers
   the queries but refuses the call (`MissingReflectionRegistrationError`), so the members
@@ -3519,9 +3539,11 @@ a ThreadLocal); only `ClojureReflectedClasses` touches reflection.
 - Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
   `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
   program, a no-JDK host-form program), `ClojureHostImageTypesTest` (the registered list
-  against the constants above), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir` vs
-  this JVM's, CI's native-image-verify job; the no-JDK program again with the binary seeing no
-  JDK).
+  against the constants above, and each entry's constructors, fields and, for
+  `HOST_CALLABLE_CLASSES`, methods), `ClojureNativeLoweringE2eTest` (the binary's `--dump-ir`
+  vs this JVM's, CI's native-image-verify job; the no-JDK program again with the binary seeing
+  no JDK; the walk program, a map made and filled, a parsed static, a caught exception's
+  message, a class value's readers and `asSubclass` compared as runs).
 
 ## Java interop
 

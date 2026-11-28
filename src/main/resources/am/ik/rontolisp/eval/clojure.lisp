@@ -2945,6 +2945,13 @@
         ((rontolisp::%clojure-designator-p k) (car (cdr k)))
         (t (rontolisp::%clojure-host-class-name k))))
 
+(defun rontolisp::%clojure-class-value-p (x)
+  "Whether X is a class value a program holds: a designator (an arm of the
+   class-designator family) or a host Class object, which crossing one into Java
+   answers where the host has the class (%clojure-designator-host)."
+  (or (rontolisp::%clojure-designator-p x)
+      (if (rontolisp::%clojure-host-class-name x) t nil)))
+
 (defun rontolisp::%clojure-class-row (name rows)
   "The row of the class NAME among ROWS, NIL when they hold none."
   (if rows
@@ -3323,6 +3330,13 @@
    ;; two functions are = only when identical, like the oracle: two distinct
    ;; closures never compare structurally, even when their bodies agree
    ((and (functionp a) (functionp b)) nil)
+   ;; two class values are = by the class they name: the oracle's one Class
+   ;; object is either representation here (a designator, the host's Class), and
+   ;; Java answers the latter for one that crossed to it
+   ((and (rontolisp::%clojure-class-value-p a)
+         (rontolisp::%clojure-class-value-p b))
+    (equal (rontolisp::%clojure-class-value-name a)
+           (rontolisp::%clojure-class-value-name b)))
    ((and (vectorp a) (vectorp b) (not (stringp a)) (not (stringp b)))
     ;; two vectors read in place, without the seq view's copies
     (and (eql (length a) (length b))
@@ -4095,20 +4109,45 @@
 
 (defvar rontolisp::%clojure-designator-handles
   (make-hash-table :test 'equal)
-  "Each class name a designator crossed into Java under to the handle it crossed
-   as.")
+  "Each class name a designator crossed into Java under, where the host has no
+   Class of it, to the handle it crossed as.")
+
+(defvar rontolisp::%clojure-designator-class-objects
+  (make-hash-table :test 'equal)
+  "Each class name a designator crossed into Java under to the host's Class of it,
+   or :none where the host has none.")
+
+(defun rontolisp::%clojure-designator-class-object (name)
+  "The host's Class named NAME, the object the oracle's class value is to Java, or
+   NIL where the host has none: a class of the program's own, a clojure.lang class
+   a native image makes no stub of, a name no class file answers. A host arm like
+   %clojure-host-class-named: a program with no java: operator gets a body
+   answering nil."
+  (let ((known (gethash name rontolisp::%clojure-designator-class-objects)))
+    (cond ((eq known :none) nil)
+          (known known)
+          (t (let ((c
+                    (handler-case (java:static "java.lang.Class" "forName" name)
+                      (error () nil))))
+               (setf (gethash name rontolisp::%clojure-designator-class-objects)
+                     (if c c :none))
+               c)))))
 
 (defun rontolisp::%clojure-designator-host (x)
-  "The Java object the class designator X is: one java:handle per class name,
-   spelled and equal by its toString (class and the name, the oracle's Class's)
-   and kept here, so a host map -- a WeakHashMap too -- keys the class like the
-   oracle's one Class object. Java hands it back as the designator."
+  "The Java object the class designator X is: the host's Class of its name where
+   the host has one (%clojure-designator-class-object) -- what the oracle hands
+   Java for a class value, so a member taking java.lang.Class takes it -- else one
+   java:handle per class name, spelled and equal by its toString (class and the
+   name, the oracle's Class's) and kept here, so a host map -- a WeakHashMap too
+   -- keys the class like the oracle's one Class object. Java hands a handle back
+   as the designator."
   (let ((name (car (cdr x))))
-    (or (gethash name rontolisp::%clojure-designator-handles)
-        (setf (gethash name rontolisp::%clojure-designator-handles)
-              (java:handle x (concatenate 'string "class " name)
-                           (rontolisp::%clojure-string-hash-code name) nil
-                           "java.lang.Class")))))
+    (or (rontolisp::%clojure-designator-class-object name)
+        (or (gethash name rontolisp::%clojure-designator-handles)
+            (setf (gethash name rontolisp::%clojure-designator-handles)
+                  (java:handle x (concatenate 'string "class " name)
+                               (rontolisp::%clojure-string-hash-code name) nil
+                               "java.lang.Class"))))))
 
 ;; X -- an atom, a deftype, a reify, a pattern, a var, or a value of no Java kind
 ;; -- as a java:handle equal only to itself, of the oracle's class
