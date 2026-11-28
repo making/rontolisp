@@ -358,7 +358,7 @@ final class JavaWitExports {
 	 * The plain name of an exported interface: {@code add} of
 	 * {@code docs:adder/add@0.1.0}, an inline one's own.
 	 */
-	private static String interfaceName(String iface) {
+	static String interfaceName(String iface) {
 		String plain = iface.substring(iface.lastIndexOf('/') + 1);
 		int version = plain.indexOf('@');
 		return version < 0 ? plain : plain.substring(0, version);

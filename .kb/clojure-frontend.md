@@ -1600,7 +1600,7 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
 - WIT paths resolve against the naming file (`ClojureFiles`); the entry file's directive keeps
   the path as written, so the CL inliner, resolving against the entry's directory, reads the
   same file; a dependency jar's namespace names `<jar>!/<entry>` (`WitFiles.read`).
-  `--scaffold-wit` reads no source, so it has no Clojure form.
+  `--scaffold-wit` writes Common Lisp or Java; a `.clj` output is refused (`.todo/n16`).
 - Pins: `ClojureWasmBoundaryTest`, `ClojureWitBoundaryTest` (interpreter, JVM, P1 under node,
   `--component` under wasmtime with its real `wasi:keyvalue`, `wasi:sockets/types`,
   `wasi:http/types`; `everyRichValueCrossesInClojuresSpellingOnTheInterpreterAndTheJvm`,

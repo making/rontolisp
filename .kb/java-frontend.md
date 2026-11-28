@@ -1595,6 +1595,35 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   composed with the Java component); by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
+### The skeleton (`--scaffold-wit`)
+
+`-o X.java` or `--source-language java` writes the `@WitExport` class of a world
+(`java/JavaWitScaffold`, reached through `eval/JavaHostBoundary.scaffold`; `cli` names no
+`java` class). **One source of truth**: the world is `JavaBoundary.outlineWorld`
+(`WitExportDirective.outline`), the text `JavaWitTypes.javaText` over a `Spelling` naming the
+types it is about to declare, the refusals `JavaWitTypes.refusal` and
+`JavaWitImports.handedRefusal`, the definitions walked as `Table.definition` walks them -- so a
+function the check refuses is left out with the check's message (pinned by writing it back in
+and compiling: the error ends with that message).
+
+- Decided: a `result` is a `WitResult` (the mapping's first spelling); a tuple a record named
+  after its place (`BoundsResult`), an alias's after the alias (`Ipv4Address`), components
+  `v0`...; an import a `@WitImport` MEMBER interface of the class, so one file compiles
+  unchanged (measured 2026-11-28: the keyvalue skeleton filled by hand answered `1` under
+  `wasmtime run -S keyvalue=y --invoke`, the nested binding as a top-level one's), with each
+  interface whose resource an import takes with `use`, transitively; a resource of the
+  interface always declared, as the check covers it unreached.
+- Traps: a variant case shadows a type of its name inside the sealed interface, so its
+  payload names such a type in full (`Shapes.Geometry.Point`); a library class is named simply
+  only where no declared type has its simple name (a WIT `set` record keeps `java.util.Set`).
+- A world's inline function import refuses the whole world in `wit-export`'s walk, so it is a
+  refusal of the skeleton too, not an interface; a WIT above the Java file's directory is
+  warned of (`Class.getResource` names none).
+- Pins: `WitScaffolderTest.aJavaSkeletonPassesTheCheckAndCompilesToTheWorld` (shapes, and
+  keyvalue, sockets and counters given a world importing them: compiled with `--emit-wit`, its
+  exports the world's), `.aJavaSkeletonCarriesTheMappingTheDocsAndTheSignatures`,
+  `.aJavaSkeletonLeavesOutWhatTheCheckRefusesWordedAsItWordsIt`.
+
 ## A reactor of public static methods (2026-11-24, l94)
 
 **Invariant: a program with no `main` and no `@WitExport` class, compiled to a core module with

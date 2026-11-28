@@ -189,6 +189,29 @@ public final class Java {
 		return read(source, file, files, true, warnings, suspended, boundary, null, List.of());
 	}
 
+	/**
+	 * The skeleton of a Java program implementing a WIT world
+	 * ({@code rontolisp --scaffold-wit world.wit -o Greeter.java}): a {@code @WitExport}
+	 * class whose static methods are the world's exports, a {@code @WitImport} member
+	 * interface for each interface it imports, and the types they reach, written from the
+	 * mapping the checks apply.
+	 * @param boundary where the WIT is read, as a program's {@code @WitExport} reads it
+	 * @param wit the WIT as the annotations name it: relative to the generated file
+	 * @param paths where the WIT is read from
+	 * @param world the world's name
+	 * @param className the class's name
+	 * @param docs the WIT's {@code ///} lines, by {@code <scope>#<name>}: the scope an
+	 * interface's canonical id, an inline one's name or empty for the world's own; the
+	 * name a function's, a type's, {@code <resource>.<function>} of a resource's
+	 * function, empty for the scope itself
+	 * @return the source and what was left out
+	 * @throws LispReadException when the WIT cannot be read or holds no such world
+	 */
+	public static JavaWitSkeleton scaffoldWit(JavaBoundary boundary, String wit, List<String> paths, String world,
+			String className, java.util.Map<String, List<String>> docs) {
+		return JavaWitScaffold.scaffold(boundary, wit, paths, world, className, docs);
+	}
+
 	private static List<LispVal> read(String source, @Nullable String file, JavaFiles files, boolean loaded,
 			@Nullable Consumer<String> warnings, boolean suspended, JavaBoundary boundary, @Nullable String tests,
 			List<String> testFiles) {

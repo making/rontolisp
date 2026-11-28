@@ -540,6 +540,67 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 sleep してから `WitResult` を返す `async func` です。隣の Lisp のコマンドはインタフェースを
 `:blocking t` でバインドし、答えを待ちます。
 
+### スケルトンの生成
+
+`--scaffold-wit` は、出力が `.java` ファイルのとき、または標準出力に書くときに
+`--source-language java` を指定したとき、world からクラスを生成します。
+
+```bash
+rontolisp --scaffold-wit wit/shapes.wit -o Shapes.java
+```
+
+```console
+@WitExport(value = "shapes", wit = "wit/shapes.wit")
+public class Shapes {
+
+    public record Summary(int count, double total) {
+    }
+
+    /**
+     * How many areas, and their sum.
+     *
+     * WIT: {@code summarize: func(areas: list<f64>) -> summary}
+     */
+    public static Summary summarize(List<Double> areas) {
+        throw new UnsupportedOperationException("summarize is not implemented yet");
+    }
+
+    public static class Geometry {
+        ...
+        public static Optional<BoundsResult> bounds(List<Point> ps) {
+            throw new UnsupportedOperationException("bounds is not implemented yet");
+        }
+    }
+}
+```
+
+各エクスポートは、中身を書くまで例外を投げる static メソッドです。WIT の `///` コメントと
+シグネチャが Javadoc になります。各型は[型](#the-types)の表が宣言する場所に宣言されます。
+`result` は `WitResult`、タプルは置かれた場所にちなんで名付けたレコード（`BoundsResult`）、
+別名があればその名前のレコード（`type ipv4-address = tuple<...>` は `Ipv4Address`）で、
+成分は `v0`、`v1` と続きます。world がインポートする各インタフェースは、リソースと型を含めて
+クラスの `@WitImport` メンバインタフェースになります。そのいずれかが `use` でリソースを取り込む
+インタフェースも同様です。メソッドからは `ServiceLoader.load(Shapes.Store.class)` で取得します。
+クラス名はファイル名、標準出力に書くときは world 名です。生成されたファイルはそのまま
+コンパイルできるので、エクスポートを 1 つずつ埋めていけます。
+
+アノテーションは WIT を Java ファイルのディレクトリから指すので、WIT はその下に置きます。
+そこから上にさかのぼるパスはコンパイル時に拒否され、生成時には警告が出ます。
+
+検査が拒否するものは生成しません。生成器は省いた項目を、検査と同じ文言で標準エラーと
+ファイルの先頭に書きます。
+
+```console
+rontolisp: warning: --scaffold-wit left out flag (flag of test:skip/host, wit/app.wit:4):
+its parameter x is option<bool>, an option of a type one of whose values the boundary
+cannot tell from none
+```
+
+省かれたインポートの関数は、インタフェースに宣言されないだけです。インタフェースは
+プログラムが呼ぶものを宣言するからです。省かれたエクスポートがあると（リソースを
+エクスポートする world、world 自身の関数をインポートする world、ここで拒否される型を
+エクスポートする world）、WIT を変えるまで検査が拒否するクラスになります。
+
 ## 型を置ける位置
 
 その型を使える出力（[出力ごとに使えるもの](#what-each-output-takes)）で、宣言のどこに

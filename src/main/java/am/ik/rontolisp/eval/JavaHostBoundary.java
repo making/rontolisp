@@ -5,14 +5,18 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.WitSource;
 import am.ik.rontolisp.compiler.WitTypeMapper;
+import am.ik.rontolisp.java.Java;
 import am.ik.rontolisp.java.JavaBoundary;
+import am.ik.rontolisp.java.JavaWitSkeleton;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -60,6 +64,30 @@ public final class JavaHostBoundary implements JavaBoundary {
 		this.reactor = reactor;
 		this.hostLogs = hostLogs;
 		this.entry = entry;
+	}
+
+	/**
+	 * The skeleton of a Java program implementing a WIT world ({@code --scaffold-wit}),
+	 * the WIT read from the file system as a program's {@code @WitExport} reads it, so
+	 * the file passes the check the compiler then makes.
+	 * @param witFile the WIT file, as the command line names it
+	 * @param wit the WIT as the generated annotations name it: relative to the generated
+	 * file
+	 * @param entry the generated file, or {@code null} when it is printed
+	 * @param world the world's name
+	 * @param className the class's name
+	 * @param docs the WIT's {@code ///} lines ({@link Java#scaffoldWit})
+	 * @param skipped told the refusal of each item left out
+	 * @return the Java source
+	 * @throws LispReadException when the WIT cannot be read or holds no such world
+	 */
+	public static String scaffold(String witFile, String wit, @Nullable String entry, String world, String className,
+			Map<String, List<String>> docs, Consumer<String> skipped) {
+		JavaWitSkeleton made = Java.scaffoldWit(
+				new JavaHostBoundary(SourceLoader.fileSystem(), true, true, false, false, entry), wit, List.of(witFile),
+				world, className, docs);
+		made.skipped().forEach(skipped);
+		return made.source();
 	}
 
 	@Override
@@ -116,13 +144,24 @@ public final class JavaHostBoundary implements JavaBoundary {
 
 	@Override
 	public @Nullable WitWorld exportWorld(String wit, List<String> paths, String world) {
+		return world(wit, paths, world, false);
+	}
+
+	@Override
+	public @Nullable WitWorld outlineWorld(String wit, List<String> paths, String world) {
+		return world(wit, paths, world, true);
+	}
+
+	private @Nullable WitWorld world(String wit, List<String> paths, String world, boolean outline) {
 		WitSource source = read(wit, paths);
 		if (source == null) {
 			return null;
 		}
+		WitExportDirective.Directive directive = new WitExportDirective.Directive(source.path(), world);
 		WitExportDirective.WorldDescription described;
 		try {
-			described = WitExportDirective.describe(new WitExportDirective.Directive(source.path(), world), source);
+			described = outline ? WitExportDirective.outline(directive, source)
+					: WitExportDirective.describe(directive, source);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispReadException(String.valueOf(ex.getMessage()));
@@ -140,7 +179,8 @@ public final class JavaHostBoundary implements JavaBoundary {
 			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params), type(result),
 					export.async(), export.at(), canonical));
 		}
-		return new WitWorld(described.name(), source.path(), List.copyOf(exports));
+		return new WitWorld(described.name(), source.path(), List.copyOf(exports), described.imports(),
+				described.refused());
 	}
 
 	// Whether a described type is one the flat boundary carries: the directive describes

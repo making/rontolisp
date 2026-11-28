@@ -1,7 +1,13 @@
 package am.ik.rontolisp.cli;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
+import am.ik.rontolisp.eval.JavaHostBoundary;
+import am.ik.rontolisp.reader.LispReadException;
 
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitFunc;
@@ -17,8 +23,9 @@ import org.jspecify.annotations.Nullable;
  * Turns a {@code .wit} world into a runnable rontolisp skeleton
  * ({@code rontolisp --scaffold-wit world.wit -o impl.lisp}): a
  * {@code rontolisp:wit-export} directive plus one {@code defun} stub per export, with the
- * WIT parameter names and {@code ///} doc comments carried over. The answer to "someone
- * handed me a {@code .wit}, now what".
+ * WIT parameter names and {@code ///} doc comments carried over -- or, for
+ * {@code -o Greeter.java}, the {@code @WitExport} class of the Java subset
+ * ({@link #scaffoldJava}). The answer to "someone handed me a {@code .wit}, now what".
  *
  * <p>
  * The result compiles unchanged -- the stubs signal at run time, not at compile time, so
@@ -88,6 +95,103 @@ final class WitScaffolder {
 		return out.toString();
 	}
 
+	/**
+	 * Renders the Java skeleton implementing a WIT world: a {@code @WitExport} class, a
+	 * {@code @WitImport} member interface for each imported interface, and the types they
+	 * reach ({@code JavaHostBoundary.scaffold}).
+	 * @param witSource the WIT text
+	 * @param witFile the WIT file, as the command line names it
+	 * @param witPath the WIT path the annotations name (relative to the generated file)
+	 * @param entry the generated file, or {@code null} when it is printed
+	 * @param world the world to implement, or {@code null} to use the file's only world
+	 * @param className the class's name
+	 * @param skipped told the refusal of each item left out
+	 * @return the Java source text (ends with a newline)
+	 */
+	static String scaffoldJava(String witSource, String witFile, String witPath, @Nullable String entry,
+			@Nullable String world, String className, Consumer<String> skipped) {
+		WitDocument document = WitParser.parse(witSource);
+		WitItem.World target = selectWorld(document, world, witPath);
+		Map<String, List<String>> docs = new HashMap<>();
+		WitResolver resolver = new WitResolver(document);
+		collectDocs(document.items(), resolver, docs);
+		docs.put("#", target.meta().docs());
+		for (WitItem item : target.items()) {
+			switch (item) {
+				case WitItem.ExportNamed export -> {
+					switch (export.extern()) {
+						case WitItem.Extern.ExternFunc extern -> docs.put("#" + export.name(), export.meta().docs());
+						case WitItem.Extern.ExternInterface inline -> {
+							docs.put(export.name() + "#", export.meta().docs());
+							scopeDocs(export.name(), inline.items(), docs);
+						}
+					}
+				}
+				default -> scopeDocs("", List.of(item), docs);
+			}
+		}
+		try {
+			return JavaHostBoundary.scaffold(witFile, witPath, entry, target.name(), className, docs, skipped);
+		}
+		catch (LispReadException ex) {
+			throw new UnsupportedOperationException("--scaffold-wit: " + ex.getMessage(), ex);
+		}
+	}
+
+	/**
+	 * The name of the world a skeleton implements.
+	 * @param witSource the WIT text
+	 * @param world the world named, or {@code null} for the file's only world
+	 * @param witPath the WIT path, for a message
+	 * @return the world's name
+	 */
+	static String worldName(String witSource, @Nullable String world, String witPath) {
+		return selectWorld(WitParser.parse(witSource), world, witPath).name();
+	}
+
+	// The docs of every interface the file defines, by its canonical id.
+	private static void collectDocs(List<WitItem> items, WitResolver resolver, Map<String, List<String>> docs) {
+		for (WitItem item : items) {
+			switch (item) {
+				case WitItem.InterfaceDef iface -> {
+					String id = resolver.canonicalId(iface);
+					if (id != null) {
+						docs.put(id + "#", iface.meta().docs());
+						scopeDocs(id, iface.items(), docs);
+					}
+				}
+				case WitItem.PackageBlock block -> collectDocs(block.items(), resolver, docs);
+				default -> {
+				}
+			}
+		}
+	}
+
+	private static void scopeDocs(String scope, List<WitItem> items, Map<String, List<String>> docs) {
+		for (WitItem item : items) {
+			String name = switch (item) {
+				case WitItem.FuncDef func -> func.name();
+				case WitItem.RecordDef record -> record.name();
+				case WitItem.VariantDef variant -> variant.name();
+				case WitItem.EnumDef enumDef -> enumDef.name();
+				case WitItem.FlagsDef flags -> flags.name();
+				case WitItem.TypeAlias alias -> alias.name();
+				case WitItem.ResourceDef resource -> {
+					for (WitItem inner : resource.body() == null ? List.<WitItem>of() : resource.body()) {
+						if (inner instanceof WitItem.FuncDef func) {
+							docs.put(scope + "#" + resource.name() + "." + func.name(), func.meta().docs());
+						}
+					}
+					yield resource.name();
+				}
+				default -> null;
+			};
+			if (name != null) {
+				docs.put(scope + "#" + name, item.meta().docs());
+			}
+		}
+	}
+
 	private static void appendInterfaceStubs(StringBuilder out, List<WitItem> members) {
 		for (WitItem member : members) {
 			if (member instanceof WitItem.FuncDef func && func.kind() == WitItem.FuncKind.PLAIN) {
@@ -113,7 +217,7 @@ final class WitScaffolder {
 
 	// The WIT signature, rendered back into WIT so the stub carries the contract it must
 	// satisfy (types included -- the scaffolded Lisp itself is untyped).
-	private static String signature(WitFunc func) {
+	static String signature(WitFunc func) {
 		List<String> params = new ArrayList<>();
 		for (WitFunc.Param param : func.params()) {
 			params.add(param.name() + ": " + typeName(param.type()));

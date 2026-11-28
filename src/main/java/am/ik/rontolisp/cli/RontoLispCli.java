@@ -214,7 +214,8 @@ public final class RontoLispCli {
 		// --scaffold-wit generates a program instead of running one, so it takes no .lisp
 		// input and must short-circuit before the no-positional-argument REPL fallback.
 		if (options.contains("--scaffold-wit")) {
-			scaffold(Objects.requireNonNull(options.get("--scaffold-wit")), options.get("-o"), options.get("--world"));
+			scaffold(Objects.requireNonNull(options.get("--scaffold-wit")), options.get("-o"), options.get("--world"),
+					options.get("--source-language"));
 			return;
 		}
 
@@ -1505,15 +1506,37 @@ public final class RontoLispCli {
 	/**
 	 * {@code --scaffold-wit world.wit [-o impl.lisp] [--world name]}: writes a runnable
 	 * skeleton implementing the world (a {@code rontolisp:wit-export} directive plus one
-	 * {@code defun} stub per export), or prints it to stdout when no {@code -o} is given.
+	 * {@code defun} stub per export; for {@code -o Greeter.java} or
+	 * {@code --source-language java}, a {@code @WitExport} class), or prints it to stdout
+	 * when no {@code -o} is given.
 	 */
-	private void scaffold(String witFile, @Nullable String outputFile, @Nullable String world) {
+	private void scaffold(String witFile, @Nullable String outputFile, @Nullable String world,
+			@Nullable String sourceLanguage) {
 		String witSource = readFile(witFile);
 		// The path the generated source names must resolve against the generated file's
 		// own directory, the way wit-export (like load) resolves it.
 		String directivePath = outputFile == null ? witFile
 				: relativeToOutput(SourceLoader.parentDir(outputFile), witFile);
-		String lisp = WitScaffolder.scaffold(witSource, directivePath, world);
+		SourceLanguage language = SourceLanguage.forFile(outputFile, sourceLanguage);
+		String lisp;
+		if (language == SourceLanguage.JAVA) {
+			// the annotation names the WIT as Class.getResource names a resource: below
+			// the source tree's top, a leading '/' from that top
+			if (directivePath.startsWith("..") || Path.of(directivePath).isAbsolute()) {
+				warn("--scaffold-wit: the annotations name the WIT " + directivePath
+						+ ", which a source tree's resource is not: put the WIT below the Java file's directory");
+			}
+			lisp = WitScaffolder.scaffoldJava(witSource, witFile, directivePath, outputFile, world,
+					scaffoldClassName(outputFile, witSource, world, directivePath),
+					refusal -> warn("--scaffold-wit left out " + refusal));
+		}
+		else if (language == SourceLanguage.COMMON_LISP) {
+			lisp = WitScaffolder.scaffold(witSource, directivePath, world);
+		}
+		else {
+			throw new UnsupportedOperationException(
+					"--scaffold-wit writes Common Lisp or Java, not " + language.name().toLowerCase(Locale.ROOT));
+		}
 		if (outputFile == null) {
 			this.out.print(lisp);
 			return;
@@ -1524,6 +1547,30 @@ public final class RontoLispCli {
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
 		}
+	}
+
+	// The class a Java skeleton declares: the output file's name, else the world's in
+	// upper camel case.
+	private static String scaffoldClassName(@Nullable String outputFile, String witSource, @Nullable String world,
+			String witPath) {
+		String name;
+		if (outputFile != null) {
+			String file = Path.of(outputFile).getFileName().toString();
+			name = file.endsWith(".java") ? file.substring(0, file.length() - ".java".length()) : file;
+		}
+		else {
+			StringBuilder camel = new StringBuilder();
+			for (String word : WitScaffolder.worldName(witSource, world, witPath).split("-")) {
+				camel.append(word.isEmpty() ? "" : Character.toUpperCase(word.charAt(0)) + word.substring(1));
+			}
+			name = camel.toString();
+		}
+		if (name.isEmpty() || !Character.isJavaIdentifierStart(name.charAt(0))
+				|| !name.chars().allMatch(Character::isJavaIdentifierPart)) {
+			throw new UnsupportedOperationException("--scaffold-wit: " + outputFile
+					+ " names no Java class: the file's name is the class's, a Java identifier");
+		}
+		return name;
 	}
 
 	private static String relativeToOutput(@Nullable String outputDir, String witFile) {

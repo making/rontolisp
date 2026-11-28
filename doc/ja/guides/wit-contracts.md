@@ -192,6 +192,8 @@ rontolisp --scaffold-wit wit/greeter.wit -o greet.lisp   # no -o: print to stdou
 
 引数は WIT の名前のまま命名され、各エクスポートの WIT シグネチャは満たすべき契約としてスタブの上に書き出され、`///` ドキュメントコメントは `;;;` コメントになります。スタブはコンパイル時ではなく**実行**時にシグナルするため、生成されたファイルはそのままコンパイルでき、エクスポートを 1 つずつ埋めていけます。インターフェースをエクスポートする world は、インターフェース関数ごとに 1 つのスタブを生成するので、上記の分離形も同じスケルトンになります。`.wit` が複数の world を宣言している場合は `--world NAME` を追加してください。
 
+出力が `.java` で終わるとき（標準出力に書くときは `--source-language java`）は、代わりに Java サブセットの形を生成します: 中身を書くまで例外を投げる static メソッドを持つ `@WitExport` クラス、world がインポートする各インタフェースの `@WitImport` メンバインタフェース、それらが使う型です（[スケルトンの生成](../java/wit.md#generating-the-skeleton)）。ほかの言語は拒否されます。
+
 ## WIT ワールドの出力(`--emit-wit`)
 
 任意の `--component` ビルドに `--emit-wit` を追加すると、コンポーネントの WIT 記述も `.wasm` 出力の隣に書き出されます — `-o sumsq.wasm --emit-wit` は `sumsq.wit` を書きます:

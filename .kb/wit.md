@@ -494,6 +494,15 @@ instance and *validates* -- only the WIT diff catches it. `--no-gc`'s base is `F
   the core-export path.
 - `rontolisp --scaffold-wit world.wit` (`cli/WitScaffolder`) emits `defun` stubs with the WIT's
   parameter names; **the `wit-export` directive comes LAST** so the interpreter's check passes.
+  `-o X.java` / `--source-language java`: the Java subset's `@WitExport` class
+  (`.kb/java-frontend.md`, "WIT exports"); another language is refused.
+- **`WitExportDirective.outline`** is `describe` that leaves out what it refuses (a function
+  of a type the boundary does not carry; a world item refused whole -- an interface declaring a
+  resource, an inline import -- with every export it held) and lists the refusals in
+  `WorldDescription.refused`, worded as `describe` throws them. A function naming a handle is
+  refused there too (`names the resource`): in `describe` the interface of that resource is
+  always refused first. `WorldDescription.imports` lists the world's `import` references (the
+  canonical id where the file defines the interface).
 - **`--emit-wit` on the export side is a FIXPOINT, not a check**: world export -> `lower()` -> Decl
   -> component type -> `WitEmitter` is one-to-one both ways; the contract check is what catches a
   drifted program. What `--emit-wit` uniquely reports is the IMPORT side, from the BUILD; under

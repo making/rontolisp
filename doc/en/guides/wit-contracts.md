@@ -301,6 +301,12 @@ in one at a time. A world exporting an interface scaffolds one stub per
 interface function, so the separated shape above yields the same skeleton. Add
 `--world NAME` when the `.wit` declares several worlds.
 
+An output ending in `.java` (or `--source-language java` when printing) writes the Java
+subset's form instead: a `@WitExport` class whose static methods throw until filled in, a
+`@WitImport` member interface for each interface the world imports, and the types they
+reach ([Generating the skeleton](../java/wit.md#generating-the-skeleton)). Any other
+language is refused.
+
 ## Emitting the WIT World (`--emit-wit`)
 
 Add `--emit-wit` to any `--component` build to also write the component's

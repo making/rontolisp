@@ -491,10 +491,13 @@ final class CliOptionTable {
 		value("--scaffold-wit", "W", List.of(COMPONENT), """
 				Generate a skeleton implementing the WIT world W instead of
 				compiling: a rontolisp:wit-export directive plus one defun stub
-				per export (with -o FILE; prints to stdout otherwise). Pick the
+				per export (with -o FILE; prints to stdout otherwise). With
+				-o Name.java or --source-language java: the @WitExport class,
+				a @WitImport interface per import and the types they reach,
+				naming on stderr what the check would refuse. Pick the
 				world with --world NAME when the file declares several.
 				The program then IMPLEMENTS the .wit: the compiler checks every
-				defun against it, so no :params/:returns list is written by hand"""),
+				stub against it, so no :params/:returns list is written by hand"""),
 		value("--world", "NAME", List.of(COMPONENT), """
 				With --scaffold-wit: the world to implement, when the file
 				declares several"""),

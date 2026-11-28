@@ -545,6 +545,68 @@ public static Summary summarize(List<Double> areas) throws InterruptedException 
 `async func` that sleeps and answers a `WitResult`; the Lisp command beside it binds the
 interface with `:blocking t` and waits for the answer.
 
+### Generating the skeleton
+
+`--scaffold-wit` writes the class from the world when its output is a `.java` file, or
+with `--source-language java` when it prints:
+
+```bash
+rontolisp --scaffold-wit wit/shapes.wit -o Shapes.java
+```
+
+```console
+@WitExport(value = "shapes", wit = "wit/shapes.wit")
+public class Shapes {
+
+    public record Summary(int count, double total) {
+    }
+
+    /**
+     * How many areas, and their sum.
+     *
+     * WIT: {@code summarize: func(areas: list<f64>) -> summary}
+     */
+    public static Summary summarize(List<Double> areas) {
+        throw new UnsupportedOperationException("summarize is not implemented yet");
+    }
+
+    public static class Geometry {
+        ...
+        public static Optional<BoundsResult> bounds(List<Point> ps) {
+            throw new UnsupportedOperationException("bounds is not implemented yet");
+        }
+    }
+}
+```
+
+Each export is a static method that throws until it is filled in, the WIT's `///`
+comments and its signature its Javadoc. Each type is declared where
+[The types](#the-types) declares it: a `result` is a `WitResult`, a tuple a record named
+after where it stands (`BoundsResult`), or after its alias (`type ipv4-address = tuple<...>`
+is `Ipv4Address`), its components `v0`, `v1` and so on. Each interface the world imports is
+a `@WitImport` member interface of the class, with its resources and types, and so is
+each interface whose resource one of them takes with `use`; a method finds it with
+`ServiceLoader.load(Shapes.Store.class)`. The class is named after the file, or after the
+world when printed. The file compiles unchanged, so the exports can be filled in one at a
+time.
+
+The annotations name the WIT from the Java file's directory, so the WIT goes below it: a
+path climbing above it is refused when the program compiles, and the generator warns.
+
+What the check refuses is not written. The generator names each item it left out, in the
+check's words, on standard error and at the top of the file:
+
+```console
+rontolisp: warning: --scaffold-wit left out flag (flag of test:skip/host, wit/app.wit:4):
+its parameter x is option<bool>, an option of a type one of whose values the boundary
+cannot tell from none
+```
+
+An imported function left out is absent from its interface, which declares what the
+program calls. An export left out (a world exporting a resource, importing a function of
+its own, or exporting a type refused here) leaves a class the check refuses until the WIT
+changes.
+
 ## Where each type crosses
 
 What a declaration may hold where, on a target that carries the type

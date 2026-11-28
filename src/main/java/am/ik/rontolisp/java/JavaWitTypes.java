@@ -254,69 +254,6 @@ final class JavaWitTypes {
 		}
 
 		/**
-		 * Why a type has no Java value, itself or a structural type it holds (a named
-		 * type's own are its definition's to tell), or {@code null}.
-		 * @param arm whether it is a result's error arm, which no type is written for
-		 */
-		private @Nullable String refusal(JavaBoundary.Type wit, boolean arm) {
-			String own = switch (wit.rep()) {
-				case STREAM_HANDLE -> wit.element() == null ? "a bare stream, which carries no value" : null;
-				case FUTURE_HANDLE -> {
-					JavaBoundary.Type payload = wit.element();
-					yield payload == null ? "a bare future, which carries no value" : switch (payload.rep()) {
-						// the read of a future its writer dropped answers nil, so a
-						// value the boundary spells nil cannot be told from it
-						case BOOLEAN, LIST, NIL_OR_VALUE, KEYWORD_LIST ->
-							"a future of a type one of whose values the boundary cannot tell from a future its "
-									+ "writer dropped";
-						default -> null;
-					};
-				}
-				case UNSUPPORTED -> "a type with no rontolisp value";
-				case TUPLE_LIST -> arm ? TUPLE_ARM : null;
-				// the boundary spells none as nil, so an element whose value can be nil
-				// cannot be told from it
-				case NIL_OR_VALUE -> switch (Objects.requireNonNull(wit.element()).rep()) {
-					case BOOLEAN, LIST, KEYWORD_LIST, NIL_OR_VALUE ->
-						"an option of a type one of whose values the boundary cannot tell from none";
-					default -> null;
-				};
-				default -> null;
-			};
-			if (own != null) {
-				return own;
-			}
-			List<JavaBoundary.Type> held = new ArrayList<>();
-			if (wit.rep() == Rep.LIST || wit.rep() == Rep.NIL_OR_VALUE || wit.rep() == Rep.STREAM_HANDLE) {
-				held.add(Objects.requireNonNull(wit.element()));
-			}
-			if (wit.rep() == Rep.FUTURE_HANDLE) {
-				JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
-				if (payload.rep() != Rep.RESULT) {
-					held.add(payload);
-				}
-				else if (payload.element() != null) {
-					// the error arm is checked as a result's is (definitions)
-					held.add(payload.element());
-				}
-			}
-			if (wit.rep() == Rep.TUPLE_LIST) {
-				wit.parts().forEach(part -> held.add(Objects.requireNonNull(part.type())));
-			}
-			if (wit.rep() == Rep.RESULT) {
-				Optional.ofNullable(wit.element()).ifPresent(held::add);
-				Optional.ofNullable(wit.error()).ifPresent(held::add);
-			}
-			for (JavaBoundary.Type inner : held) {
-				String refused = refusal(inner, arm);
-				if (refused != null) {
-					return "holding " + inner.wit() + ", " + refused;
-				}
-			}
-			return null;
-		}
-
-		/**
 		 * The class standing for a named type the scope takes from another, or
 		 * {@code null} for a type of the scope's own, its owner's member type.
 		 */
@@ -897,6 +834,69 @@ final class JavaWitTypes {
 
 	// ---- the types
 
+	/**
+	 * Why a type has no Java value, itself or a structural type it holds (a named type's
+	 * own are its definition's to tell), or {@code null}.
+	 * @param arm whether it is a result's error arm, which no type is written for
+	 */
+	static @Nullable String refusal(JavaBoundary.Type wit, boolean arm) {
+		String own = switch (wit.rep()) {
+			case STREAM_HANDLE -> wit.element() == null ? "a bare stream, which carries no value" : null;
+			case FUTURE_HANDLE -> {
+				JavaBoundary.Type payload = wit.element();
+				yield payload == null ? "a bare future, which carries no value" : switch (payload.rep()) {
+					// the read of a future its writer dropped answers nil, so a
+					// value the boundary spells nil cannot be told from it
+					case BOOLEAN, LIST, NIL_OR_VALUE, KEYWORD_LIST ->
+						"a future of a type one of whose values the boundary cannot tell from a future its "
+								+ "writer dropped";
+					default -> null;
+				};
+			}
+			case UNSUPPORTED -> "a type with no rontolisp value";
+			case TUPLE_LIST -> arm ? TUPLE_ARM : null;
+			// the boundary spells none as nil, so an element whose value can be nil
+			// cannot be told from it
+			case NIL_OR_VALUE -> switch (Objects.requireNonNull(wit.element()).rep()) {
+				case BOOLEAN, LIST, KEYWORD_LIST, NIL_OR_VALUE ->
+					"an option of a type one of whose values the boundary cannot tell from none";
+				default -> null;
+			};
+			default -> null;
+		};
+		if (own != null) {
+			return own;
+		}
+		List<JavaBoundary.Type> held = new ArrayList<>();
+		if (wit.rep() == Rep.LIST || wit.rep() == Rep.NIL_OR_VALUE || wit.rep() == Rep.STREAM_HANDLE) {
+			held.add(Objects.requireNonNull(wit.element()));
+		}
+		if (wit.rep() == Rep.FUTURE_HANDLE) {
+			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+			if (payload.rep() != Rep.RESULT) {
+				held.add(payload);
+			}
+			else if (payload.element() != null) {
+				// the error arm is checked as a result's is (definitions)
+				held.add(payload.element());
+			}
+		}
+		if (wit.rep() == Rep.TUPLE_LIST) {
+			wit.parts().forEach(part -> held.add(Objects.requireNonNull(part.type())));
+		}
+		if (wit.rep() == Rep.RESULT) {
+			Optional.ofNullable(wit.element()).ifPresent(held::add);
+			Optional.ofNullable(wit.error()).ifPresent(held::add);
+		}
+		for (JavaBoundary.Type inner : held) {
+			String refused = refusal(inner, arm);
+			if (refused != null) {
+				return "holding " + inner.wit() + ", " + refused;
+			}
+		}
+		return null;
+	}
+
 	/** A record's components, in order. */
 	static List<JavaClass.Field> components(JavaClass record) {
 		List<JavaClass.Field> components = new ArrayList<>();
@@ -973,33 +973,79 @@ final class JavaWitTypes {
 	 */
 	static String javaText(JavaClass owner, JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared,
 			boolean simple) {
+		return javaText(new Spelling() {
+			@Override
+			public String named(JavaBoundary.Type named, @Nullable JavaType written, boolean simpleName) {
+				// a resource may be another interface's, which the type written for it
+				// names
+				return named.rep() == Rep.HANDLE && !simpleName && written instanceof ClassType type
+						&& type.arguments().isEmpty() ? JavaAnnotations.typeText(type)
+								: memberText(owner, named, simpleName);
+			}
+
+			@Override
+			public String tuple(JavaBoundary.Type tuple, @Nullable JavaType written, boolean simpleName) {
+				return written == null ? "a record of " + tuple.parts().size() + " components"
+						: simpleName ? written.toString() : JavaAnnotations.typeText(written);
+			}
+		}, wit, boxed, declared, simple);
+	}
+
+	/**
+	 * How the types a Java program declares for a WIT scope are named in source: the
+	 * declared types of a program being checked, or the ones a scaffold is about to
+	 * declare.
+	 */
+	interface Spelling {
+
+		/**
+		 * The class a record, a variant, an enum, flags (its enum) or a resource is.
+		 * @param named the type
+		 * @param declared the type written for it, if any
+		 * @param simple whether by simple names, as a message names it
+		 * @return the class as source names it
+		 */
+		String named(JavaBoundary.Type named, @Nullable JavaType declared, boolean simple);
+
+		/**
+		 * The record a tuple is.
+		 * @param tuple the type
+		 * @param declared the type written for it, if any
+		 * @param simple whether by simple names
+		 * @return the record as source names it
+		 */
+		String tuple(JavaBoundary.Type tuple, @Nullable JavaType declared, boolean simple);
+
+	}
+
+	/**
+	 * The Java type a WIT type is, as Java source names it, each type the scope declares
+	 * named by the spelling.
+	 */
+	static String javaText(Spelling spelling, JavaBoundary.Type wit, boolean boxed, @Nullable JavaType declared,
+			boolean simple) {
 		return switch (wit.rep()) {
 			case INT, BIGNUM_INT, FLOAT, BOOLEAN, CHARACTER ->
 				boxed ? boxText(scalar(wit), simple) : scalar(wit).toString();
 			case STRING -> simple ? "String" : "java.lang.String";
 			case BYTE_STRING -> "byte[]";
 			case LIST, NIL_OR_VALUE -> (simple ? "" : "java.util.") + (wit.rep() == Rep.LIST ? "List<" : "Optional<")
-					+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
-			case TUPLE_LIST -> declared == null ? "a record of " + wit.parts().size() + " components"
-					: simple ? declared.toString() : JavaAnnotations.typeText(declared);
+					+ javaText(spelling, Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
+			case TUPLE_LIST -> spelling.tuple(wit, declared, simple);
 			case RESULT -> (simple ? "WitResult<" : JavaWitImports.WIT_RESULT + "<")
-					+ armText(owner, wit.element(), declared, 0, simple) + ", "
-					+ armText(owner, wit.error(), declared, 1, simple) + ">";
-			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + memberText(owner, wit, simple) + ">";
-			case PLIST, TAGGED_LIST, KEYWORD -> memberText(owner, wit, simple);
-			// a resource may be another interface's, which the type written for it names
-			case HANDLE -> !simple && declared instanceof ClassType written && written.arguments().isEmpty()
-					? JavaAnnotations.typeText(written) : memberText(owner, wit, simple);
+					+ armText(spelling, wit.element(), declared, 0, simple) + ", "
+					+ armText(spelling, wit.error(), declared, 1, simple) + ">";
+			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + spelling.named(wit, null, simple) + ">";
+			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> spelling.named(wit, declared, simple);
 			case STREAM_HANDLE -> isU8(wit.element()) ? simple ? "InputStream" : INPUT_STREAM
-					: (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<")
-							+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple)
-							+ ">";
+					: (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<") + javaText(spelling,
+							Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
 			case FUTURE_HANDLE -> {
 				JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
 				JavaBoundary.Type value = payload.rep() == Rep.RESULT ? payload.element() : payload;
 				yield (simple ? "WitFuture<" : JavaWitImports.WIT_FUTURE + "<")
 						+ (value == null ? (simple ? "Void" : "java.lang.Void")
-								: javaText(owner, value, true, argument(declared), simple))
+								: javaText(spelling, value, true, argument(declared), simple))
 						+ ">";
 			}
 			default -> wit.wit();
@@ -1007,10 +1053,10 @@ final class JavaWitTypes {
 	}
 
 	/** A result's arm as Java source names it: {@code Void} for one carrying nothing. */
-	private static String armText(JavaClass owner, JavaBoundary.@Nullable Type arm, @Nullable JavaType declared,
+	private static String armText(Spelling spelling, JavaBoundary.@Nullable Type arm, @Nullable JavaType declared,
 			int index, boolean simple) {
 		return arm == null ? simple ? "Void" : "java.lang.Void"
-				: javaText(owner, arm, true, argument(declared, index), simple);
+				: javaText(spelling, arm, true, argument(declared, index), simple);
 	}
 
 	static @Nullable JavaType argument(@Nullable JavaType declared) {

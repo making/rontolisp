@@ -35,6 +35,11 @@ public interface JavaBoundary {
 		}
 
 		@Override
+		public @Nullable WitWorld outlineWorld(String wit, List<String> paths, String world) {
+			throw new LispReadException("a scaffold needs the host boundary, which it was given none of");
+		}
+
+		@Override
 		public boolean hostImports() {
 			return false;
 		}
@@ -88,6 +93,19 @@ public interface JavaBoundary {
 	 * exported, naming the WIT file and line
 	 */
 	@Nullable WitWorld exportWorld(String wit, List<String> paths, String world);
+
+	/**
+	 * The world as {@link #exportWorld} reads it, for the skeleton of a class
+	 * implementing it ({@code --scaffold-wit}): an export it would refuse is left out,
+	 * its refusal in {@link WitWorld#refused}, and a world left with no export is
+	 * answered.
+	 * @param wit the WIT as the annotation writes it, for a message
+	 * @param paths where the WIT may be, as {@link #importInterface} reads them
+	 * @param world the world's name
+	 * @return the world, or {@code null} when no path names a file or a directory
+	 * @throws LispReadException when the WIT cannot be read or holds no such world
+	 */
+	@Nullable WitWorld outlineWorld(String wit, List<String> paths, String world);
 
 	/**
 	 * Whether the target's host provides every {@code @WitImport} interface -- the WASM
@@ -262,8 +280,12 @@ public interface JavaBoundary {
 	 * @param path the WIT as the directive the lowering emits names it, which every later
 	 * pass reads it by
 	 * @param exports its exports, in world order
+	 * @param imports the interfaces it imports, in world order: the canonical id of each
+	 * the WIT defines, the reference as written of any other
+	 * @param refused the refusal of each export {@link #outlineWorld} left out, worded as
+	 * {@link #exportWorld} throws it; empty from {@link #exportWorld}
 	 */
-	record WitWorld(String name, String path, List<Export> exports) {
+	record WitWorld(String name, String path, List<Export> exports, List<String> imports, List<String> refused) {
 	}
 
 }

@@ -482,71 +482,35 @@ final class JavaWitImports {
 		}
 
 		/**
-		 * Checks a parameter carrying a stream or a future the program hands the host. A
-		 * {@code stream<u8>} of its own, or an option of one, is a
-		 * {@code Consumer<OutputStream>} the binding hands the writable end once the call
-		 * has handed the host the readable one, as the Lisp side writes a byte stream
-		 * after the call it hands over. A {@code future<T>} of its own is a
-		 * {@code WitFuture<T>} the program made, whose value the binding writes before
-		 * the call without waiting for the reader: the host may read it within that call
-		 * or a later one the program waits on. The rest is refused: no write of a stream
-		 * of values or of handles is bound; an {@code async func} is waited on while the
-		 * host reads what the program writes only after it; one held in another type has
-		 * no place the binding makes its ends at.
+		 * Checks a parameter carrying a stream or a future the program hands the host
+		 * ({@link #handedRefusal}).
 		 */
 		private void handed(JavaBoundary.Type wit, JavaType declared, JavaBoundary.Function member,
 				JavaClass.Method method, String what) {
+			String refusal = handedRefusal(wit, member.async());
+			if (refusal != null) {
+				throw at(method, what + " is " + wit.wit() + ", " + refusal);
+			}
 			if (wit.rep() == Rep.FUTURE_HANDLE) {
 				handedFuture(wit, declared, method, what);
 				return;
 			}
-			boolean optional = wit.rep() == Rep.NIL_OR_VALUE
-					&& Objects.requireNonNull(wit.element()).rep() == Rep.STREAM_HANDLE;
-			JavaBoundary.Type stream = optional ? Objects.requireNonNull(wit.element()) : wit;
-			String refusal;
-			if (stream.rep() != Rep.STREAM_HANDLE) {
-				refusal = "carrying " + Objects.requireNonNull(asyncIn(wit))
-						+ ", which the binding hands the host only as a parameter of its own";
-			}
-			else if (!JavaWitTypes.isU8(stream.element())) {
-				refusal = "a stream the program hands the host, of values the program cannot write: the guest only "
-						+ "reads a stream of other than bytes";
-			}
-			else if (member.async()) {
-				refusal = "a stream the program hands an async func, which the call waits on while the host reads "
-						+ "what the program can write only after it";
-			}
-			else {
-				refusal = null;
-			}
-			if (refusal != null) {
-				throw at(method, what + " is " + wit.wit() + ", " + refusal);
-			}
+			boolean optional = wit.rep() == Rep.NIL_OR_VALUE;
 			JavaType consumer = optional
 					? declared instanceof ClassType type && type.declaration().name.equals("java.util.Optional")
 							&& type.arguments().size() == 1 ? type.arguments().get(0) : null
 					: declared;
 			if (!(consumer instanceof ClassType type && type.declaration().name.equals(CONSUMER)
 					&& type.arguments().size() == 1 && JavaWitTypes.isClass(type.arguments().get(0), OUTPUT_STREAM))) {
-				throw at(method,
-						what + " is " + wit.wit() + ", which the program writes: "
-								+ (optional ? "Optional<Consumer<OutputStream>>" : "Consumer<OutputStream>")
-								+ " in Java, handed the writable end, not " + declared);
+				throw at(method, what + " is " + wit.wit() + ", which the program writes: " + handedText(wit, true)
+						+ " in Java, handed the writable end, not " + declared);
 			}
 		}
 
 		// A future of its own: the WitFuture the mapping names, its value and the error
 		// arm get() throws checked as a result's are.
 		private void handedFuture(JavaBoundary.Type wit, JavaType declared, JavaClass.Method method, String what) {
-			JavaBoundary.Type payload = wit.element();
-			if (payload == null) {
-				throw at(method, what + " is " + wit.wit() + ", a bare future, which carries no value");
-			}
-			String carried = asyncIn(payload);
-			if (carried != null) {
-				throw at(method, what + " is " + wit.wit() + ", carrying " + carried
-						+ ", which the binding hands the host only as a parameter of its own");
-			}
+			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
 			if (!matches(wit, declared, false, method, what)) {
 				throw at(method,
 						what + " is " + wit.wit() + ", which the program hands the host: "
@@ -636,10 +600,64 @@ final class JavaWitImports {
 	}
 
 	/**
+	 * Why a parameter carrying a stream or a future the program hands the host has no
+	 * Java declaration, or {@code null}. A {@code stream<u8>} of its own, or an option of
+	 * one, is a {@code Consumer<OutputStream>} the binding hands the writable end once
+	 * the call has handed the host the readable one, as the Lisp side writes a byte
+	 * stream after the call it hands over. A {@code future<T>} of its own is a
+	 * {@code WitFuture<T>} the program made, whose value the binding writes before the
+	 * call without waiting for the reader: the host may read it within that call or a
+	 * later one the program waits on. The rest is refused: no write of a stream of values
+	 * or of handles is bound; an {@code async func} is waited on while the host reads
+	 * what the program writes only after it; one held in another type has no place the
+	 * binding makes its ends at.
+	 * @param wit the parameter's type, which carries a stream or a future
+	 * @param async whether the function is an {@code async func}
+	 */
+	static @Nullable String handedRefusal(JavaBoundary.Type wit, boolean async) {
+		if (wit.rep() == Rep.FUTURE_HANDLE) {
+			JavaBoundary.Type payload = wit.element();
+			if (payload == null) {
+				return "a bare future, which carries no value";
+			}
+			String carried = asyncIn(payload);
+			return carried == null ? null
+					: "carrying " + carried + ", which the binding hands the host only as a parameter of its own";
+		}
+		boolean optional = wit.rep() == Rep.NIL_OR_VALUE
+				&& Objects.requireNonNull(wit.element()).rep() == Rep.STREAM_HANDLE;
+		JavaBoundary.Type stream = optional ? Objects.requireNonNull(wit.element()) : wit;
+		if (stream.rep() != Rep.STREAM_HANDLE) {
+			return "carrying " + Objects.requireNonNull(asyncIn(wit))
+					+ ", which the binding hands the host only as a parameter of its own";
+		}
+		if (!JavaWitTypes.isU8(stream.element())) {
+			return "a stream the program hands the host, of values the program cannot write: the guest only "
+					+ "reads a stream of other than bytes";
+		}
+		if (async) {
+			return "a stream the program hands an async func, which the call waits on while the host reads "
+					+ "what the program can write only after it";
+		}
+		return null;
+	}
+
+	/**
+	 * What a {@code stream<u8>} the program hands the host is, or an option of one, as
+	 * Java source names it.
+	 * @param simple whether by simple names, as a message names it
+	 */
+	static String handedText(JavaBoundary.Type wit, boolean simple) {
+		String consumer = simple ? "Consumer<OutputStream>" : CONSUMER + "<" + OUTPUT_STREAM + ">";
+		return wit.rep() == Rep.NIL_OR_VALUE ? (simple ? "Optional<" : "java.util.Optional<") + consumer + ">"
+				: consumer;
+	}
+
+	/**
 	 * The first stream or future a type carries, as WIT spells it, or {@code null}: in a
 	 * parameter, what the program writes and hands the host.
 	 */
-	private static @Nullable String asyncIn(JavaBoundary.Type wit) {
+	static @Nullable String asyncIn(JavaBoundary.Type wit) {
 		if (wit.rep() == Rep.STREAM_HANDLE || wit.rep() == Rep.FUTURE_HANDLE) {
 			return wit.wit();
 		}
